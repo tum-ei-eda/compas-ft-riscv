@@ -1,0 +1,98 @@
+
+
+\chapter{Usage Guide}
+
+Various \ac{sihft} passes can be invoked via command line arguments to the LLVM static compiler \texttt{llc} program.
+This chapter assumes that the LLVM compiler has been installed as per instructions in Chap.~\ref{ch:install}.
+We refer the installation location of this compiler to \texttt{<llvm\_install>} in rest of the chapter.
+
+\section{\ac{sihft} Compilation}
+Each source file (translation unit) in C/C++ project has to be first compiled to LLVM IR code using \texttt{clang}.
+Following command can be used to generate human readable LLVM IR code representation of given C source file.
+\begin{framed}
+ \begin{lstlisting}[language=bash, basicstyle=\small\ttfamily]
+$ <llvm_install>/bin/clang
+    -emit-llvm -S <other options>
+    main.c -o main.ll
+  \end{lstlisting}
+\end{framed}
+
+The next step in the compilation is to pass the LLVM IR file to \texttt{llc} program:\\
+\begin{lstlisting}[language=bash, basicstyle=\small\ttfamily, frame=single]
+$ <llvm_install>/bin/llc
+    <SIHFT options> <other options>
+    main.ll -o main_hardened.s
+\end{lstlisting}
+
+\texttt{<SIHFT options>} refer to various \ac{sihft} transformations that we have developed. A brief overview of these
+options is provided in Table~\ref{tab:sihft-options}.
+
+\begin{table}[tb]
+ \centering
+ \caption{Supported \ac{sihft} options}
+ \label{tab:sihft-options}
+
+ \begin{tabular}{|l|l|}
+  \hline
+  \textbf{Option}                       & \textbf{Description}                                     \\
+  \hline
+  -NZDC=\textless foo, bar\textgreater  & apply NZDC transformation on \textit{foo,bar} functions  \\
+  -RASM=\textless foo, bar\textgreater  & apply RASM transformation on \textit{foo,bar} functions  \\
+  -CFCSS=\textless foo, bar\textgreater & apply CFCSS transformation on \textit{foo,bar} functions \\
+  -FGS                                  & use fine-grain scheduling for NZDC code                  \\
+  -REPAIR                               & use REPAIR transformation on NZDC code                   \\
+  \hline
+ \end{tabular}
+\end{table}
+
+The final step in code generation is to use \texttt{gcc} for RISCV architectures to assemble and link the
+assembly code for a particular RISCV processor.
+
+\subsection{Example}
+For the sake of example, assume we want to protect the \texttt{crc} program from the MiBench suite. The
+compiled program is to run on the RISCV spike simulator. The C project contains the following C files:
+
+\begin{itemize}
+ \item{crc.h: header for CRC library functions}
+ \item{crc.c: source for CRC library functions}
+ \item{main.c: contains the \texttt{main} program to invoke crc library functions}
+\end{itemize}
+
+Following commands are issued on bash shell to create the RISCV binary with
+\begin{itemize}
+ \item NZDC, RASM protection on \texttt{crcSlow} function
+ \item RASM protection on \texttt{crcFast} function
+ \item NZDC, CFCSS protection on \texttt{main} function
+\end{itemize}
+
+\newpage
+\begin{framed}
+ \begin{lstlisting}[language=bash, basicstyle=\small\ttfamily]
+$ cd <crc-project-source>
+
+$ <clang> -emit-llvm -O2 -S --target=riscv64
+    -march=rv64gc -mabi=lp64d
+    -isystem <riscv64-gcc>/riscv64-unknown-elf/
+    main.c -o main.ll
+$ <clang> -emit-llvm -O2 -S --target=riscv64
+    -march=rv64gc -mabi=lp64d
+    -isystem <riscv64-gcc>/riscv64-unknown-elf/
+    crc.c -o crc.ll
+
+$ <llc> -O2 -march=riscv64 -mattr=+m,+a,+d,+c
+    -NZDC=main -CFCSS=main
+    main.ll -o main_hardened.s
+$ <llc> -O2 -march=riscv64 -mattr=+m,+a,+d,+c
+    -NZDC=crcSlow -RASM=crcSlow,crcFast
+    crc.ll -o crc_hardened.s
+
+$ <riscv64-gcc>/bin/riscv64-unknown-elf-gcc -O2
+    -march=rv64gc -mabi=lp64d
+    main_hardened.s crc_hardened.s -o crc_hardened.elf
+
+$ spike -pk crc_hardened.elf
+
+\end{lstlisting}
+\end{framed}
+
+\section{Configuration via TOML script}

@@ -1,0 +1,40 @@
+
+
+\documentclass[12pt]{report}
+
+% for navigation within the generated pdf
+\usepackage[colorlinks]{hyperref}
+% for abbreviations
+\usepackage{acro}
+% for code snippets
+\usepackage{listings}
+% to frame code listings nicely in a box
+\usepackage{framed}
+% for color utilities
+\usepackage{xcolor}
+% for figs
+\usepackage{graphicx}
+% for new fonts
+\usepackage{courier}
+
+
+\DeclareAcronym{sihft}{
+  short=SIHFT,
+  long=Software Implemented Hardware Fault Tolerance,
+}
+
+% make sure no indentation done for new paragraphs
+\setlength\parindent{0pt}
+
+\begin{document}
+
+\tableofcontents
+\listoffigures
+
+\newpage
+\printacronyms
+
+\include{installation_guide}
+\include{user_guide}
+
+\end{document}

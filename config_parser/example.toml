@@ -1,0 +1,27 @@
+
+
+title = "Safety Compiler configs"
+
+clang = "riscv-clang"
+llc = "riscv-llc"
+target = "riscv64"
+march = "rv64gc"
+mabi = "lp64d"
+mattr = "+m,+a,+d,+c"
+opt = "-O2"
+clib = "/home/ga38qoh/eda_tools/riscv/current/riscv64-unknown-elf/include/"
+
+
+[[sources]]
+name = 'main'
+path = '/home/ga38qoh/filer/MiBench2/crc/main.c'
+  [sources.funcs]
+    main = ["NZDC", "RASM"]
+
+[[sources]]
+name = 'crc'
+path = '/home/ga38qoh/filer/MiBench2/crc/crc.c'
+  [sources.funcs]
+    crcSlow = ["NZDC"]
+    crcFast = []
+    crcInit = ["NZDC", "CFCSS"]
