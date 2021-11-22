@@ -25,15 +25,15 @@ See the separate LICENSE file to determine your rights and responsibilities for 
 The supported SIHFT passes are:
 
 Data flow protection:
-* EDDI
-* SWIFT
-* NZDC
-* NEMESIS
-* REPAIR
+- [ ] EDDI
+- [x] SWIFT
+- [x] NZDC
+- [x] NEMESIS
+- [x] REPAIR
 
 Control flow protection:
-* CFCSS
-* RASM
+- [x] CFCSS
+- [x] RASM
 
 ## Literature
 EDDI: https://ieeexplore.ieee.org/document/994913  
