@@ -34,3 +34,14 @@ Data flow protection:
 Control flow protection:
 * CFCSS
 * RASM
+
+## Literature
+EDDI: https://ieeexplore.ieee.org/document/994913  
+SWIFT: https://ieeexplore.ieee.org/document/1402092  
+NZDC: https://ieeexplore.ieee.org/document/7544291  
+NEMESIS: https://ieeexplore.ieee.org/document/8203792  
+
+CFCSS: https://ieeexplore.ieee.org/document/994926  
+RASM: https://ieeexplore.ieee.org/document/8067656
+
+REPAIR: https://dl.acm.org/doi/abs/10.1145/3477001
