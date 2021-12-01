@@ -1,17 +1,17 @@
 
 
-\chapter{Installation Guide}
-\label{ch:Install}
+\section{Installation Guide}
+\label{sec:Install}
 
-In this chapter, we provide instructions on how to integrate our developed \ac{sihft} passes within the LLVM codebase.
+In this section, we provide instructions on how to integrate our developed \ac{sihft} passes within the LLVM codebase.
 This allows us later to carry out various \ac{sihft} transformations during LLVM backend compilation in generating
 RISCV code.
 
-\section{Development System}
+\subsection{Development System}
 The instructions given in this user manual are expected to work on any Linux machine. Specifically, we have prepared
 this manual while developing on a freshly installed Ubuntu 20.04 PC.
 
-\subsection{Ubuntu Packages}
+\subsubsection{Ubuntu Packages}
 Following packages are needed to be installed:
 
 \begin{itemize}
@@ -23,10 +23,11 @@ Following packages are needed to be installed:
 Following commands can be used to install them:
 
 \begin{lstlisting}[language=bash, frame=single, basicstyle=\small\ttfamily]
+$ sudo apt update
 $ sudo apt install build-essential cmake git
   \end{lstlisting}
 
-\section{Build LLVM Project}
+\subsection{Build LLVM Project}
 \label{sec:build-llvm}
 The LLVM Project has to be compiled from source. We recommend downloading version 13.0.0 from LLVM Releases webpage:
 \\\\
@@ -45,7 +46,7 @@ $ cmake -DCMAKE_BUILD_TYPE=Release
         -DCMAKE_CXX_STANDARD=17
         -DLLVM_ENABLE_PROJECTS=clang
         -DLLVM_TARGETS_TO_BUILD=RISCV
-        -DLLVM_ENABLE_ASSERTIONS=ON 
+        -DLLVM_ENABLE_ASSERTIONS=ON
         ../llvm
 $ make
   \end{lstlisting}
@@ -57,9 +58,9 @@ In the \texttt{<build>/bin} directory, we should now see llvm executable program
 \texttt{clang}, \texttt{llc} etc. Run them to make sure they are built fine. For example, we can run the
 static compiler \texttt{llc} to make sure that RISCV targets are supported as shown in Fig.~\ref{fig:llc}. \\
 
-\begin{figure}[tb]
+\begin{figure}[htb]
  \centering
- \includegraphics[width=\linewidth]{figs/llc.pdf}
+ \includegraphics[width=0.8\linewidth]{figs/llc.pdf}
  \caption{Expected output of sanely built \texttt{llc}}
  \label{fig:llc}
 \end{figure}
@@ -68,8 +69,8 @@ static compiler \texttt{llc} to make sure that RISCV targets are supported as sh
  for a large codebase like LLVM. However, we encourage to do this on a server. For systems having lesser memory, make
  with parallel jobs has to be used cautiously, as the command could fail due to memory exhaustion issues.}
 
-\newpage
-\section{Integrate \ac{sihft} Passes}
+% \newpage
+\subsection{Integrate \ac{sihft} Passes}
 The first step is to clone our open-source \texttt{compas-ft-riscv} repository within the LLVM source tree. Afterwards,
 the patch is applied on RISCV backend in order to register the new transformation passes. Finally, the LLVM project
 is rebuilt.

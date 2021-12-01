@@ -5,7 +5,7 @@
 \documentclass[12pt]{report}
 
 % for navigation within the generated pdf
-\usepackage[colorlinks]{hyperref}
+\usepackage{hyperref}
 % for abbreviations
 \usepackage{acro}
 % for code snippets
@@ -18,6 +18,8 @@
 \usepackage{graphicx}
 % for new fonts
 \usepackage{courier}
+% avoid showing "Chapter" text
+\usepackage{titlesec}
 
 
 \DeclareAcronym{sihft}{
@@ -32,7 +34,7 @@
 % title content
 \date{\today}
 \title{
-COMPAS-FT-RISCV \\
+\textbf{COMPAS-FT-RISCV} \\
 \large Compiler Assisted Fault Tolerance for RISCV Architectures \\
 \small Version 1.0.0
 }
@@ -42,7 +44,21 @@ Department of Electrical and Computer Engineering \\
 Technical University of Munich
 }
 
+% avoid showing meaningless "Chapter" for manual content
+\titleformat{\chapter}[display]
+  {\normalfont\huge\bfseries}{}{0pt}{\Huge}
+\titlespacing*{\chapter}
+  {0pt}{10pt}{40pt}
 
+% disable hyperref colors on links in generated pdf
+% \hypersetup{
+%   colorlinks=true, linkcolor=black, anchorcolor=black, citecolor=black,
+%   filecolor=black, menucolor=black, runcolor=black, urlcolor=black]
+% }
+\hypersetup{
+  colorlinks=true, linkcolor=black, anchorcolor=black, citecolor=black,
+  filecolor=black, menucolor=black, runcolor=black, urlcolor=black
+}
 
 \begin{document}
 
@@ -54,7 +70,45 @@ Technical University of Munich
 \newpage
 \printacronyms
 
-\include{installation_guide}
-\include{user_guide}
+\chapter{User Manual}
+
+\section{Overview}
+COMPAS-FT-RISCV compiler was developed as part of the research work conducted in SAFE4I project. SAFE4I is funded by
+the BMBF Ministry (Germany's Federal Ministry of Education and Research) under project grant 01IS17032. The authors
+are responsible for the content of this document. \\
+
+Compiler transformations to build soft error resilience into embedded software are highly attractive owing to their
+superior error detection as well as automation properties. Before starting this work, we experienced a tooling
+gap with in the RISC-V eco-system for ensuring functional safety for embedded firmware. This work aims to fill this gap
+by providing a library of LLVM passes (C++ modules) that can be integrated in a modern LLVM codebase.
+The resulting compiler is then able to provide various state-of-the-art
+\textit{Software Implemented Hardware Fault Tolerance} (\ac{sihft}) transformations on a given C/C++ project. \\
+
+Specifically, we have implemented the following \ac{sihft} methods:
+\begin{itemize}
+ \item{EDDI \cite{eddi} for data-flow protection}
+ \item{SWIFT \cite{swift} for data-flow protection}
+ \item{NZDC \cite{nzdc} for data-flow protection}
+ \item{NEMESIS \cite{nemesis} for conditional branch protection}
+ \item{CFCSS \cite{cfcss} for control flow protection}
+ \item{RASM \cite{rasm} for control flow protection}
+ \item{REPAIR \cite{repair} for combined data-flow and control-flow protection}
+\end{itemize}
+
+This document serves to be the user manual for the developed compiler. We now provide instructions on how to setup the
+LLVM compiler in order to use the implemented \ac{sihft} transformations.
+
+% installation guide section
+\newpage
+\input{installation_guide}
+
+% user guide section
+\newpage
+\input{user_guide}
+
+% references
+\bibliographystyle{apalike}
+\bibliography{references}
+
 
 \end{document}

@@ -1,0 +1,472 @@
+@inproceedings{nzdc,
+author = {Didehban, Moslem and Shrivastava, Aviral},
+title = {NZDC: A Compiler Technique for near Zero Silent Data Corruption},
+year = {2016},
+isbn = {9781450342360},
+publisher = {Association for Computing Machinery},
+address = {New York, NY, USA},
+url = {https://doi.org/10.1145/2897937.2898054},
+doi = {10.1145/2897937.2898054},
+abstract = {Exponentially growing rate of soft errors makes reliability a major concern in modern processor design. Since software-oriented approaches offer flexible protection even in off-the-shelf processes, they are attractive solutions in protecting against soft errors. Among such approaches, in-application instruction duplication based approaches have been widely used and are deemed to be the most effective. Such techniques duplicate the program assembly instructions and periodically check the results to identify possible errors. Even though early reports suggest that these achieve close to 100% protection from soft errors, we find several gaps in the protection. Existing techniques are unable to protect several important microarchitectural components, as well as a significant fraction of instructions, resulting in Silent Data Corruptions (SDCs). This paper presents nZDC or near Zero silent Data Corruption -- an effective instruction duplication based approach to protect programs from soft errors. Extensive fault injection experiments on almost all the unprotected microarchitectural components in simulated ARM Cortex A53, while executing benchmarks fromMiBench suite, demonstrate that nZDC is extremely effective, without incurring any more performance penalty than the state-of-the-art.},
+booktitle = {Proceedings of the 53rd Annual Design Automation Conference},
+articleno = {48},
+numpages = {6},
+location = {Austin, Texas},
+series = {DAC '16}
+}
+
+@inproceedings{swift,
+ author = {Reis, George A. and Chang, Jonathan and Vachharajani, Neil and Rangan, Ram and August, David I.},
+ booktitle = {International Symposium on Code Generation and Optimization},
+ doi = {10.1109/CGO.2005.34},
+ year = {2006},
+ file = {:work/research/functional_safety/swift.pdf:pdf},
+ isbn = {0-7695-2298-X},
+ pages = {243--254},
+ publisher = {IEEE},
+ title = {{SWIFT: Software Implemented Fault Tolerance}},
+ url = {http://ieeexplore.ieee.org/document/1402092/}
+}
+
+
+@article{repair,
+ author = {Sharif, Uzair and Mueller-Gritschneder, Daniel and Schlichtmann, Ulf},
+ title = {REPAIR: Control Flow Protection Based on Register Pairing Updates for SW-Implemented HW Fault Tolerance},
+ year = {2021},
+ issue_date = {October 2021},
+ publisher = {Association for Computing Machinery},
+ address = {New York, NY, USA},
+ volume = {20},
+ number = {5s},
+ issn = {1539-9087},
+ url = {https://doi.org/10.1145/3477001},
+ doi = {10.1145/3477001},
+ abstract = {Safety-critical embedded systems may either use specialized hardware or rely on Software-Implemented Hardware Fault Tolerance (SIHFT) to meet soft error resilience requirements. SIHFT has the advantage that it can be used with low-cost, off-the-shelf components such as standard Micro-Controller Units. For this, SIHFT methods apply redundancy in software computation and special checker codes to detect transient errors, so called soft errors, that either corrupt the data flow or the control flow of the software and may lead to Silent Data Corruption (SDC). So far, this is done by applying separate SIHFT methods for the data and control flow protection, which leads to large overheads in computation time.This work in contrast presents REPAIR, a method that exploits the checks of the SIHFT data flow protection to also detect control flow errors as well, thereby, yielding higher SDC resilience with less computational overhead. For this, the data flow protection methods entail duplicating the computation with subsequent checks placed strategically throughout the program. These checks assure that the two redundant computation paths, which work on two different parts of the register file, yield the same result. By updating the pairing between the registers used in the primary computation path and the registers in the duplicated computation path using the REPAIR method, these checks also fail with high coverage when a control flow error, which leads to an illegal jumps, occurs. Extensive RTL fault injection simulations are carried out to accurately quantify soft error resilience while evaluating Mibench programs along with an embedded case-study running on an OpenRISC processor. Our method performs slightly better on average in terms of soft error resilience compared to the best state-of-the-art method but requiring significantly lower overheads. These results show that REPAIR is a valuable addition to the set of known SIHFT methods.},
+ journal = {ACM Trans. Embed. Comput. Syst.},
+ month = {sep},
+ articleno = {70},
+ numpages = {22},
+ keywords = {Soft errors, embedded resilience, functional safety, code generation}
+}
+
+
+@INPROCEEDINGS{nemesis,
+ author={Moslem {Didehban} and Aviral {Shrivastava} and Sai Ram Dheeraj {Lokam}},
+ booktitle={2017 IEEE/ACM International Conference on Computer-Aided Design (ICCAD)},
+ title={NEMESIS: A software approach for computing in presence of soft errors},
+ year={2017},
+ volume={},
+ number={},
+ pages={297-304},
+ doi={10.1109/ICCAD.2017.8203792}}
+
+@INPROCEEDINGS{mibench,  author={Matthew R. {Guthaus} and Jeffrey S. {Ringenberg} and Daniel J. {Ernst} and Todd M. {Austin} and T. {Mudge} and R. B. {Brown}},  booktitle={Proceedings of the Fourth Annual IEEE International Workshop on Workload Characterization. WWC-4 (Cat. No.01EX538)},   title={MiBench: A free, commercially representative embedded benchmark suite},   year={2001},  volume={},  number={},  pages={3-14},  doi={10.1109/WWC.2001.990739}}
+
+@article{Cho2013,
+ abstract = {Choosing the correct error injection technique is of primary importance in simulation-based design and evaluation of robust systems that are resilient to soft errors. Many low-level (e.g., flip-flop-level) error injection techniques are generally used for small systems due to long execution times and significant memory requirements. High-level error injections at the architecture or memory levels are generally fast but can be inaccurate. Unfortunately, there exists very little research literature on quantitative analysis of the inaccuracies associated with high-level error injection techniques. In this paper, we use simulation and emulation results to understand the accuracy trade-offs associated with a variety of high-level error injection techniques. A detailed analysis of error propagation explains the causes of high degrees of inaccuracies associated with error injection techniques at higher levels of abstraction. Copyright {\textcopyright} 2013 ACM.},
+ author = {Cho, Hyungmin and Mirkhani, Shahrzad and Cher, Chen Yong and Abraham, Jacob A. and Mitra, Subhasish},
+ doi = {10.1145/2463209.2488859},
+ file = {:work/research/functional_safety/Stanford_RobustSystemGroup/quantitative_evaluation_of_soft_error_injection_techniques_for_robust_system_design.pdf:pdf},
+ isbn = {9781450320719},
+ issn = {0738100X},
+ journal = {Proceedings - Design Automation Conference},
+ mendeley-groups = {Stanford_RSG},
+ title = {{Quantitative evaluation of soft error injection techniques for robust system dsesign}},
+ year = {2013}
+}
+
+@inproceedings{Wang2004,
+ author = {Wang, Nicholas J. and Quek, Justin and Rafacz, Todd M. and Patel, Sanjay J.},
+ booktitle = {International Conference on Dependable Systems and Networks, 2004},
+ doi = {10.1109/DSN.2004.1311877},
+ file = {:work/research/functional_safety/wang2004.pdf:pdf},
+ isbn = {0-7695-2052-9},
+ pages = {61--70},
+ publisher = {IEEE},
+ title = {{Characterizing the effects of transient faults on a high-performance processor pipeline}},
+ url = {http://ieeexplore.ieee.org/document/1311877/},
+ year = {2004}
+}
+
+@article{Schirmeier2015,
+ abstract = {Since the first identification of physical causes for soft errors in memory circuits, fault injection (FI) has grown into a standard methodology to assess the fault resilience of computer systems. A variety of FI techniques trying to mimic these physical causes has been developed to measure and compare program susceptibility to soft errors. In this paper, we analyze the process of evaluating programs, which are hardened by software-based hardware fault-tolerance mechanisms, under a uniformly distributed soft-error model. We identify three pitfalls in FI result interpretation widespread in the literature, even published in renowned conference proceedings. Using a simple machine model and transient single-bit faults in memory, we find counterexamples that reveal the unfitness of common practices in the field, and substantiate our findings with real-world examples. In particular, we demonstrate that the fault coverage metric must be abolished for comparing programs. Instead, we propose to use extrapolated absolute failure counts as a valid comparison metric.},
+ author = {Schirmeier, Horst and Borchert, Christoph and Spinczyk, Olaf},
+ doi = {10.1109/DSN.2015.44},
+ file = {:work/research/functional_safety/schirmeierCorrection.pdf:pdf},
+ isbn = {9781479986293},
+ journal = {Proceedings of the International Conference on Dependable Systems and Networks},
+ keywords = {Absolute Failure Count,Fault Coverage Factor,Fault Injection,Program Susceptibility Comparison,Result Interpretation,SIHFT,Single-Bit Flips,Soft Errors},
+ pages = {319--330},
+ publisher = {IEEE},
+ title = {{Avoiding Pitfalls in Fault-Injection Based Comparison of Program Susceptibility to Soft Errors}},
+ volume = {2015-September},
+ year = {2015}
+}
+
+@article{Lattner2004,
+ abstract = {This paper describes LLVM (Low Level Virtual Machine), a compiler framework designed to support transparent, life-long program analysis and transformation for arbitrary programs, by providing high-level information to compiler transformations at compile-time, link-time, run-time, and in idle time between runs. LLVM defines a common, low-level code representation in Static Single Assignment (SSA) form, with several novel features: a simple, language-independent type-system that exposes the primitives commonly used to implement high-level language features; an instruction for typed address arithmetic; and a simple mechanism that can be used to implement the exception handling features of high-level languages (and setjmp/longjmp in C) uniformly and efficiently. The LLVM compiler framework and code representation together provide a combination of key capabilities that are important for practical, lifelong analysis and transformation of programs. To our knowledge, no existing compilation approach provides all these capabilities. We describe the design of the LLVM representation and compiler framework, and evaluate the design in three ways: (a) the size and effectiveness of the representation, including the type information it provides; (b) compiler performance for several interprocedural problems; and (c) illustrative examples of the benefits LLVM provides for several challenging compiler problems.},
+ author = {Lattner, Chris and Adve, Vikram},
+ doi = {10.1109/CGO.2004.1281665},
+ file = {:work/research/functional_safety/llvm.pdf:pdf},
+ isbn = {0769521029},
+ journal = {International Symposium on Code Generation and Optimization, CGO},
+ number = {c},
+ pages = {75--86},
+ title = {{LLVM: A compilation framework for lifelong program analysis and transformation}},
+ year = {2004}
+}
+
+@article{Cheng2016,
+abstract = {We present a first of its kind framework which overcomes a major challenge in the design of digital systems that are resilient to reliability failures: achieve desired resilience targets at minimal costs (energy, power, execution time, area) by combining resilience techniques across various layers of the system stack (circuit, logic, architecture, software, algorithm). This is also referred to as cross-layer resilience. In this paper, we focus on radiation-induced soft errors in processor cores. We address both single-event upsets (SEUs) and single-event multiple upsets (SEMUs) in terrestrial environments. Our framework automatically and systematically explores the large space of comprehensive resilience techniques and their combinations across various layers of the system stack (798 cross-layer combinations in this paper), derives cost-effective solutions that achieve resilience targets at minimal costs, and provides guidelines for the design of new resilience techniques. We demonstrate the practicality and effectiveness of our framework using two diverse designs: a simple, in-order processor core and a complex, out-of-order processor core. Our results demonstrate that a carefully optimized combination of circuit-level hardening, logic-level parity checking, and micro-architectural recovery provides a highly cost-effective soft error resilience solution for general-purpose processor cores. For example, a 50× improvement in silent data corruption rate is achieved at only 2.1% energy cost for an out-of-order core (6.1% for an in-order core) with no speed impact. However, selective circuit-level hardening alone, guided by a thorough analysis of the effects of soft errors on application benchmarks, provides a cost-effective soft error resilience solution as well (with ∼1% additional energy cost for a 50× improvement in silent data corruption rate).},
+author = {Cheng, Eric and Mirkhani, Shahrzad and Szafaryn, Lukasz G. and Cher, Chen Yong and Cho, Hyungmin and Skadron, Kevin and Stan, Mircea R. and Lilja, Klas and Abraham, Jacob A. and Bose, Pradip and Mitra, Subhasish},
+doi = {10.1145/2897937.2897996},
+file = {:work/research/functional_safety/Stanford_RobustSystemGroup/CLEAR_combiningHWAndSWTechniquesToTolerateSoftErrorsInProcessorCores.pdf:pdf},
+isbn = {9781450342360},
+issn = {0738100X},
+journal = {Proceedings - Design Automation Conference},
+keywords = {Cross-layer resilience,Soft errors},
+mendeley-groups = {Stanford_RSG},
+title = {{CLEAR: Crosslayer exploration for architecting resilience combining hardware and software techniques to tolerate soft errors in processor cores}},
+volume = {05-09-June},
+year = {2016}
+}
+
+@INPROCEEDINGS{softerror,
+ author={Mukherjee, S.S. and Emer, J. and Reinhardt, S.K.},
+ booktitle={11th International Symposium on High-Performance Computer Architecture},
+ title={The soft error problem: an architectural perspective},
+ year={2005},
+ volume={},
+ number={},
+ pages={243-247},
+ doi={10.1109/HPCA.2005.37}}
+
+@article{Bohman2019,
+ abstract = {Commercial off-the-shelf microcontrollers can be useful for noncritical processing on spaceborne platforms. These microprocessors can be inexpensive and consume small amounts of power. However, the software running on these processors is vulnerable to radiation upsets. In this paper, we present a fully automated, configurable, software-based tool to increase the reliability of microprocessors in high-radiation environments. This tool consists of a set of open-source LLVM compiler passes to automatically implement software-based mitigation techniques. We duplicate or triplicate computations and insert voting mechanisms into software during the compilation process, allowing for runtime error correction. While the techniques we implement are not novel, previous work has typically been closed source, processor architecture dependent, not automated, and not tested in real high-radiation environments. In contrast, the compiler passes presented in this paper are publicly available, highly customizable, and are platform independent and language independent. We have tested our modified software using both fault injection and through neutron beam radiation on a Texas Instruments MSP430 microcontroller. When tested by a neutron beam, we were able to decrease the cross section of programs by 17-29 × , increasing mean-work-to-failure by 4-7 ×.},
+ author = {Bohman, Matthew and James, Benjamin and Wirthlin, Michael J. and Quinn, Heather and Goeders, Jeffrey},
+ doi = {10.1109/TNS.2018.2886094},
+ file = {:work/research/functional_safety/MicrocontrollerCompilerAssistedSWFT.pdf:pdf},
+ issn = {00189499},
+ journal = {IEEE Transactions on Nuclear Science},
+ keywords = {Silent data corruption (SDC),single-event upset (SEU),soft errors,software fault tolerance},
+ number = {1},
+ pages = {223--232},
+ publisher = {IEEE},
+ title = {{Microcontroller compiler-assisted software fault tolerance}},
+ volume = {66},
+ year = {2019}
+}
+
+@ARTICLE{Chielle2015,  author={Eduardo Chielle and Gennaro S. {Rodrigues} and Fernanda L. {Kastensmidt} and Sergio {Cuenca-Asensi} and Lucas A. {Tambara} and Paolo {Rech} and Heather {Quinn}},  journal={IEEE Transactions on Nuclear Science},   title={S-SETA: Selective Software-Only Error-Detection Technique Using Assertions},   year={2015},  volume={62},  number={6},  pages={3088-3095},  doi={10.1109/TNS.2015.2484842}}
+
+@article{Hari2012,
+abstract = {With technology scaling, transient faults are becoming an increasing threat to hardware reliability. Commodity systems must be made resilient to these in-field faults through very low-cost resiliency solutions. Software-level symptom detection techniques have emerged as promising low-cost and effective solutions. While the current user-visible Silent Data Corruption (SDC) rates for these techniques is relatively low, eliminating or significantly lowering the SDC rate is crucial for these solutions to become practically successful. Identifying and understanding program sections that cause SDCs is crucial to reducing (or eliminating) SDCs in a cost effective manner. This paper provides a detailed analysis of code sections that produce over 90% of SDCs for six applications we studied. This analysis facilitated the development of program-level detectors that catch errors in quantities that are either accumulated or active for a long duration, amortizing the detection costs. These low-cost detectors significantly reduce the dependency on redundancy-based techniques and provide more practical and flexible choice points on the performance vs. reliability trade-off curve. For example, for an average of 90%, 99%, or 100% reduction of the baseline SDC rate, the average execution overheads of our approach versus redundancy alone are respectively 12% vs. 30%, 19% vs. 43%, and 27% vs. 51%. {\textcopyright} 2012 IEEE.},
+author = {Hari, Siva Kumar Sastry and Adve, Sarita V. and Naeimi, Helia},
+doi = {10.1109/DSN.2012.6263960},
+file = {:work/research/functional_safety/lowCostProgramLevelDetectors_for_reducingSDCs.pdf:pdf},
+isbn = {9781467316248},
+journal = {Proceedings of the International Conference on Dependable Systems and Networks},
+keywords = {Application resiliency,Hardware reliability,Silent data corruptions,Symptom-based fault detection,Transient faults},
+title = {{Low-cost program-level detectors for reducing silent data corruptions}},
+year = {2012}
+}
+
+@INPROCEEDINGS{softcomputation,  author={Anna {Thomas} and Karthik {Pattabiraman}},  booktitle={2013 43rd Annual IEEE/IFIP International Conference on Dependable Systems and Networks (DSN)},   title={Error detector placement for soft computation},   year={2013},  volume={},  number={},  pages={1-12},  doi={10.1109/DSN.2013.6575353}}
+
+
+@article{Leveugle2009,
+ abstract = {Fault injection has become a very classical method to determine the dependability of an integrated system with respect to soft errors. Due to the huge number of possible error configurations in complex circuits, a random selection of a subset of potential errors is usual in practical experiments. The main limitation of such a selection is the confidence in the outcomes that is never quantified in the articles. This paper proposes an approach to quantify both the error on the presented results and the confidence on the presented interval. The computation of the required number of faults to inject in order to achieve a given confidence and error interval is also discussed. Experimental results are shown and fully support the presented approach. {\textcopyright} 2009 EDAA.},
+ author = {R\'egis Leveugle and Calvez, A. and Paolo Maistri and Pierre Vanhauwaert},
+ doi = {10.1109/date.2009.5090716},
+ file = {:work/research/functional_safety/statisticalFaultInjection_quantifiedErrorAndConfidence.pdf:pdf},
+ isbn = {9783981080155},
+ issn = {15301591},
+ journal = {Proceedings -Design, Automation and Test in Europe, DATE},
+ keywords = {Dependability analysis,Statistical fault injection},
+ pages = {502--506},
+ title = {{Statistical fault injection: Quantified error and confidence}},
+ year = {2009}
+}
+
+@article{Rhisheekesan2019,
+abstract = {Huge leaps in performance and power improvements of computing systems are driven by rapid technology scaling, but technology scaling has also rendered computing systems susceptible to soft errors. Among the soft error protection techniques, Control Flow Checking (CFC) based techniques have gained a reputation of being lightweight yet effective. The main idea behind CFCs is to check if the program is executing the instructions in the right order. In order to validate the protection claims of existing CFCs, we develop a systematic and quantitative method to evaluate the protection achieved by CFCs using the metric of vulnerability. Our quantitative analysis indicates that existing CFC techniques are not only ineffective in providing protection from soft faults, but incur additional performance and power overheads. Our results show that software-only CFC protection schemes increase system vulnerability by 18%-21% with 17%-38% performance overhead and hybrid CFC protection increases vulnerability by 5%. Although the vulnerability remains almost the same for hardware-only CFC protection, they incur overheads of design cost, area, and power due to the hardware modifications required for their implementations.},
+author = {Rhisheekesan, Abhishek and Jeyapaul, Reiley and Shrivastava, Aviral},
+doi = {10.1145/3301311},
+file = {:media/Win_D/work/research/functional_safety/ArizonaStateUni_CML/ControlFlowCheckingOrNot.pdf:pdf},
+issn = {15583465},
+journal = {ACM Transactions on Embedded Computing Systems},
+keywords = {Error correction code,Reliability,Soft error,Transient fault,Vulnerability},
+mendeley-groups = {ASU_CML},
+number = {1},
+title = {{Control flow checking or not? (for Soft Errors)}},
+volume = {18},
+year = {2019}
+}
+
+@article{cfcss,
+abstract = {This paper presents a new signature monitoring technique, CFCSS (Control Flow Checking by Software Signatures); CFCSS is a pure software method that checks the control flow of a program using assigned signatures. An algorithm assigns a unique signature to each node in the program graph and adds instructions for error detection. Signatures are embedded in the program during compilation time using the constant field of the instructions and compared with run-time signatures when the program is executed. Another algorithm reduces the code size and execution time overhead caused by checking instructions in CFCSS. A "branching fault injection experiment" was performed with benchmark programs. Without CFCSS, an average of 33.7% of the injected branching faults produced undetected incorrect outputs; however, with CFCSS, only 3.1% of branching faults produced undetected incorrect outputs. Thus it is possible to increase error detection coverage for control flow errors by an order of magnitude using CFCSS. The distinctive advantage of CFCSS over previous signature monitoring techniques is that CFCSS is a pure software method, i.e., it needs no dedicated hardware such as a watchdog processor for control flow checking. A watchdog task in multitasking environment also needs no extra hardware, but the advantage of CFCSS over a watchdog task is that CFCSS can be used even when the operating system does not support multitasking.},
+author = {Oh, Nahmsuk and Shirvani, Philip P. and McCluskey, Edward J.},
+doi = {10.1109/24.994926},
+file = {:work/research/functional_safety/Stanford_RobustSystemGroup/CFCSS.pdf:pdf},
+issn = {00189529},
+journal = {IEEE Transactions on Reliability},
+keywords = {Assigned signatures,Control flow checking,Fault injection experiments,Signature monitoring,Software error detection},
+mendeley-groups = {Stanford_RSG},
+number = {1},
+pages = {111--122},
+title = {{Control-flow checking by software signatures}},
+volume = {51},
+year = {2002}
+}
+
+@article{rasm,
+ author = {Vankeirsbilck, Jens and Penneman, Niels and Hallez, Hans and Boydens, Jeroen},
+ doi = {10.1109/TR.2017.2754548},
+ file = {:work/research/functional_safety/KULeuven_ReliabilityInMicroelectronicsAndICT/rasm.pdf:pdf},
+ issn = {0018-9529},
+ journal = {IEEE Transactions on Reliability},
+ mendeley-groups = {KUL_RMICT},
+ month = {dec},
+ number = {4},
+ pages = {1178--1192},
+ title = {{Random Additive Signature Monitoring for Control Flow Error Detection}},
+ url = {http://ieeexplore.ieee.org/document/8067656/},
+ volume = {66},
+ year = {2017}
+}
+
+% @phdthesis{nzdcthesis,
+%   author = {Moslem Didehban},
+%   title = {Software Techniques for Dependable Execution},
+%   school = {Arizona State University},
+%   year = 2018,
+% }
+
+@article{eddi,
+abstract = {This paper proposes a pure software technique "Error Detection by Duplicated Instructions" (EDDI), for detecting errors during usual system operation. Compared to other error-detection techniques that use hardware redundancy, EDDI does not require any hardware modifications to add error detection capability to the original system. EDDI duplicates instructions during compilation and uses different registers and variables for the new instructions. Especially for the fault in the code segment of memory, formulas are derived to estimate the error-detection coverage of EDDI using probabilistic methods. These formulas use statistics of the program, which are collected during compilation. EDDI was applied to eight benchmark programs and the error-detection coverage was estimated. Then, the estimates were verified by simulation, in which a fault injector forced a bit-flip in the code segment of executable machine codes. The simulation results validated the estimated fault coverage and show that approximately 1.5% of injected faults produced incorrect results in eight benchmark programs with EDDI, while on average, 20% of injected faults produced undetected incorrect results in the programs without EDDI. Based on the theoretical estimates and actual fault-injection experiments, EDDI can provide over 98% fault-coverage without any extra hardware for error detection. This pure software technique is especially useful when designers cannot change the hardware, but they need dependability in the computer system. To reduce the performance overhead, EDDI schedules the instructions that are added for detecting errors such that "Instruction-Level Parallelism" (ILP) is maximized. Performance overhead can be reduced by increasing ILP within a single super-scalar processor. The execution time overhead in a 4-way super-scalar processor is less than the execution time overhead in the processors that can issue two instructions in one cycle.},
+author = {Oh, Nahmsuk and Shirvani, Philip P. and McCluskey, Edward J.},
+doi = {10.1109/24.994913},
+file = {:work/research/functional_safety/Stanford_RobustSystemGroup/eddi.pdf:pdf},
+issn = {00189529},
+journal = {IEEE Transactions on Reliability},
+keywords = {Concurrent error detection,Error detection by duplicated instructions,Fault tolerance,Fault-injection experiment,Instruction-level parallelism,Single event upset,Super-scalar processor and instruction-scheduling,Transient fault},
+mendeley-groups = {Stanford_RSG},
+number = {1},
+pages = {63--75},
+title = {{Error detection by duplicated instructions in super-scalar processors}},
+volume = {51},
+year = {2002}
+}
+
+@inproceedings{systemc,
+author = {Panda, Preeti Ranjan},
+title = {SystemC: A Modeling Platform Supporting Multiple Design Abstractions},
+year = {2001},
+isbn = {1581134185},
+publisher = {Association for Computing Machinery},
+address = {New York, NY, USA},
+url = {https://doi.org/10.1145/500001.500018},
+doi = {10.1145/500001.500018},
+abstract = {SystemC is a C++ based modeling platform supporting design abstractions at the register-transfer, behavioral, and system levels. Consisting of a class library and a simulation kernel, the language is an attempt at standardization of a C/C++ design methodology, and is supported by the Open SystemC Initiative (OSCI), a consortium of a wide range of system houses, semiconductor companies, Intellectual property (IP) providers, embedded software developers, and design automation tool vendors. The advantages of SystemC include the establishment of a common design environment consisting of C++ libraries, models and tools, thereby setting up a foundation for hardware-software co-design; the ability to exchange IP easily and efficiently; and the ability to reuse test benches across different levels of modeling abstraction. We outline the features of SystemC that make it an attractive language for design specification, verification, and synthesis at different levels of abstraction, with particular emphasis on the new features included in SystemC 2.0 that support system-level design.},
+booktitle = {Proceedings of the 14th International Symposium on Systems Synthesis},
+pages = {75–80},
+numpages = {6},
+keywords = {C/C++ based design, hardware description language, SystemC, system level design},
+location = {Montr\'{e}al, P.Q., Canada},
+series = {ISSS '01}
+}
+
+@book{Goloubeva2006,
+ abstract = {Software-Implemented Hardware Fault Tolerance addresses the innovative topic of software-implemented hardware fault tolerance (SIHFT), i.e., how to deal with faults affecting the hardware by only (or mainly) acting on the software. The first SIHFT techniques were proposed and adopted several decades ago, but they have been the object of new interest in the past few years, mainly due to the need for developing low-cost safety-critical computer-based applications in fields such as automotive, biomedics, and telecommunications. Therefore, several new approaches to detect and, when possible, correct transient and permanent faults in the hardware have been recently proposed. These approaches are innovative (with respect to those proposed in the past) since they are of higher applicability (often starting from the source-level code of an application) and generality, being capable of coping with many different fault types. The book presents the theory behind software-implemented hardware fault tolerance, as well as the practical aspects related to put it at work on real examples. By evaluating accurately the advantages and disadvantages of the already available approaches, the book provides a guide to developers willing to adopt software-implemented hardware fault tolerance in their applications. Moreover, the book identifies open issues for researchers willing to improve the already available techniques.},
+ author = {Goloubeva, Olga and Rebaudengo, Maurizio and {Sonza Reorda}, Matteo and Violante, Massimo},
+ doi = {10.1007/0-387-32937-4},
+ file = {:work/research/books/engg/softwareimplemented-hardware-fault-tolerance-2006.pdf:pdf},
+ isbn = {978-1-4419-3861-9},
+ pages = {228},
+ publisher = {Springer US},
+ title = {{Software-Implemented Hardware Fault Tolerance}},
+ url = {http://link.springer.com/10.1007/0-387-32937-4},
+ year = {2006}
+}
+
+
+@ARTICLE{Vemu2011,  author={Ramtilak {Vemu} and Jacob A. {Abraham}},  journal={IEEE Transactions on Computers},   title={CEDA: Control-Flow Error Detection Using Assertions},   year={2011},  volume={60},  number={9},  pages={1233-1245},  doi={10.1109/TC.2011.101}}
+
+@ARTICLE{Alkhalifa1999,  author={Zeyad {Alkhalifa} and Suku {Nair} and Narayanan {Krishnamurthy} and Jacob A. {Abraham}},  journal={IEEE Transactions on Parallel and Distributed Systems},   title={Design and evaluation of system-level checks for on-line control flow error detection},   year={1999},  volume={10},  number={6},  pages={627-641},  doi={10.1109/71.774911}}
+
+@inproceedings{racfed,
+ abstract = {Today, embedded systems are being used in many (safety-critical) applications. However, due to their decreasing feature size and supply voltage, such systems are more susceptible to external disturbances such as electromagnetic interference. These external disturbances are able to introduce bit-flips inside the microcontroller's hardware. In turn, these bit-flips may also corrupt the software. A possible software corruption is a control flow error. This paper proposes a new software-implemented control flow error detection technique. The advantage of our technique, called Random Additive Control Flow Error Detection, is a high detection ratio with a low execution time overhead. Most control flow errors are detected, while having a lower execution time overhead than the considered existing techniques.},
+ address = {Cham},
+ author = {Vankeirsbilck, Jens and Penneman, Niels and Hallez, Hans and Boydens, Jeroen},
+ booktitle = {Lecture Notes in Computer Science (including subseries Lecture Notes in Artificial Intelligence and Lecture Notes in Bioinformatics)},
+ doi = {10.1007/978-3-319-99130-6_15},
+ editor = {Gallina, Barbara and Skavhaug, Amund and Bitsch, Friedemann},
+ isbn = {9783319991290},
+ issn = {16113349},
+ keywords = {Erroneous bit-flips,Fault tolerance,Resilient software,Software-implemented control flow error detection},
+ pages = {220--234},
+ publisher = {Springer International Publishing},
+ title = {{Random Additive Control Flow Error Detection}},
+ volume = {11093 LNCS},
+ year = {2018}
+}
+
+@INPROCEEDINGS{sied,  author={Bogdan {Nicolescu} and Yvon {Savaria} and Raoul {Velazco}},  booktitle={Proceedings 18th IEEE Symposium on Defect and Fault Tolerance in VLSI Systems},   title={SIED: software implemented error detection},   year={2003},  volume={},  number={},  pages={589-596},  doi={10.1109/DFTVS.2003.1250159}}
+
+@book{DMX,
+ title={Recommended Practice for DMX512: A Guide for Users and Installers : Incorporating USITT DMX512-A and Remote Device Management, RDM},
+ author={Adam Bennett},
+ isbn={9780955703522},
+ url={https://books.google.de/books?id=NQopQwAACAAJ},
+ year={2008},
+ publisher={PLASA}
+}
+
+@article{Feng2010,
+abstract = {Aggressive technology scaling provides designers with an ever increasing budget of cheaper and faster transistors. Unfortunately, this trend is accompanied by a decline in individual device reliability as transistors become increasingly susceptible to soft errors. We are quickly approaching a new era where resilience to soft errors is no longer a luxury that can be reserved for just processors in high-reliability, mission-critical domains. Even processors used in mainstream computing will soon require protection. However, due to tighter profit margins, reliable operation for these devices must come at little or no cost. This paper presents Shoestring, a minimally invasive software solution that provides high soft error coverage with very little overhead, enabling its deployment even in commodity processors with "shoestring" reliability budgets. Leveraging intelligent analysis at compile time, and exploiting low-cost, symptom-based error detection, Shoestring is able to focus its efforts on protecting statistically-vulnerable portions of program code. Shoestring effectively applies instruction duplication to protect only those segments of code that, when subjected to a soft error, are likely to result in user-visible faults without first exhibiting symptomatic behavior. Shoestring is able to recover from an additional 33.9% of soft errors that are undetected by a symptom-only approach, achieving an overall user-visible failure rate of 1.6%. This reliability improvement comes at a modest performance overhead of 15.8%. Copyright {\textcopyright} 2010 ACM.},
+author = {Feng, Shuguang and Gupta, Shantanu and Ansari, Amin and Mahlke, Scott},
+doi = {10.1145/1736020.1736063},
+file = {:work/research/functional_safety/shoestring_probabalisticSEReliabilityOnTheCheap.pdf:pdf},
+isbn = {9781605588391},
+journal = {International Conference on Architectural Support for Programming Languages and Operating Systems - ASPLOS},
+keywords = {Compiler analysis,Error detection,Fault injection},
+pages = {385--396},
+title = {{Shoestring: Probabilistic soft error reliability on the cheap}},
+year = {2010}
+}
+
+@article{Bosilca2009,
+ author = {Du, Peng and Bouteiller, Aurelien and Bosilca, George and Herault, Thomas and Dongarra, Jack},
+ title = {Algorithm-Based Fault Tolerance for Dense Matrix Factorizations},
+ year = {2012},
+ issue_date = {August 2012},
+ publisher = {Association for Computing Machinery},
+ address = {New York, NY, USA},
+ volume = {47},
+ number = {8},
+ issn = {0362-1340},
+ url = {https://doi.org/10.1145/2370036.2145845},
+ doi = {10.1145/2370036.2145845},
+ abstract = {Dense matrix factorizations, such as LU, Cholesky and QR, are widely used for scientific applications that require solving systems of linear equations, eigenvalues and linear least squares problems. Such computations are normally carried out on supercomputers, whose ever-growing scale induces a fast decline of the Mean Time To Failure (MTTF). This paper proposes a new hybrid approach, based on Algorithm-Based Fault Tolerance (ABFT), to help matrix factorizations algorithms survive fail-stop failures. We consider extreme conditions, such as the absence of any reliable component and the possibility of loosing both data and checksum from a single failure. We will present a generic solution for protecting the right factor, where the updates are applied, of all above mentioned factorizations. For the left factor, where the panel has been applied, we propose a scalable checkpointing algorithm. This algorithm features high degree of checkpointing parallelism and cooperatively utilizes the checksum storage leftover from the right factor protection. The fault-tolerant algorithms derived from this hybrid solution is applicable to a wide range of dense matrix factorizations, with minor modifications. Theoretical analysis shows that the fault tolerance overhead sharply decreases with the scaling in the number of computing units and the problem size. Experimental results of LU and QR factorization on the Kraken (Cray XT5) supercomputer validate the theoretical evaluation and confirm negligible overhead, with- and without-errors.},
+ journal = {SIGPLAN Not.},
+ month = feb,
+ pages = {225–234},
+ numpages = {10},
+ keywords = {fail-stop failure, LU, ABFT, fault-tolerance, QR}
+}
+
+@INPROCEEDINGS{Rebaudengo1999,  author={Maurizio {Rebaudengo} and Matteo {Sonza Reorda} and Marco {Torchiano} and Massimo {Violante}},  booktitle={Proceedings 1999 IEEE International Symposium on Defect and Fault Tolerance in VLSI Systems (EFT'99)},   title={Soft-error detection through software fault-tolerance techniques},   year={1999},  volume={},  number={},  pages={210-218},  doi={10.1109/DFTVS.1999.802887}}
+
+@inproceedings{Cheynet2001,
+ author    = {Ph. Cheynet and
+   Bogdan Nicolescu and
+   Raoul Velazco and
+   Maurizio Rebaudengo and
+   Matteo Sonza Reorda and
+   Massimo Violante},
+ editor    = {Wolfgang Nebel and
+   Ahmed Jerraya},
+ title     = {System safety through automatic high-level code transformations: an
+   experimental evaluation},
+ booktitle = {Proceedings of the Conference on Design, Automation and Test in Europe,
+   {DATE} 2001, Munich, Germany, March 12-16, 2001},
+ pages     = {297--301},
+ publisher = {{IEEE} Computer Society},
+ year      = {2001},
+ url       = {https://doi.org/10.1109/DATE.2001.915040},
+ doi       = {10.1109/DATE.2001.915040},
+ timestamp = {Wed, 16 Oct 2019 14:14:53 +0200},
+ biburl    = {https://dblp.org/rec/conf/date/CheynetNVRRV01.bib},
+ bibsource = {dblp computer science bibliography, https://dblp.org}
+}
+
+@article{Chen2013,
+ author = {Chen, Zizhong},
+ title = {Online-ABFT: An Online Algorithm Based Fault Tolerance Scheme for Soft Error Detection in Iterative Methods},
+ year = {2013},
+ issue_date = {August 2013},
+ publisher = {Association for Computing Machinery},
+ address = {New York, NY, USA},
+ volume = {48},
+ number = {8},
+ issn = {0362-1340},
+ url = {https://doi.org/10.1145/2517327.2442533},
+ doi = {10.1145/2517327.2442533},
+ abstract = {Soft errors are one-time events that corrupt the state of a computing system but not its overall functionality. Large supercomputers are especially susceptible to soft errors because of their large number of components. Soft errors can generally be detected offline through the comparison of the final computation results of two duplicated computations, but this approach often introduces significant overhead. This paper presents Online-ABFT, a simple but efficient online soft error detection technique that can detect soft errors in the widely used Krylov subspace iterative methods in the middle of the program execution so that the computation efficiency can be improved through the termination of the corrupted computation in a timely manner soon after a soft error occurs. Based on a simple verification of orthogonality and residual, Online-ABFT is easy to implement and highly efficient. Experimental results demonstrate that, when this online error detection approach is used together with checkpointing, it improves the time to obtain correct results by up to several orders of magnitude over the traditional offline approach.},
+ journal = {SIGPLAN Not.},
+ month = feb,
+ pages = {167–176},
+ numpages = {10},
+ keywords = {iterative methods, checkpoint, soft error, algorithm-based fault tolerance (abft), online error detection}
+}
+
+@inproceedings{Mukherjee2002,
+ author = {Mukherjee, Shubhendu S. and Kontz, Michael and Reinhardt, Steven K.},
+ title = {Detailed Design and Evaluation of Redundant Multithreading Alternatives},
+ year = {2002},
+ isbn = {076951605X},
+ publisher = {IEEE Computer Society},
+ address = {USA},
+ abstract = {Exponential growth in the number of on-chip transistors, coupled with reductions in voltage levels, makes each generation of microprocessors increasingly vulnerable to transient faults. In a multithreaded environment, we can detect these faults by running two copies of the same program as separate threads, feeding them identical inputs, and comparing their outputs, a technique we call Redundant Multithreading (RMT).This paper studies RMT techniques in the context of both single- and dual-processor simultaneous multithreaded (SMT) single-chip devices. Using a detailed, commercial-grade, SMT processor design we uncover subtle RMT implementation complexities, and find that RMT can be a more significant burden for single-processor devices than prior studies indicate. However, a novel application of RMT techniques in a dual-processor device, which we term chip-level redundant threading (CRT), shows higher performance than lockstepping the two cores, especially on multithreaded workloads.},
+ booktitle = {Proceedings of the 29th Annual International Symposium on Computer Architecture},
+ pages = {99–110},
+ numpages = {12},
+ location = {Anchorage, Alaska},
+ series = {ISCA '02}
+}
+
+@INPROCEEDINGS{Rotenberg1999,  author={Eric {Rotenberg}},  booktitle={Digest of Papers. Twenty-Ninth Annual International Symposium on Fault-Tolerant Computing (Cat. No.99CB36352)},   title={AR-SMT: a microarchitectural approach to fault tolerance in microprocessors},   year={1999},  volume={},  number={},  pages={84-91},  doi={10.1109/FTCS.1999.781037}}
+
+@article{Rehman2011,
+abstract = {A compilation technique for reliability-aware software transformations is presented. An instruction-level reliability estimation technique quantifies the effects of hardware-level faults at the instruction-level while considering spatial and temporal vulnerabilities. It bridges the gap between hardware - where faults occur according to our fault model - and software (the abstraction level where we aim to increase reliability). For a given tolerable performance overhead, an optimization algorithm compiles an application software with respect to a tradeoff between performance and reliability. Compared to performance-optimized compilation, our method incurs 60%-80% lower application failures, averaged over various fault injection scenarios and fault rates. Copyright 2011 ACM.},
+author = {Rehman, Semeen and Shafique, Muhammad and Kriebel, Florian and Henkel, J{\"{o}}rg},
+doi = {10.1145/2039370.2039408},
+file = {:work/research/functional_safety/KIT_ChairOfDependableNanocomputing/reliableSWForUnreliableHWEmbeddedCodeGenerationAimingAtReliability.pdf:pdf},
+isbn = {9781450307154},
+journal = {Embedded Systems Week 2011, ESWEEK 2011 - Proceedings of the 9th IEEE/ACM/IFIP International Conference on Hardware/Software Codesign and System Synthesis, CODES+ISSS'11},
+keywords = {Code generation,Dependability,Embedded systems,Instruction vulnerability estimation,Reliability,Reliability estimation,Reliability-aware software transformations,Reliable software,Technology scaling},
+mendeley-groups = {KIT_DNC},
+pages = {237--246},
+title = {{Reliable software for unreliable hardware: Embedded code generation aiming at reliability}},
+year = {2011}
+}
+
+@article{LI2007245,
+abstract = {Computer systems operating in space environment are subject to different radiation phenomena, whose effects are often called "Soft Error". Generally, these systems employ hardware techniques to address soft-errors, however, software techniques can provide a lower-cost and more flexible alternative. This paper presents a novel, software-only, transient-fault-detection technique, which is based on a new control flow checking scheme combined with software redundancy. The distinctive advantage of our approach over other fault tolerance techniques is the lower performance overhead with the higher fault coverage. It is able to cope with transient faults affecting data and the program control flow. By applying the proposed technique on several benchmark applications, we evaluate the error detection capabilities by means of several fault injection campaigns. Experimental results show that the proposed approach can detect more than 98% of the injected bit-flip faults with a mean execution time increase of 153%. {\textcopyright} 2006 Elsevier Masson SAS. All rights reserved.},
+author = {Li, Aiguo and Hong, Bingrong},
+doi = {10.1016/j.ast.2006.06.006},
+issn = {12709638},
+journal = {Aerospace Science and Technology},
+keywords = {Concurrent error detection,Control flow checking,Fault injection,Transient fault},
+number = {2-3},
+pages = {245--252},
+title = {{Software implemented transient fault detection in space computer}},
+url = {https://www.sciencedirect.com/science/article/pii/S1270963806000800},
+volume = {11},
+year = {2007}
+}
+
+
+@INPROCEEDINGS{yacca,  author={Goloubeva, Olga and Rebaudengo, Maurizio and {Sonza Reorda}, Matteo and Violante, Massimo},  booktitle={Proceedings 18th IEEE Symposium on Defect and Fault Tolerance in VLSI Systems},   title={Soft-error detection using control flow assertions},   year={2003},  volume={},  number={},  pages={581-588},  doi={10.1109/DFTVS.2003.1250158}}
+
+@article{ed4i,
+ author = {Oh, Nahmsuk and Mitra, Subhasish and McCluskey, Edward J.},
+ title = {ED4I: Error Detection by Diverse Data and Duplicated Instructions},
+ year = {2002},
+ issue_date = {February 2002},
+ publisher = {IEEE Computer Society},
+ address = {USA},
+ volume = {51},
+ number = {2},
+ issn = {0018-9340},
+ url = {https://doi.org/10.1109/12.980007},
+ doi = {10.1109/12.980007},
+ abstract = {Errors in computing systems can cause abnormal behavior and degrade data integrity and system availability. Errors should be avoided especially in embedded systems for critical applications. However, as the trend in VLSI technologies has been toward smaller feature sizes, lower supply voltages, and higher frequencies, there is a growing concern about temporary errors as well as permanent errors in embedded systems; thus, it is very essential to detect those errors. Software Implemented Hardware Fault Tolerance (SIHFT) is a low-cost alternative to hardware fault tolerance techniques for embedded processors: It does not require any hardware modification of Commercial Off-The-Shelf (COTS) processors. ED4I is a SIHFT technique that detects both permanent and temporary errors by executing two "different" programs (with the same functionality) and comparing their outputs. ED4I maps each number, x, in the original program into a new number x', and then transforms the program so that it operates on the new numbers so that the results can be mapped backwards for comparison with the results of the original program. The mapping in the transformation of ED4I is x'=k·x for integer numbers, where k determines the fault detection probability and data integrity of the system. For floating point numbers, we find a value of kf for the fraction and ke for the exponent separately and use k=kf 2ke for the value of k. We have demonstrated how to choose an optimal value of k for the transformation. This paper shows that, for integer programs, the transformation with k=-2 was the most desirable choice in six out of seven benchmark programs we simulated. It maximizes fault detection probability under the condition that data integrity is highest.},
+ journal = {IEEE Trans. Comput.},
+ month = feb,
+ pages = {180–199},
+ numpages = {20},
+ keywords = {duplicated instructions., low cost fault tolerance, Software implemented hardware fault tolerance (SIHFT), data diversity, concurrent error detection}
+}
+
+@INPROCEEDINGS{Slayman2011,  author={Charles {Slayman}},  booktitle={2011 Proceedings - Annual Reliability and Maintainability Symposium},   title={Soft error trends and mitigation techniques in memory devices},   year={2011},  volume={},  number={},  pages={1-5},  doi={10.1109/RAMS.2011.5754515}}
