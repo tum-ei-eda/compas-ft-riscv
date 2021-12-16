@@ -27,12 +27,29 @@ llvm::FunctionPass *llvm::createRISCVDmr() { return new RISCVDmr(); }
 
 RISCVDmr::RISCVDmr() : llvm::MachineFunctionPass{ID} {}
 
+bool RISCVDmr::ignoreMF() {
+  bool ret{true};
+
+  // is this function passed in NZDC list?
+  if (riscv_common::inCSString(llvm::cl::enable_nzdc, fname_)) {
+    ret = false;
+  } else {
+    llvm::outs() << "COMPAS: Ignoring " << fname_ << " for NZDC\n";
+  }
+  // // is this function passed in SWIFT list?
+  // if (riscv_common::inCSString(llvm::cl::enable_swift, fname_)) {
+  //   ret = false;
+  // }
+
+  return ret;
+}
+
 bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
   MF_ = &MF;
   fname_ = std::string{MF_->getName()};
 
-  if (!riscv_common::inCSString(llvm::cl::enable_nzdc, fname_)) {
-    llvm::outs() << "Ignoring " << fname_ << " for DMR\n";
+  // if this function is not to be transformed then return early
+  if (ignoreMF()) {
     return false;
   }
 
@@ -48,6 +65,12 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
     repair();
   }
 
+  protectGP();
+
+  return true;
+}
+
+void RISCVDmr::protectGP() {
   // hard to do GP duplication at this level as GP gets addr later in assembly
   // phase
   // if GP and its shadow remain matching throughout the MF then there is
@@ -63,8 +86,6 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
       }
     }
   }
-
-  return true;
 }
 
 void RISCVDmr::init() {
@@ -92,18 +113,9 @@ void RISCVDmr::init() {
     config_.pslc = ProtectStrategyLibCall::LC1;
     config_.psb = ProtectStrategyBranch::B2;
 
-    llvm::outs() << "\nRunning NZDC pass with " << schedule_string << " on "
-                 << fname_ << "\n";
+    llvm::outs() << "\nCOMPAS: Running NZDC pass with " << schedule_string
+                 << " on " << fname_ << "\n";
   }
-
-  // llvm::outs() << "\tNOTE: overriding ProtectStrategyLibCall!!\n";
-  // config_.pslc = ProtectStrategyLibCall::LC0;
-
-  // unsigned num_instrs{0};
-  // for (auto &MBB : *MF_) {
-  //   num_instrs += MBB.size();
-  // }
-  // llvm::outs() << "\toriginal #instrs: " << num_instrs << "\n";
 
   err_bb_ = nullptr;
   stores_.clear();
@@ -1690,21 +1702,6 @@ void RISCVDmr::repair() {
       // llvm::outs() << "repair finished ---\n";
       MBB2Visited[&MBB] = true;
 
-      // // sanity testing -> later remove on maturity
-      // for (auto &MI : MBB) {
-      //   for (auto &op : MI.operands()) {
-      //     if (op.isReg()) {
-      //       if (!riscv_common::setmapContains(P2S_, op.getReg()) &&
-      //           !riscv_common::mapValContains(P2S_, op.getReg())) {
-      //         MBB.dump();
-      //         llvm::outs() << "---\n";
-      //         MI.dump();
-      //         assert(0);
-      //       }
-      //     }
-      //   }
-      // }
-
       // cleanup: removing useless instrs from functionality point of view
       std::set<llvm::MachineInstr *> to_remove{};
       for (auto &MI : MBB) {
@@ -1859,8 +1856,4 @@ void RISCVDmr::repair() {
       }
     }
   }
-
-  // for (auto &MBB : *MF_) {
-  //   MBB.dump();
-  // }
 }

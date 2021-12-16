@@ -27,10 +27,6 @@ class RISCVDmr : public llvm::MachineFunctionPass {
 
   // pass registration in llvm system
   static inline char ID{0};
-  // for convenience
-  llvm::MachineFunction *MF_{nullptr};
-  const llvm::TargetInstrInfo *TII_{nullptr};
-  const llvm::MachineRegisterInfo *MRI_{nullptr};
 
   // constructor
   RISCVDmr();
@@ -38,6 +34,11 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   bool runOnMachineFunction(llvm::MachineFunction &) override;
 
  protected:
+  // for convenience
+  llvm::MachineFunction *MF_{nullptr};
+  const llvm::TargetInstrInfo *TII_{nullptr};
+  const llvm::MachineRegisterInfo *MRI_{nullptr};
+
   // CGS: coarse grain scheduling of master and shadow instructions
   // FGS: fine grain scheduling of master and shadow instructions
   enum class InstructionSchedule { CGS, FGS };
@@ -274,7 +275,9 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   void protectLoads();
   void protectCalls();
   void protectBranches();
+  void protectGP();
   void repair();
+  bool ignoreMF();
   // TODO: hide some of the following??
   llvm::MachineInstr *genShadowFromPrimary(const llvm::MachineInstr *) const;
   virtual void insertErrorBB();
