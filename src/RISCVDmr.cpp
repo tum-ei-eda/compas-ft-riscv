@@ -34,12 +34,18 @@ bool RISCVDmr::ignoreMF() {
   if (riscv_common::inCSString(llvm::cl::enable_nzdc, fname_)) {
     ret = false;
   } else {
-    llvm::outs() << "COMPAS: Ignoring " << fname_ << " for NZDC\n";
+    if (llvm::cl::enable_nzdc.size()) {
+      llvm::outs() << "COMPAS: Ignoring " << fname_ << " for NZDC\n";
+    }
   }
-  // // is this function passed in SWIFT list?
-  // if (riscv_common::inCSString(llvm::cl::enable_swift, fname_)) {
-  //   ret = false;
-  // }
+  // is this function passed in SWIFT list?
+  if (riscv_common::inCSString(llvm::cl::enable_swift, fname_)) {
+    ret = false;
+  } else {
+    if (llvm::cl::enable_swift.size()) {
+      llvm::outs() << "COMPAS: Ignoring " << fname_ << " for SWIFT\n";
+    }
+  }
 
   return ret;
 }
