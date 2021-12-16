@@ -66,6 +66,8 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   // B2: duplicate branch (aka NEMESIS)
   // B0: dont protect
   enum class ProtectStrategyBranch { B0, B1, B2 };
+  // TODO: maybe group all protect strategies into one concept
+
   // grouping above strategies/configs in a single container
   struct DMRConfig {
     InstructionSchedule is{InstructionSchedule::CGS};
@@ -261,6 +263,7 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   std::set<llvm::MachineInstr *> user_calls_{};
   std::set<llvm::MachineInstr *> lib_calls_{};
   std::set<llvm::MachineInstr *> branches_{};
+  std::set<llvm::MachineInstr *> loads_{};
   bool uses_FPregfile_{false};
   const std::set<llvm::Register> reserved_fp_primary_{
       llvm::RISCV::F8_F, llvm::RISCV::F8_D, llvm::RISCV::F8_H};

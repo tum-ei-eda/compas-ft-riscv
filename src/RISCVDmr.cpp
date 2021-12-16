@@ -23,6 +23,8 @@
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 
+// #define DBG
+
 llvm::FunctionPass *llvm::createRISCVDmr() { return new RISCVDmr(); }
 
 RISCVDmr::RISCVDmr() : llvm::MachineFunctionPass{ID} {}
@@ -67,7 +69,6 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
   protectBranches();
 
   if (llvm::cl::enable_repair) {
-    llvm::outs() << "Running REPAIR transformation on DMR code\n";
     repair();
   }
 
@@ -105,21 +106,33 @@ void RISCVDmr::init() {
     }
   }
 
+  // how to handle instruction schedule for DMR
   std::string schedule_string{"CGS"};
   if (riscv_common::inCSString(llvm::cl::enable_fgs, fname_)) {
     config_.is = InstructionSchedule::FGS;
     schedule_string = "FGS";
   }
 
+  // how to handle lib-calls
+  config_.pslc = ProtectStrategyLibCall::LC1;
+
   if (riscv_common::inCSString(llvm::cl::enable_nzdc, fname_)) {
     // setting up nzdc configs
     config_.pss = ProtectStrategyStore::S3;
     config_.psl = ProtectStrategyLoad::L0;
     config_.psuc = ProtectStrategyUserCall::UC3;
-    config_.pslc = ProtectStrategyLibCall::LC1;
     config_.psb = ProtectStrategyBranch::B2;
 
-    llvm::outs() << "\nCOMPAS: Running NZDC pass with " << schedule_string
+    llvm::outs() << "COMPAS: Running NZDC pass with " << schedule_string
+                 << " on " << fname_ << "\n";
+  } else if (riscv_common::inCSString(llvm::cl::enable_swift, fname_)) {
+    // setting swift configs
+    config_.pss = ProtectStrategyStore::S1;
+    config_.psl = ProtectStrategyLoad::L1;
+    config_.psuc = ProtectStrategyUserCall::UC1;
+    config_.psb = ProtectStrategyBranch::B1;
+
+    llvm::outs() << "COMPAS: Running SWIFT pass with " << schedule_string
                  << " on " << fname_ << "\n";
   }
 
@@ -131,6 +144,7 @@ void RISCVDmr::init() {
   nemesis_bbs_.clear();
   loadbacks_.clear();
   indirect_calls_.clear();
+  loads_.clear();
 
   if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
       config_.eds == riscv_common::ErrorDetectionStrategy::ED1) {
@@ -151,6 +165,8 @@ void RISCVDmr::init() {
     for (auto &MI : MBB) {
       if (MI.mayStore()) {
         stores_.emplace(&MI);
+      } else if (MI.mayLoad()) {
+        loads_.emplace(&MI);
       } else if (MI.isCall()) {
         if (MI.getOpcode() == llvm::RISCV::PseudoCALLIndirect) {
           indirect_calls_.emplace(&MI);
@@ -178,6 +194,10 @@ void RISCVDmr::init() {
       }
     }
   }
+
+#ifdef DBG
+  llvm::outs() << "COMPAS_DBG: init() done\n";
+#endif
 }
 
 llvm::MachineInstr *RISCVDmr::genShadowFromPrimary(
@@ -276,6 +296,10 @@ void RISCVDmr::duplicateInstructions() {
         .addReg(riscv_common::kGP)
         .addImm(0);
   }
+
+#ifdef DBG
+  llvm::outs() << "COMPAS_DBG: duplicateInstructions() done\n";
+#endif
 }
 
 void RISCVDmr::protectStores() {
@@ -369,17 +393,58 @@ void RISCVDmr::protectStores() {
         assert(0 && "this store is not supported yet");
       }
     }
+  } else if (config_.pss == ProtectStrategyStore::S1) {
+    for (const auto &MI : stores_) {
+      for (const auto &op : MI->operands()) {
+        if (op.isReg()) {
+          llvm::BuildMI(*MI->getParent(), MI->getIterator(), MI->getDebugLoc(),
+                        TII_->get(llvm::RISCV::BNE))
+              .addReg(op.getReg())
+              .addReg(P2S_.at(op.getReg()))
+              .addMBB(err_bb_);
+        }
+      }
+    }
   } else {
-    assert(0 && "this protect-store strategy is not supported yet");
+    assert(0 && "this protect-strategy for stores is not supported yet");
   }
+
+#ifdef DBG
+  llvm::outs() << "COMPAS_DBG: protectStores() done\n";
+#endif
 }
 
 void RISCVDmr::protectLoads() {
   if (config_.psl == ProtectStrategyLoad::L0) {
     return;
+  } else if (config_.psl == ProtectStrategyLoad::L1) {
+    for (const auto &MI : loads_) {
+      for (const auto &op : MI->operands()) {
+        if (op.isReg()) {
+          if (op.isUse()) {
+            llvm::BuildMI(*MI->getParent(), MI->getIterator(),
+                          MI->getDebugLoc(), TII_->get(llvm::RISCV::BNE))
+                .addReg(op.getReg())
+                .addReg(P2S_.at(op.getReg()))
+                .addMBB(err_bb_);
+          } else if (op.isDef()) {
+            // inserting a move operation in order to do duplicate load
+            llvm::BuildMI(*MI->getParent(), std::next(MI->getIterator()),
+                          MI->getDebugLoc(), TII_->get(llvm::RISCV::ADDI))
+                .addReg(P2S_.at(op.getReg()))
+                .addReg(op.getReg())
+                .addImm(0);
+          }
+        }
+      }
+    }
   } else {
     assert(0 && "this protect-strategy for loads is not supported yet");
   }
+
+#ifdef DBG
+  llvm::outs() << "COMPAS_DBG: protectLoads() done\n";
+#endif
 }
 
 RISCVDmr::RegSetType RISCVDmr::getArgRegs(const llvm::MachineInstr *MI) const {
@@ -775,7 +840,7 @@ void RISCVDmr::protectCalls() {
             .addImm(0);
       }
 
-      // TODO: enable this when above TODO is fixed
+      // TODO: enable this when above TODO regarding FP is fixed
       // if (uses_FPregfile_) {
       //   auto fpr_mv_opcode{llvm::RISCV::FSGNJ_S};
       //   if (isa_config_.store_opcode == llvm::RISCV::SD) {
@@ -795,9 +860,24 @@ void RISCVDmr::protectCalls() {
       //   }
       // }
     }
+  } else if (config_.psuc == ProtectStrategyUserCall::UC1) {
+    for (const auto &MI : user_calls_) {
+      auto arg_regs{getArgRegs(MI)};
+      for (auto &r : arg_regs) {
+        llvm::BuildMI(*MI->getParent(), MI->getIterator(), MI->getDebugLoc(),
+                      TII_->get(llvm::RISCV::BNE))
+            .addReg(r)
+            .addReg(P2S_.at(r))
+            .addMBB(err_bb_);
+      }
+    }
   } else {
-    assert(0 && "this protect-strategy for user-calls not supported yet");
+    assert(0 && "this protect-strategy for user-calls is not supported yet");
   }
+
+#ifdef DBG
+  llvm::outs() << "COMPAS_DBG: protectCalls() done\n";
+#endif
 }
 
 void RISCVDmr::protectBranches() {
@@ -864,8 +944,12 @@ void RISCVDmr::protectBranches() {
       }
     }
   } else {
-    assert(0 && "this protect-strategy for branches is not supported yet");
+    // assert(0 && "this protect-strategy for branches is not supported yet");
   }
+
+#ifdef DBG
+  llvm::outs() << "COMPAS_DBG: protectBranches() done\n";
+#endif
 }
 
 // for now we just write '1' to special memory address (0xfff0) to tell the
@@ -954,6 +1038,8 @@ llvm::Register RISCVDmr::getPrimaryFromShadow(llvm::Register rs) const {
 }
 
 void RISCVDmr::repair() {
+  llvm::outs() << "COMPAS: Running REPAIR transformation on DMR code\n";
+
   std::map<llvm::MachineBasicBlock *, RegMapType> MBB2Liveins{};
   std::map<llvm::MachineBasicBlock *, bool> MBB2Visited{};
   std::map<llvm::MachineBasicBlock *, llvm::MachineBasicBlock *>
