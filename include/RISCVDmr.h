@@ -50,9 +50,8 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   // L0: dont protect
   enum class ProtectStrategyLoad { L0, L1 };
   // UCI: check args before func call and check return values before return (aka
-  // EDDI func-call check)
-  // UC2: modify function interface passing in duplicated values and duplicated
-  // returns (aka SWIFT func-call check)
+  // EDDI/SWIFT func-call check)
+  // UC2: deprecated - DON'T USE!!
   // UC3: check complete primary and shadow reg-files with each other at
   // the start of callee (aka NZDC func-call check)
   // UC4: duplicate call in both primary and shadow threads
