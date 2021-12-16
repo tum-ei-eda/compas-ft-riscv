@@ -24,7 +24,7 @@ $ <llvm_install>/bin/llc
     main.ll -o main_hardened.s
 \end{lstlisting}
 
-\texttt{<SIHFT options>} refer to various \ac{sihft} transformations that we have developed. A brief overview of these
+\texttt{<SIHFT options>} refer to various \ac{sihft} transformations that we have implemented. A brief overview of these
 options is provided in Table~\ref{tab:sihft-options}.
 
 \begin{table}[htb]
@@ -34,13 +34,14 @@ options is provided in Table~\ref{tab:sihft-options}.
 
  \begin{tabular}{|l|l|}
   \hline
-  \textbf{Option}                       & \textbf{Description}                                     \\
+  \textbf{Option} & \textbf{Description}                                     \\
   \hline
-  -NZDC=\textless foo, bar\textgreater  & apply NZDC transformation on \textit{foo,bar} functions  \\
-  -RASM=\textless foo, bar\textgreater  & apply RASM transformation on \textit{foo,bar} functions  \\
-  -CFCSS=\textless foo, bar\textgreater & apply CFCSS transformation on \textit{foo,bar} functions \\
-  -FGS                                  & use fine-grain scheduling for NZDC code                  \\
-  -REPAIR                               & use REPAIR transformation on NZDC code                   \\
+  -NZDC=foo,bar   & apply NZDC transformation on \textit{foo,bar} functions  \\
+  -SWIFT=foo,bar  & apply SWIFT transformation on \textit{foo,bar} functions \\
+  -RASM=foo,bar   & apply RASM transformation on \textit{foo,bar} functions  \\
+  -CFCSS=foo,bar  & apply CFCSS transformation on \textit{foo,bar} functions \\
+  -FGS            & use fine-grain scheduling for NZDC code                  \\
+  -REPAIR         & use REPAIR transformation on NZDC code                   \\
   \hline
  \end{tabular}
 \end{table}
