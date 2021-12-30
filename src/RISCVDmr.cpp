@@ -302,6 +302,35 @@ void RISCVDmr::duplicateInstructions() {
 #endif
 }
 
+void RISCVDmr::syncFPRegs(llvm::MachineBasicBlock *MBB,
+                          llvm::MachineBasicBlock::iterator insert,
+                          llvm::Register r1, llvm::Register r2) {
+  auto DLL{MBB->front().getDebugLoc()};
+  auto shadow_zero{P2S_.at(riscv_common::k0)};
+
+  auto feq_opcode{llvm::RISCV::FEQ_S};
+  if (riscv_common::getRegType(r1) == riscv_common::RegType::FD) {
+    feq_opcode = llvm::RISCV::FEQ_D;
+  } else if (riscv_common::getRegType(r1) == riscv_common::RegType::FH) {
+    assert(0 && "this FP mode not supported yet");
+  } else {
+    assert(0 && "unexpected reg operands passed");
+  }
+
+  llvm::BuildMI(*MBB, insert, DLL, TII_->get(feq_opcode))
+      .addReg(shadow_zero)
+      .addReg(r1)
+      .addReg(r2);
+  llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::ADDI))
+      .addReg(shadow_zero)
+      .addReg(shadow_zero)
+      .addImm(-1);
+  llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::BNE))
+      .addReg(shadow_zero)
+      .addReg(riscv_common::k0)
+      .addMBB(err_bb_);
+}
+
 void RISCVDmr::protectStores() {
   if (config_.pss == ProtectStrategyStore::S3) {
     // for (auto MI : stores_to_protect_) {
@@ -324,21 +353,7 @@ void RISCVDmr::protectStores() {
 
         if (opcode == llvm::RISCV::FSW || opcode == llvm::RISCV::FSD) {
           // loadback for FP stores
-
-          auto feq_opcode{opcode == llvm::RISCV::FSW ? llvm::RISCV::FEQ_S
-                                                     : llvm::RISCV::FEQ_D};
-          llvm::BuildMI(*MBB, insert, DLL, TII_->get(feq_opcode))
-              .addReg(shadow_zero)
-              .addReg(data_reg)
-              .addReg(P2S_.at(data_reg));
-          llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::ADDI))
-              .addReg(shadow_zero)
-              .addReg(shadow_zero)
-              .addImm(-1);
-          llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::BNE))
-              .addReg(shadow_zero)
-              .addReg(riscv_common::k0)
-              .addMBB(err_bb_);
+          syncFPRegs(MBB, insert, data_reg, P2S_.at(data_reg));
         } else {
           // loadback for integer stores
 
@@ -397,11 +412,17 @@ void RISCVDmr::protectStores() {
     for (const auto &MI : stores_) {
       for (const auto &op : MI->operands()) {
         if (op.isReg()) {
-          llvm::BuildMI(*MI->getParent(), MI->getIterator(), MI->getDebugLoc(),
-                        TII_->get(llvm::RISCV::BNE))
-              .addReg(op.getReg())
-              .addReg(P2S_.at(op.getReg()))
-              .addMBB(err_bb_);
+          if (riscv_common::getRegType(op.getReg()) ==
+              riscv_common::RegType::I) {
+            llvm::BuildMI(*MI->getParent(), MI->getIterator(),
+                          MI->getDebugLoc(), TII_->get(llvm::RISCV::BNE))
+                .addReg(op.getReg())
+                .addReg(P2S_.at(op.getReg()))
+                .addMBB(err_bb_);
+          } else {
+            syncFPRegs(MI->getParent(), MI->getIterator(), op.getReg(),
+                       P2S_.at(op.getReg()));
+          }
         }
       }
     }
@@ -429,11 +450,8 @@ void RISCVDmr::protectLoads() {
                 .addMBB(err_bb_);
           } else if (op.isDef()) {
             // inserting a move operation in order to do duplicate load
-            llvm::BuildMI(*MI->getParent(), std::next(MI->getIterator()),
-                          MI->getDebugLoc(), TII_->get(llvm::RISCV::ADDI))
-                .addReg(P2S_.at(op.getReg()))
-                .addReg(op.getReg())
-                .addImm(0);
+            moveIntoShadow(MI->getParent(), std::next(MI->getIterator()),
+                           op.getReg(), P2S_.at(op.getReg()));
           }
         }
       }
@@ -491,6 +509,31 @@ std::string RISCVDmr::getCalledFuncName(const llvm::MachineInstr *MI) const {
   return called_func_name;
 }
 
+void RISCVDmr::moveIntoShadow(llvm::MachineBasicBlock *MBB,
+                              llvm::MachineBasicBlock::iterator insert,
+                              llvm::Register rp, llvm::Register rs) {
+  auto DLL{MBB->begin()->getDebugLoc()};
+
+  if (riscv_common::getRegType(rp) == riscv_common::RegType::I) {
+    llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::ADDI))
+        .addReg(rs)
+        .addReg(rp)
+        .addImm(0);
+  } else if (riscv_common::getRegType(rp) == riscv_common::RegType::FS) {
+    llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::FSGNJ_S))
+        .addReg(rs)
+        .addReg(rp)
+        .addReg(rp);
+  } else if (riscv_common::getRegType(rp) == riscv_common::RegType::FD) {
+    llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::FSGNJ_D))
+        .addReg(rs)
+        .addReg(rp)
+        .addReg(rp);
+  } else if (riscv_common::getRegType(rp) == riscv_common::RegType::FH) {
+    assert(0 && "TODO");
+  }
+}
+
 void RISCVDmr::protectCalls() {
   // first handling lib-calls:
 
@@ -498,8 +541,6 @@ void RISCVDmr::protectCalls() {
   auto handleLibCallLC0{
       [this](llvm::MachineInstr *MI, llvm::MachineBasicBlock::iterator insert) {
         auto ret_regs{getRetRegs(MI)};
-        auto MBB{MI->getParent()};
-        auto DLL{MI->getDebugLoc()};
 
         llvm::outs() << "\tNOTE: " + getCalledFuncName(MI)
                      << " is outside SoR and hence is vulnerable\n";
@@ -515,24 +556,7 @@ void RISCVDmr::protectCalls() {
 
         // copying the return value/s to shadow reg
         for (const auto &r : ret_regs) {
-          if (riscv_common::getRegType(r) == riscv_common::RegType::I) {
-            llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::ADDI))
-                .addReg(P2S_.at(r))
-                .addReg(r)
-                .addImm(0);
-          } else if (riscv_common::getRegType(r) == riscv_common::RegType::FS) {
-            llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::FSGNJ_S))
-                .addReg(P2S_.at(r))
-                .addReg(r)
-                .addReg(r);
-          } else if (riscv_common::getRegType(r) == riscv_common::RegType::FD) {
-            llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::FSGNJ_D))
-                .addReg(P2S_.at(r))
-                .addReg(r)
-                .addReg(r);
-          } else if (riscv_common::getRegType(r) == riscv_common::RegType::FH) {
-            assert(0 && "TODO");
-          }
+          moveIntoShadow(MI->getParent(), insert, r, P2S_.at(r));
         }
       }};
 
@@ -624,24 +648,7 @@ void RISCVDmr::protectCalls() {
 
         // // moving in shadow arg values into primary ones for 2nd call
         for (const auto &r : arg_regs) {
-          if (riscv_common::getRegType(r) == riscv_common::RegType::I) {
-            llvm::BuildMI(*MBB, insert2, DLL, TII_->get(llvm::RISCV::ADDI))
-                .addReg(r)
-                .addReg(P2S_.at(r))
-                .addImm(0);
-          } else if (riscv_common::getRegType(r) == riscv_common::RegType::FS) {
-            llvm::BuildMI(*MBB, insert2, DLL, TII_->get(llvm::RISCV::FSGNJ_S))
-                .addReg(r)
-                .addReg(P2S_.at(r))
-                .addReg(P2S_.at(r));
-          } else if (riscv_common::getRegType(r) == riscv_common::RegType::FD) {
-            llvm::BuildMI(*MBB, insert2, DLL, TII_->get(llvm::RISCV::FSGNJ_D))
-                .addReg(r)
-                .addReg(P2S_.at(r))
-                .addReg(P2S_.at(r));
-          } else if (riscv_common::getRegType(r) == riscv_common::RegType::FH) {
-            assert(0 && "TODO");
-          }
+          moveIntoShadow(MBB, insert2, P2S_.at(r), r);
         }
 
         // inserting in the duplicated call
@@ -670,34 +677,7 @@ void RISCVDmr::protectCalls() {
                 .addReg(P2S_.at(r))
                 .addMBB(err_bb_);
           } else {
-            auto MBB{MI->getParent()};
-            auto DLL{MI->getDebugLoc()};
-            auto shadow_zero{P2S_.at(riscv_common::k0)};
-            unsigned feq_opcode{0};
-
-            if (riscv_common::getRegType(r) == riscv_common::RegType::FS) {
-              feq_opcode = llvm::RISCV::FEQ_S;
-            } else if (riscv_common::getRegType(r) ==
-                       riscv_common::RegType::FD) {
-              feq_opcode = llvm::RISCV::FEQ_D;
-            } else {
-              assert(0);
-            }
-
-            llvm::BuildMI(*MBB, MI->getIterator(), DLL, TII_->get(feq_opcode))
-                .addReg(shadow_zero)
-                .addReg(r)
-                .addReg(P2S_.at(r));
-            llvm::BuildMI(*MBB, MI->getIterator(), DLL,
-                          TII_->get(llvm::RISCV::ADDI))
-                .addReg(shadow_zero)
-                .addReg(shadow_zero)
-                .addImm(-1);
-            llvm::BuildMI(*MBB, MI->getIterator(), DLL,
-                          TII_->get(llvm::RISCV::BNE))
-                .addReg(shadow_zero)
-                .addReg(riscv_common::k0)
-                .addMBB(err_bb_);
+            syncFPRegs(MI->getParent(), MI->getIterator(), r, P2S_.at(r));
           }
         }
 
@@ -725,34 +705,7 @@ void RISCVDmr::protectCalls() {
                 .addReg(P2S_.at(r))
                 .addMBB(err_bb_);
           } else {
-            auto MBB{MI->getParent()};
-            auto DLL{MI->getDebugLoc()};
-            auto shadow_zero{P2S_.at(riscv_common::k0)};
-            unsigned feq_opcode{0};
-
-            if (riscv_common::getRegType(r) == riscv_common::RegType::FS) {
-              feq_opcode = llvm::RISCV::FEQ_S;
-            } else if (riscv_common::getRegType(r) ==
-                       riscv_common::RegType::FD) {
-              feq_opcode = llvm::RISCV::FEQ_D;
-            } else {
-              assert(0);
-            }
-
-            llvm::BuildMI(*MBB, MI->getIterator(), DLL, TII_->get(feq_opcode))
-                .addReg(shadow_zero)
-                .addReg(r)
-                .addReg(P2S_.at(r));
-            llvm::BuildMI(*MBB, MI->getIterator(), DLL,
-                          TII_->get(llvm::RISCV::ADDI))
-                .addReg(shadow_zero)
-                .addReg(shadow_zero)
-                .addImm(-1);
-            llvm::BuildMI(*MBB, MI->getIterator(), DLL,
-                          TII_->get(llvm::RISCV::BNE))
-                .addReg(shadow_zero)
-                .addReg(riscv_common::k0)
-                .addMBB(err_bb_);
+            syncFPRegs(MI->getParent(), MI->getIterator(), r, P2S_.at(r));
           }
         }
       }
@@ -792,7 +745,8 @@ void RISCVDmr::protectCalls() {
       //     fpr_mvx_opcode = llvm::RISCV::FMV_X_D;
       //   }
       //
-      //   for (unsigned r = llvm::RISCV::F0_F; r <= llvm::RISCV::F31_F; ++r) {
+      //   for (unsigned r = llvm::RISCV::F0_F; r <= llvm::RISCV::F31_F; ++r)
+      //   {
       //     if (P2S_.find(r) == P2S_.end()) {
       //       continue;
       //     }
@@ -847,7 +801,8 @@ void RISCVDmr::protectCalls() {
       //     fpr_mv_opcode = llvm::RISCV::FSGNJ_D;
       //   }
       //
-      //   for (unsigned r = llvm::RISCV::F0_F; r <= llvm::RISCV::F31_F; ++r) {
+      //   for (unsigned r = llvm::RISCV::F0_F; r <= llvm::RISCV::F31_F; ++r)
+      //   {
       //     if (P2S_.find(r) == P2S_.end()) {
       //       continue;
       //     }
@@ -1236,32 +1191,7 @@ void RISCVDmr::repair() {
             if (P2S_.at(r) == LiveP2S[r]) {
               continue;
             }
-
-            llvm::MachineBasicBlock::iterator insert{MI.getIterator()};
-            if (riscv_common::getRegType(r) == riscv_common::RegType::I) {
-              llvm::BuildMI(MBB, insert, MBB.front().getDebugLoc(),
-                            TII_->get(llvm::RISCV::ADDI))
-                  .addReg(P2S_.at(r))
-                  .addReg(LiveP2S[r])
-                  .addImm(0);
-            } else if (riscv_common::getRegType(r) ==
-                       riscv_common::RegType::FS) {
-              llvm::BuildMI(MBB, insert, MBB.front().getDebugLoc(),
-                            TII_->get(llvm::RISCV::FSGNJ_S))
-                  .addReg(P2S_.at(r))
-                  .addReg(LiveP2S[r])
-                  .addReg(LiveP2S[r]);
-            } else if (riscv_common::getRegType(r) ==
-                       riscv_common::RegType::FD) {
-              llvm::BuildMI(MBB, insert, MBB.front().getDebugLoc(),
-                            TII_->get(llvm::RISCV::FSGNJ_D))
-                  .addReg(P2S_.at(r))
-                  .addReg(LiveP2S[r])
-                  .addReg(LiveP2S[r]);
-            } else if (riscv_common::getRegType(r) ==
-                       riscv_common::RegType::FH) {
-              assert(0 && "TODO");
-            }
+            moveIntoShadow(&MBB, MI.getIterator(), LiveP2S[r], P2S_.at(r));
           }
 
           auto ret_regs{getRetRegs(&MI)};
@@ -1725,33 +1655,35 @@ void RISCVDmr::repair() {
                     }
                   }
 
-                  if (riscv_common::getRegType(p.second) ==
-                      riscv_common::RegType::I) {
-                    llvm::BuildMI(MBB, insert, MBB.front().getDebugLoc(),
-                                  TII_->get(llvm::RISCV::ADDI))
-                        .addReg(MBB2Liveins[SBB][p.first])
-                        .addReg(p.second)
-                        .addImm(0);
-                  } else if (riscv_common::getRegType(p.second) ==
-                                 riscv_common::RegType::FS &&
-                             isa_config_.store_opcode == llvm::RISCV::SW) {
-                    llvm::BuildMI(MBB, insert, MBB.front().getDebugLoc(),
-                                  TII_->get(llvm::RISCV::FSGNJ_S))
-                        .addReg(MBB2Liveins[SBB][p.first])
-                        .addReg(p.second)
-                        .addReg(p.second);
-                  } else if (riscv_common::getRegType(p.second) ==
-                                 riscv_common::RegType::FD &&
-                             isa_config_.store_opcode == llvm::RISCV::SD) {
-                    llvm::BuildMI(MBB, insert, MBB.front().getDebugLoc(),
-                                  TII_->get(llvm::RISCV::FSGNJ_D))
-                        .addReg(MBB2Liveins[SBB][p.first])
-                        .addReg(p.second)
-                        .addReg(p.second);
-                  } else if (riscv_common::getRegType(p.second) ==
-                             riscv_common::RegType::FH) {
-                    assert(0 && "TODO");
-                  }
+                  moveIntoShadow(&MBB, insert, p.second,
+                                 MBB2Liveins[SBB][p.first]);
+                  // if (riscv_common::getRegType(p.second) ==
+                  //     riscv_common::RegType::I) {
+                  //   llvm::BuildMI(MBB, insert, MBB.front().getDebugLoc(),
+                  //                 TII_->get(llvm::RISCV::ADDI))
+                  //       .addReg(MBB2Liveins[SBB][p.first])
+                  //       .addReg(p.second)
+                  //       .addImm(0);
+                  // } else if (riscv_common::getRegType(p.second) ==
+                  //                riscv_common::RegType::FS &&
+                  //            isa_config_.store_opcode == llvm::RISCV::SW) {
+                  //   llvm::BuildMI(MBB, insert, MBB.front().getDebugLoc(),
+                  //                 TII_->get(llvm::RISCV::FSGNJ_S))
+                  //       .addReg(MBB2Liveins[SBB][p.first])
+                  //       .addReg(p.second)
+                  //       .addReg(p.second);
+                  // } else if (riscv_common::getRegType(p.second) ==
+                  //                riscv_common::RegType::FD &&
+                  //            isa_config_.store_opcode == llvm::RISCV::SD) {
+                  //   llvm::BuildMI(MBB, insert, MBB.front().getDebugLoc(),
+                  //                 TII_->get(llvm::RISCV::FSGNJ_D))
+                  //       .addReg(MBB2Liveins[SBB][p.first])
+                  //       .addReg(p.second)
+                  //       .addReg(p.second);
+                  // } else if (riscv_common::getRegType(p.second) ==
+                  //            riscv_common::RegType::FH) {
+                  //   assert(0 && "TODO");
+                  // }
                 }
               }
             } else if (riscv_common::setmapContains(nemesis_bbs_, SBB)) {
@@ -1845,7 +1777,8 @@ void RISCVDmr::repair() {
 
   // to align live reg-maps we had to put in some register rotation operations
   // at certain points in the program
-  // these instructions should be scheduled such that dependencies are resolved
+  // these instructions should be scheduled such that dependencies are
+  // resolved
   std::vector<std::pair<llvm::MachineBasicBlock::iterator,
                         llvm::MachineBasicBlock::iterator>>
       dep_res_instr_ranges{};
@@ -1913,13 +1846,14 @@ void RISCVDmr::repair() {
     while (1) {
       deadlock_counter--;
       if (!deadlock_counter) {
-        llvm::outs() << "Resolving deadlock...\n";
+        llvm::outs() << "\tResolving deadlock...\n";
         // assumption: we need to swap the first 2 instrs around to resolve
         // the deadlock -> dont know if this holds always!
 
         if (riscv_common::getRegType(p.first->getOperand(0).getReg()) ==
             riscv_common::RegType::I) {
-          // using shadow of zero for swapping operation as this is anyways free
+          // using shadow of zero for swapping operation as this is anyways
+          // free
           auto si{MF_->CloneMachineInstr(&*std::next(p.first))};
           si->getOperand(0).setReg(P2S_.at(riscv_common::k0));
           p.first->getParent()->insert(p.first, si);

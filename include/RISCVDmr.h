@@ -289,6 +289,12 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   std::string getCalledFuncName(const llvm::MachineInstr *) const;
   bool isShadowInstr(const llvm::MachineInstr *) const;
   llvm::Register getPrimaryFromShadow(llvm::Register) const;
+  // TODO: llvm::MachineInstr* should be const in following moveIntoShadow()
+  void moveIntoShadow(llvm::MachineBasicBlock *,
+                      llvm::MachineBasicBlock::iterator, llvm::Register,
+                      llvm::Register);
+  void syncFPRegs(llvm::MachineBasicBlock *, llvm::MachineBasicBlock::iterator,
+                  llvm::Register, llvm::Register);
 };
 
 // NOTE: ft0_{h,f,d} with its shadow are available for FP DMR purposes as they
