@@ -313,7 +313,7 @@ void RISCVDmr::syncFPRegs(llvm::MachineBasicBlock *MBB,
     feq_opcode = llvm::RISCV::FEQ_D;
   } else if (riscv_common::getRegType(r1) == riscv_common::RegType::FH) {
     assert(0 && "this FP mode not supported yet");
-  } else {
+  } else if (riscv_common::getRegType(r1) != riscv_common::RegType::FS) {
     assert(0 && "unexpected reg operands passed");
   }
 
