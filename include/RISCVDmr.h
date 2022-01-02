@@ -48,13 +48,14 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   // S0: dont protect
   enum class ProtectStrategyStore { S0, S1, S2, S3 };
   // L1: check address before single load and then use copy (aka SIHFT load)
+  // L2: the duplicated load uses shadow memory space (aka EDDI load)
   // L0: dont protect
-  enum class ProtectStrategyLoad { L0, L1 };
+  enum class ProtectStrategyLoad { L0, L1, L2 };
   // UCI: check args before func call and check return values before return (aka
-  // EDDI/SWIFT func-call check)
+  //      EDDI/SWIFT func-call check)
   // UC2: deprecated - DON'T USE!!
   // UC3: check complete primary and shadow reg-files with each other at
-  // the start of callee (aka NZDC func-call check)
+  //      the start of callee (aka NZDC func-call check)
   // UC4: duplicate call in both primary and shadow threads
   // UC0: dont protect
   enum class ProtectStrategyUserCall { UC0, UC1, UC2, UC3, UC4 };
@@ -264,6 +265,8 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   std::set<llvm::MachineInstr *> lib_calls_{};
   std::set<llvm::MachineInstr *> branches_{};
   std::set<llvm::MachineInstr *> loads_{};
+  std::set<llvm::MachineInstr *> shadow_loads_{};
+  std::set<llvm::MachineBasicBlock *> exit_bbs_{};
   bool uses_FPregfile_{false};
   const std::set<llvm::Register> reserved_fp_primary_{
       llvm::RISCV::F8_F, llvm::RISCV::F8_D, llvm::RISCV::F8_H};
@@ -271,6 +274,7 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   std::set<llvm::MachineInstr *> loadbacks_{};
   std::set<llvm::MachineInstr *> indirect_calls_{};
   std::string fname_{};
+  unsigned stack_frame_size_{0};
 
   void init();
   void duplicateInstructions();

@@ -32,6 +32,9 @@ RISCVDmr::RISCVDmr() : llvm::MachineFunctionPass{ID} {}
 bool RISCVDmr::ignoreMF() {
   bool ret{true};
 
+  // NOTE: doesn't make sense to generalize below as we only expect
+  //       upto 10 SIHFTs
+
   // is this function passed in NZDC list?
   if (riscv_common::inCSString(llvm::cl::enable_nzdc, fname_)) {
     ret = false;
@@ -46,6 +49,14 @@ bool RISCVDmr::ignoreMF() {
   } else {
     if (llvm::cl::enable_swift.size()) {
       llvm::outs() << "COMPAS: Ignoring " << fname_ << " for SWIFT\n";
+    }
+  }
+  // is this function passed in EDDI list?
+  if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_)) {
+    ret = false;
+  } else {
+    if (llvm::cl::enable_eddi.size()) {
+      llvm::outs() << "COMPAS: Ignoring " << fname_ << " for EDDI\n";
     }
   }
 
@@ -116,6 +127,8 @@ void RISCVDmr::init() {
   // how to handle lib-calls
   config_.pslc = ProtectStrategyLibCall::LC1;
 
+  // NOTE: doesn't make sense to generalize below as we only expect
+  //       upto 10 SIHFTs
   if (riscv_common::inCSString(llvm::cl::enable_nzdc, fname_)) {
     // setting up nzdc configs
     config_.pss = ProtectStrategyStore::S3;
@@ -134,6 +147,15 @@ void RISCVDmr::init() {
 
     llvm::outs() << "COMPAS: Running SWIFT pass with " << schedule_string
                  << " on " << fname_ << "\n";
+  } else if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_)) {
+    // setting edd configs
+    config_.pss = ProtectStrategyStore::S2;
+    config_.psl = ProtectStrategyLoad::L2;
+    config_.psuc = ProtectStrategyUserCall::UC1;
+    config_.psb = ProtectStrategyBranch::B1;
+
+    llvm::outs() << "COMPAS: Running EDDI pass with " << schedule_string
+                 << " on " << fname_ << "\n";
   }
 
   err_bb_ = nullptr;
@@ -145,6 +167,9 @@ void RISCVDmr::init() {
   loadbacks_.clear();
   indirect_calls_.clear();
   loads_.clear();
+  shadow_loads_.clear();
+  exit_bbs_.clear();
+  stack_frame_size_ = 0;
 
   if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
       config_.eds == riscv_common::ErrorDetectionStrategy::ED1) {
@@ -191,6 +216,39 @@ void RISCVDmr::init() {
         }
       } else if (MI.isBranch()) {
         branches_.emplace(&MI);
+      } else if (MI.isReturn()) {
+        exit_bbs_.emplace(MI.getParent());
+      }
+    }
+  }
+
+  // for EDDI, we need 2x the stack space
+  if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_)) {
+    // finding stack allocation operation within this func prologue
+    auto &entry_BB{MF_->front()};
+
+    for (auto &MI : entry_BB) {
+      if (MI.getFlag(llvm::MachineInstr::FrameSetup) &&
+          !MI.isCFIInstruction()) {
+        auto si{MF_->CloneMachineInstr(&MI)};
+        entry_BB.insert(MI, si);
+
+        for (auto op : si->operands()) {
+          if (op.isImm()) {
+            stack_frame_size_ = std::abs(op.getImm());
+          }
+        }
+        break;
+      }
+    }
+    // now finding stack deallocation operation within this func epilogue
+    for (auto exit_BB : exit_bbs_) {
+      for (auto &MI : *exit_BB) {
+        if (MI.getFlag(llvm::MachineInstr::FrameDestroy)) {
+          auto si{MF_->CloneMachineInstr(&MI)};
+          exit_BB->insert(MI, si);
+          break;
+        }
       }
     }
   }
@@ -239,6 +297,10 @@ void RISCVDmr::duplicateInstructions() {
           terminator_reached = false;
         } else {
           shadow_block.emplace_back(genShadowFromPrimary(&MI));
+
+          if (MI.mayLoad()) {
+            shadow_loads_.emplace(shadow_block.back());
+          }
         }
       }
 
@@ -408,7 +470,8 @@ void RISCVDmr::protectStores() {
         assert(0 && "this store is not supported yet");
       }
     }
-  } else if (config_.pss == ProtectStrategyStore::S1) {
+  } else if (config_.pss == ProtectStrategyStore::S1 ||
+             config_.pss == ProtectStrategyStore::S2) {
     for (const auto &MI : stores_) {
       for (const auto &op : MI->operands()) {
         if (op.isReg()) {
@@ -424,6 +487,17 @@ void RISCVDmr::protectStores() {
                        P2S_.at(op.getReg()));
           }
         }
+      }
+
+      if (config_.pss == ProtectStrategyStore::S2) {
+        auto si{MF_->CloneMachineInstr(MI)};
+        for (auto &op : si->operands()) {
+          if (op.isImm()) {
+            op.setImm(op.getImm() + stack_frame_size_);
+          }
+        }
+
+        MI->getParent()->insertAfter(MI, si);
       }
     }
   } else {
@@ -453,6 +527,14 @@ void RISCVDmr::protectLoads() {
             moveIntoShadow(MI->getParent(), std::next(MI->getIterator()),
                            op.getReg(), P2S_.at(op.getReg()));
           }
+        }
+      }
+    }
+  } else if (config_.psl == ProtectStrategyLoad::L2) {
+    for (auto &MI : shadow_loads_) {
+      for (auto &op : MI->operands()) {
+        if (op.isImm()) {
+          op.setImm(op.getImm() + stack_frame_size_);
         }
       }
     }
