@@ -267,6 +267,7 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   std::set<llvm::MachineInstr *> loads_{};
   std::set<llvm::MachineInstr *> shadow_loads_{};
   std::set<llvm::MachineBasicBlock *> exit_bbs_{};
+  llvm::MachineBasicBlock *entry_bb_{nullptr};
   bool uses_FPregfile_{false};
   const std::set<llvm::Register> reserved_fp_primary_{
       llvm::RISCV::F8_F, llvm::RISCV::F8_D, llvm::RISCV::F8_H};
@@ -299,6 +300,7 @@ class RISCVDmr : public llvm::MachineFunctionPass {
                       llvm::Register);
   void syncFPRegs(llvm::MachineBasicBlock *, llvm::MachineBasicBlock::iterator,
                   llvm::Register, llvm::Register);
+  bool isStackLoadStore(const llvm::MachineInstr *);
 };
 
 // NOTE: ft0_{h,f,d} with its shadow are available for FP DMR purposes as they

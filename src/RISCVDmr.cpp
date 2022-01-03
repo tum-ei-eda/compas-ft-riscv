@@ -159,6 +159,8 @@ void RISCVDmr::init() {
   }
 
   err_bb_ = nullptr;
+  entry_bb_ = nullptr;
+  exit_bbs_.clear();
   stores_.clear();
   user_calls_.clear();
   lib_calls_.clear();
@@ -168,7 +170,6 @@ void RISCVDmr::init() {
   indirect_calls_.clear();
   loads_.clear();
   shadow_loads_.clear();
-  exit_bbs_.clear();
   stack_frame_size_ = 0;
 
   if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
@@ -185,6 +186,13 @@ void RISCVDmr::init() {
   for (auto &MBB : *MF_) {
     if (&MBB == err_bb_) {
       continue;
+    }
+
+    if (MBB.pred_empty()) {
+      entry_bb_ = &MBB;
+    }
+    if (MBB.succ_empty()) {
+      exit_bbs_.emplace(&MBB);
     }
 
     for (auto &MI : MBB) {
@@ -216,8 +224,6 @@ void RISCVDmr::init() {
         }
       } else if (MI.isBranch()) {
         branches_.emplace(&MI);
-      } else if (MI.isReturn()) {
-        exit_bbs_.emplace(MI.getParent());
       }
     }
   }
@@ -225,13 +231,11 @@ void RISCVDmr::init() {
   // for EDDI, we need 2x the stack space
   if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_)) {
     // finding stack allocation operation within this func prologue
-    auto &entry_BB{MF_->front()};
-
-    for (auto &MI : entry_BB) {
+    for (auto &MI : *entry_bb_) {
       if (MI.getFlag(llvm::MachineInstr::FrameSetup) &&
           !MI.isCFIInstruction()) {
         auto si{MF_->CloneMachineInstr(&MI)};
-        entry_BB.insert(MI, si);
+        entry_bb_->insert(MI, si);
 
         for (auto op : si->operands()) {
           if (op.isImm()) {
@@ -473,6 +477,8 @@ void RISCVDmr::protectStores() {
   } else if (config_.pss == ProtectStrategyStore::S1 ||
              config_.pss == ProtectStrategyStore::S2) {
     for (const auto &MI : stores_) {
+      // MI->dump();
+
       for (const auto &op : MI->operands()) {
         if (op.isReg()) {
           if (riscv_common::getRegType(op.getReg()) ==
@@ -490,14 +496,23 @@ void RISCVDmr::protectStores() {
       }
 
       if (config_.pss == ProtectStrategyStore::S2) {
-        auto si{MF_->CloneMachineInstr(MI)};
-        for (auto &op : si->operands()) {
-          if (op.isImm()) {
-            op.setImm(op.getImm() + stack_frame_size_);
-          }
-        }
+        if (isStackLoadStore(MI)) {
+          // llvm::outs() << "stack_loadstore:\n";
+          // MI->dump();
 
-        MI->getParent()->insertAfter(MI, si);
+          auto si{MF_->CloneMachineInstr(MI)};
+          MI->getParent()->insertAfter(MI, si);
+
+          for (auto &op : si->operands()) {
+            if (op.isImm()) {
+              op.setImm(op.getImm() + stack_frame_size_);
+            } else if (op.isReg()) {
+              op.setReg(P2S_.at(op.getReg()));
+            }
+          }
+        } else {
+          // TODO: how to handle EDDI store to global vars
+        }
       }
     }
   } else {
@@ -507,6 +522,15 @@ void RISCVDmr::protectStores() {
 #ifdef DBG
   llvm::outs() << "COMPAS_DBG: protectStores() done\n";
 #endif
+}
+
+bool RISCVDmr::isStackLoadStore(const llvm::MachineInstr *MI) {
+  for (auto &mop : MI->memoperands()) {
+    if (!mop->getValue()) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void RISCVDmr::protectLoads() {
@@ -532,10 +556,14 @@ void RISCVDmr::protectLoads() {
     }
   } else if (config_.psl == ProtectStrategyLoad::L2) {
     for (auto &MI : shadow_loads_) {
-      for (auto &op : MI->operands()) {
-        if (op.isImm()) {
-          op.setImm(op.getImm() + stack_frame_size_);
+      if (isStackLoadStore(MI)) {
+        for (auto &op : MI->operands()) {
+          if (op.isImm()) {
+            op.setImm(op.getImm() + stack_frame_size_);
+          }
         }
+      } else {
+        // TODO: how to do EDDI load on global vars
       }
     }
   } else {
