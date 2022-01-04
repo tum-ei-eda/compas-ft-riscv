@@ -537,7 +537,21 @@ bool RISCVDmr::isStackLoadStore(const llvm::MachineInstr *MI) {
       return true;
     }
   }
-  return false;
+
+  for (auto &op : MI->operands()) {
+    if (op.isGlobal()) {
+      return false;
+    }
+  }
+
+  auto addr_op{MI->getOperand(1)};
+  assert(addr_op.isReg() && "unexpected load/store encountered\n");
+  if (addr_op.getReg() != riscv_common::kSP &&
+      addr_op.getReg() != P2S_.at(riscv_common::kSP)) {
+    return false;
+  }
+
+  return true;
 }
 
 void RISCVDmr::protectLoads() {
