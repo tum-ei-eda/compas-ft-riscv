@@ -477,8 +477,6 @@ void RISCVDmr::protectStores() {
   } else if (config_.pss == ProtectStrategyStore::S1 ||
              config_.pss == ProtectStrategyStore::S2) {
     for (const auto &MI : stores_) {
-      // MI->dump();
-
       for (const auto &op : MI->operands()) {
         if (op.isReg()) {
           if (riscv_common::getRegType(op.getReg()) ==
@@ -497,17 +495,26 @@ void RISCVDmr::protectStores() {
 
       if (config_.pss == ProtectStrategyStore::S2) {
         if (isStackLoadStore(MI)) {
-          // llvm::outs() << "stack_loadstore:\n";
-          // MI->dump();
+          // for the corner case where the stack duplication becomes so big
+          // that far off regions can't be accessed via load/store instructions
+          // we cant do EDDI store so filtering these cases out
+          bool large_stack_offset{false};
+          for (auto &op : MI->operands()) {
+            if (op.isImm() && (op.getImm() + stack_frame_size_ >= 2048)) {
+              large_stack_offset = true;
+            }
+          }
 
-          auto si{MF_->CloneMachineInstr(MI)};
-          MI->getParent()->insertAfter(MI, si);
+          if (!large_stack_offset) {
+            auto si{MF_->CloneMachineInstr(MI)};
+            MI->getParent()->insertAfter(MI, si);
 
-          for (auto &op : si->operands()) {
-            if (op.isImm()) {
-              op.setImm(op.getImm() + stack_frame_size_);
-            } else if (op.isReg()) {
-              op.setReg(P2S_.at(op.getReg()));
+            for (auto &op : si->operands()) {
+              if (op.isImm()) {
+                op.setImm(op.getImm() + stack_frame_size_);
+              } else if (op.isReg()) {
+                op.setReg(P2S_.at(op.getReg()));
+              }
             }
           }
         } else {
@@ -559,7 +566,9 @@ void RISCVDmr::protectLoads() {
       if (isStackLoadStore(MI)) {
         for (auto &op : MI->operands()) {
           if (op.isImm()) {
-            op.setImm(op.getImm() + stack_frame_size_);
+            if (op.getImm() + stack_frame_size_ < 2048) {
+              op.setImm(op.getImm() + stack_frame_size_);
+            }
           }
         }
       } else {
