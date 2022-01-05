@@ -170,7 +170,6 @@ void RISCVDmr::init() {
   indirect_calls_.clear();
   loads_.clear();
   shadow_loads_.clear();
-  stack_frame_size_ = 0;
 
   if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
       config_.eds == riscv_common::ErrorDetectionStrategy::ED1) {
@@ -224,35 +223,6 @@ void RISCVDmr::init() {
         }
       } else if (MI.isBranch()) {
         branches_.emplace(&MI);
-      }
-    }
-  }
-
-  // for EDDI, we need 2x the stack space
-  if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_)) {
-    // finding stack allocation operation within this func prologue
-    for (auto &MI : *entry_bb_) {
-      if (MI.getFlag(llvm::MachineInstr::FrameSetup) &&
-          !MI.isCFIInstruction()) {
-        auto si{MF_->CloneMachineInstr(&MI)};
-        entry_bb_->insert(MI, si);
-
-        for (auto op : si->operands()) {
-          if (op.isImm()) {
-            stack_frame_size_ = std::abs(op.getImm());
-          }
-        }
-        break;
-      }
-    }
-    // now finding stack deallocation operation within this func epilogue
-    for (auto exit_BB : exit_bbs_) {
-      for (auto &MI : *exit_BB) {
-        if (MI.getFlag(llvm::MachineInstr::FrameDestroy)) {
-          auto si{MF_->CloneMachineInstr(&MI)};
-          exit_BB->insert(MI, si);
-          break;
-        }
       }
     }
   }
@@ -319,8 +289,7 @@ void RISCVDmr::duplicateInstructions() {
         }
       }
     }
-
-  } else {
+  } else if (config_.is == InstructionSchedule::FGS) {
     for (auto &MBB : *MF_) {
       if (err_bb_ == &MBB) {
         continue;
@@ -334,6 +303,8 @@ void RISCVDmr::duplicateInstructions() {
         }
       }
     }
+  } else {
+    assert(0 && "this instruction-schedule for DMR is not supported yet");
   }
 
   llvm::BuildMI(MF_->front(), std::begin(MF_->front()),
@@ -361,6 +332,37 @@ void RISCVDmr::duplicateInstructions() {
         .addReg(P2S_.at(riscv_common::kGP))
         .addReg(riscv_common::kGP)
         .addImm(0);
+  }
+
+  // for EDDI, we need 2x the stack space..following code manages this
+  if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_)) {
+    // prologue
+    for (auto &MI : *entry_bb_) {
+      if (MI.getFlag(llvm::MachineInstr::FrameSetup) &&
+          !MI.isCFIInstruction() && isShadowInstr(&MI)) {
+        MI.getOperand(1).setReg(riscv_common::kSP);
+        auto si{MF_->CloneMachineInstr(&MI)};
+        si->getOperand(0).setReg(riscv_common::kSP);
+        entry_bb_->insertAfter(MI, si);
+
+        break;
+      }
+    }
+    // epilogue
+    for (auto exit_BB : exit_bbs_) {
+      for (auto &MI : *exit_BB) {
+        if (MI.getFlag(llvm::MachineInstr::FrameDestroy) &&
+            isShadowInstr(&MI) && MI.getOperand(0).isReg() &&
+            MI.getOperand(0).getReg() == P2S_.at(riscv_common::kSP)) {
+          MI.getOperand(1).setReg(riscv_common::kSP);
+          auto si{MF_->CloneMachineInstr(&MI)};
+          si->getOperand(0).setReg(riscv_common::kSP);
+          exit_BB->insertAfter(MI, si);
+
+          break;
+        }
+      }
+    }
   }
 
 #ifdef DBG
@@ -474,8 +476,7 @@ void RISCVDmr::protectStores() {
         assert(0 && "this store is not supported yet");
       }
     }
-  } else if (config_.pss == ProtectStrategyStore::S1 ||
-             config_.pss == ProtectStrategyStore::S2) {
+  } else if (config_.pss == ProtectStrategyStore::S1) {
     for (const auto &MI : stores_) {
       for (const auto &op : MI->operands()) {
         if (op.isReg()) {
@@ -492,33 +493,29 @@ void RISCVDmr::protectStores() {
           }
         }
       }
+    }
+  } else if (config_.pss == ProtectStrategyStore::S2) {
+    for (const auto &MI : stores_) {
+      auto data_operand{MI->getOperand(0).getReg()};
+      if (riscv_common::getRegType(data_operand) == riscv_common::RegType::I) {
+        llvm::BuildMI(*MI->getParent(), MI->getIterator(), MI->getDebugLoc(),
+                      TII_->get(llvm::RISCV::BNE))
+            .addReg(data_operand)
+            .addReg(P2S_.at(data_operand))
+            .addMBB(err_bb_);
+      } else {
+        syncFPRegs(MI->getParent(), MI->getIterator(), data_operand,
+                   P2S_.at(data_operand));
+      }
 
-      if (config_.pss == ProtectStrategyStore::S2) {
-        if (isStackLoadStore(MI)) {
-          // for the corner case where the stack duplication becomes so big
-          // that far off regions can't be accessed via load/store instructions
-          // we cant do EDDI store so filtering these cases out
-          bool large_stack_offset{false};
-          for (auto &op : MI->operands()) {
-            if (op.isImm() && (op.getImm() + stack_frame_size_ >= 2048)) {
-              large_stack_offset = true;
-            }
-          }
+      auto si{MF_->CloneMachineInstr(MI)};
+      MI->getParent()->insertAfter(MI, si);
 
-          if (!large_stack_offset) {
-            auto si{MF_->CloneMachineInstr(MI)};
-            MI->getParent()->insertAfter(MI, si);
-
-            for (auto &op : si->operands()) {
-              if (op.isImm()) {
-                op.setImm(op.getImm() + stack_frame_size_);
-              } else if (op.isReg()) {
-                op.setReg(P2S_.at(op.getReg()));
-              }
-            }
-          }
-        } else {
-          // TODO: how to handle EDDI store to global vars
+      for (auto &op : si->operands()) {
+        if (op.isImm()) {
+          op.setImm(op.getImm());
+        } else if (op.isReg()) {
+          op.setReg(P2S_.at(op.getReg()));
         }
       }
     }
@@ -529,29 +526,6 @@ void RISCVDmr::protectStores() {
 #ifdef DBG
   llvm::outs() << "COMPAS_DBG: protectStores() done\n";
 #endif
-}
-
-bool RISCVDmr::isStackLoadStore(const llvm::MachineInstr *MI) {
-  for (auto &mop : MI->memoperands()) {
-    if (!mop->getValue()) {
-      return true;
-    }
-  }
-
-  for (auto &op : MI->operands()) {
-    if (op.isGlobal()) {
-      return false;
-    }
-  }
-
-  auto addr_op{MI->getOperand(1)};
-  assert(addr_op.isReg() && "unexpected load/store encountered\n");
-  if (addr_op.getReg() != riscv_common::kSP &&
-      addr_op.getReg() != P2S_.at(riscv_common::kSP)) {
-    return false;
-  }
-
-  return true;
 }
 
 void RISCVDmr::protectLoads() {
@@ -577,16 +551,12 @@ void RISCVDmr::protectLoads() {
     }
   } else if (config_.psl == ProtectStrategyLoad::L2) {
     for (auto &MI : shadow_loads_) {
-      if (isStackLoadStore(MI)) {
-        for (auto &op : MI->operands()) {
-          if (op.isImm()) {
-            if (op.getImm() + stack_frame_size_ < 2048) {
-              op.setImm(op.getImm() + stack_frame_size_);
-            }
+      for (auto &op : MI->operands()) {
+        if (op.isImm()) {
+          if (op.getImm()) {
+            op.setImm(op.getImm());
           }
         }
-      } else {
-        // TODO: how to do EDDI load on global vars
       }
     }
   } else {
@@ -733,10 +703,8 @@ void RISCVDmr::protectCalls() {
     // TODO: stacking regs before a libcall could be dangerous when the
     //       args-struct elements preceede the no of arg regs -> rest is
     //       in stack which could be corrupted
-    riscv_common::saveRegs(stacked_regs, MBB, MI->getIterator(),
-                           P2S_.at(riscv_common::kSP));
-    riscv_common::loadRegs(stacked_regs, MBB, insert,
-                           P2S_.at(riscv_common::kSP));
+    riscv_common::saveRegs(stacked_regs, MBB, MI->getIterator());
+    riscv_common::loadRegs(stacked_regs, MBB, insert);
 
     if (config_.pslc == ProtectStrategyLibCall::LC0) {
       handleLibCallLC0(MI, insert);
@@ -776,8 +744,7 @@ void RISCVDmr::protectCalls() {
             regs_to_spill.emplace_back(r);
           }
         }
-        riscv_common::saveRegs(regs_to_spill, MBB, insert2,
-                               P2S_.at(riscv_common::kSP));
+        riscv_common::saveRegs(regs_to_spill, MBB, insert2);
 
         // // moving in shadow arg values into primary ones for 2nd call
         for (const auto &r : arg_regs) {
@@ -796,8 +763,7 @@ void RISCVDmr::protectCalls() {
             regs_to_reload.emplace_back(r);
           }
         }
-        riscv_common::loadRegs(regs_to_reload, MBB, insert2,
-                               P2S_.at(riscv_common::kSP));
+        riscv_common::loadRegs(regs_to_reload, MBB, insert2);
       } else {
         auto arg_regs{getArgRegs(MI)};
         // these calls cant be duplicated hence handling them LC2 style

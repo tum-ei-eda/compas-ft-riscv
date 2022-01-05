@@ -43,7 +43,7 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   // FGS: fine grain scheduling of master and shadow instructions
   enum class InstructionSchedule { CGS, FGS };
   // S1: check addr and data copies before single store (aka SWIFT store)
-  // S2: check addr and data copies before two stores (aka EDDI store)
+  // S2: check data copies before two stores (aka EDDI store)
   // S3: loadback via dup addr and check with dup data (aka NZDC loadback)
   // S0: dont protect
   enum class ProtectStrategyStore { S0, S1, S2, S3 };
@@ -275,7 +275,6 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   std::set<llvm::MachineInstr *> loadbacks_{};
   std::set<llvm::MachineInstr *> indirect_calls_{};
   std::string fname_{};
-  unsigned stack_frame_size_{0};
 
   void init();
   void duplicateInstructions();
@@ -300,7 +299,6 @@ class RISCVDmr : public llvm::MachineFunctionPass {
                       llvm::Register);
   void syncFPRegs(llvm::MachineBasicBlock *, llvm::MachineBasicBlock::iterator,
                   llvm::Register, llvm::Register);
-  bool isStackLoadStore(const llvm::MachineInstr *);
 };
 
 // NOTE: ft0_{h,f,d} with its shadow are available for FP DMR purposes as they
