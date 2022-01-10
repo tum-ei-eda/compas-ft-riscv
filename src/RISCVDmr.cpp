@@ -340,8 +340,13 @@ void RISCVDmr::duplicateInstructions() {
     // prologue
     for (auto &MI : *entry_bb_) {
       if (MI.getFlag(llvm::MachineInstr::FrameSetup) &&
-          !MI.isCFIInstruction() && !isShadowInstr(&MI)) {
-        MI.getOperand(2).setImm(MI.getOperand(2).getImm() * 2);
+          !MI.isCFIInstruction() && isShadowInstr(&MI)) {
+        if (MF_->getName() != "main") {
+          MI.getOperand(1).setReg(riscv_common::kSP);
+        }
+        auto si{MF_->CloneMachineInstr(&MI)};
+        si->getOperand(0).setReg(riscv_common::kSP);
+        entry_bb_->insertAfter(MI, si);
         break;
       }
     }
@@ -349,9 +354,14 @@ void RISCVDmr::duplicateInstructions() {
     for (auto exit_BB : exit_bbs_) {
       for (auto &MI : *exit_BB) {
         if (MI.getFlag(llvm::MachineInstr::FrameDestroy) &&
-            MI.getOperand(0).isReg() &&
-            MI.getOperand(0).getReg() == riscv_common::kSP) {
-          MI.getOperand(2).setImm(MI.getOperand(2).getImm() * 2);
+            isShadowInstr(&MI) && MI.getOperand(0).isReg() &&
+            MI.getOperand(0).getReg() == P2S_.at(riscv_common::kSP)) {
+          if (MF_->getName() != "main") {
+            MI.getOperand(1).setReg(riscv_common::kSP);
+          }
+          auto si{MF_->CloneMachineInstr(&MI)};
+          si->getOperand(0).setReg(riscv_common::kSP);
+          exit_BB->insertAfter(MI, si);
           break;
         }
       }
