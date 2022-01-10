@@ -275,6 +275,7 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   std::set<llvm::MachineInstr *> loadbacks_{};
   std::set<llvm::MachineInstr *> indirect_calls_{};
   std::string fname_{};
+  bool use_shadow_for_stack_ops_{true};
 
   void init();
   void duplicateInstructions();

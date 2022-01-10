@@ -153,6 +153,7 @@ void RISCVDmr::init() {
     config_.psl = ProtectStrategyLoad::L2;
     config_.psuc = ProtectStrategyUserCall::UC1;
     config_.psb = ProtectStrategyBranch::B1;
+    use_shadow_for_stack_ops_ = false;
 
     llvm::outs() << "COMPAS: Running EDDI pass with " << schedule_string
                  << " on " << fname_ << "\n";
@@ -339,12 +340,8 @@ void RISCVDmr::duplicateInstructions() {
     // prologue
     for (auto &MI : *entry_bb_) {
       if (MI.getFlag(llvm::MachineInstr::FrameSetup) &&
-          !MI.isCFIInstruction() && isShadowInstr(&MI)) {
-        MI.getOperand(1).setReg(riscv_common::kSP);
-        auto si{MF_->CloneMachineInstr(&MI)};
-        si->getOperand(0).setReg(riscv_common::kSP);
-        entry_bb_->insertAfter(MI, si);
-
+          !MI.isCFIInstruction() && !isShadowInstr(&MI)) {
+        MI.getOperand(2).setImm(MI.getOperand(2).getImm() * 2);
         break;
       }
     }
@@ -352,13 +349,9 @@ void RISCVDmr::duplicateInstructions() {
     for (auto exit_BB : exit_bbs_) {
       for (auto &MI : *exit_BB) {
         if (MI.getFlag(llvm::MachineInstr::FrameDestroy) &&
-            isShadowInstr(&MI) && MI.getOperand(0).isReg() &&
-            MI.getOperand(0).getReg() == P2S_.at(riscv_common::kSP)) {
-          MI.getOperand(1).setReg(riscv_common::kSP);
-          auto si{MF_->CloneMachineInstr(&MI)};
-          si->getOperand(0).setReg(riscv_common::kSP);
-          exit_BB->insertAfter(MI, si);
-
+            MI.getOperand(0).isReg() &&
+            MI.getOperand(0).getReg() == riscv_common::kSP) {
+          MI.getOperand(2).setImm(MI.getOperand(2).getImm() * 2);
           break;
         }
       }
@@ -703,8 +696,15 @@ void RISCVDmr::protectCalls() {
     // TODO: stacking regs before a libcall could be dangerous when the
     //       args-struct elements preceede the no of arg regs -> rest is
     //       in stack which could be corrupted
-    riscv_common::saveRegs(stacked_regs, MBB, MI->getIterator());
-    riscv_common::loadRegs(stacked_regs, MBB, insert);
+    if (use_shadow_for_stack_ops_) {
+      riscv_common::saveRegs(stacked_regs, MBB, MI->getIterator(),
+                             P2S_.at(riscv_common::kSP));
+      riscv_common::loadRegs(stacked_regs, MBB, insert,
+                             P2S_.at(riscv_common::kSP));
+    } else {
+      riscv_common::saveRegs(stacked_regs, MBB, MI->getIterator());
+      riscv_common::loadRegs(stacked_regs, MBB, insert);
+    }
 
     if (config_.pslc == ProtectStrategyLibCall::LC0) {
       handleLibCallLC0(MI, insert);
@@ -744,7 +744,12 @@ void RISCVDmr::protectCalls() {
             regs_to_spill.emplace_back(r);
           }
         }
-        riscv_common::saveRegs(regs_to_spill, MBB, insert2);
+        if (use_shadow_for_stack_ops_) {
+          riscv_common::saveRegs(regs_to_spill, MBB, insert2,
+                                 P2S_.at(riscv_common::kSP));
+        } else {
+          riscv_common::saveRegs(regs_to_spill, MBB, insert2);
+        }
 
         // // moving in shadow arg values into primary ones for 2nd call
         for (const auto &r : arg_regs) {
@@ -763,7 +768,12 @@ void RISCVDmr::protectCalls() {
             regs_to_reload.emplace_back(r);
           }
         }
-        riscv_common::loadRegs(regs_to_reload, MBB, insert2);
+        if (use_shadow_for_stack_ops_) {
+          riscv_common::loadRegs(regs_to_reload, MBB, insert2,
+                                 P2S_.at(riscv_common::kSP));
+        } else {
+          riscv_common::loadRegs(regs_to_reload, MBB, insert2);
+        }
       } else {
         auto arg_regs{getArgRegs(MI)};
         // these calls cant be duplicated hence handling them LC2 style
