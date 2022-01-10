@@ -337,6 +337,8 @@ void RISCVDmr::duplicateInstructions() {
 
   // for EDDI, we need 2x the stack space..following code manages this
   if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_)) {
+    // TODO: possibly put a (sp != sp') check before doing this in non-main func
+
     // prologue
     for (auto &MI : *entry_bb_) {
       if (MI.getFlag(llvm::MachineInstr::FrameSetup) &&
@@ -344,8 +346,12 @@ void RISCVDmr::duplicateInstructions() {
         if (MF_->getName() != "main") {
           MI.getOperand(1).setReg(riscv_common::kSP);
         }
+
         auto si{MF_->CloneMachineInstr(&MI)};
         si->getOperand(0).setReg(riscv_common::kSP);
+        if (MF_->getName() == "main") {
+          si->getOperand(1).setReg(riscv_common::kSP);
+        }
         entry_bb_->insertAfter(MI, si);
         break;
       }
@@ -359,8 +365,12 @@ void RISCVDmr::duplicateInstructions() {
           if (MF_->getName() != "main") {
             MI.getOperand(1).setReg(riscv_common::kSP);
           }
+
           auto si{MF_->CloneMachineInstr(&MI)};
           si->getOperand(0).setReg(riscv_common::kSP);
+          if (MF_->getName() == "main") {
+            si->getOperand(1).setReg(riscv_common::kSP);
+          }
           exit_BB->insertAfter(MI, si);
           break;
         }
