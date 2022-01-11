@@ -171,6 +171,7 @@ void RISCVDmr::init() {
   indirect_calls_.clear();
   loads_.clear();
   shadow_loads_.clear();
+  frame_size_ = 0;
 
   if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
       config_.eds == riscv_common::ErrorDetectionStrategy::ED1) {
@@ -225,6 +226,12 @@ void RISCVDmr::init() {
       } else if (MI.isBranch()) {
         branches_.emplace(&MI);
       }
+    }
+  }
+
+  for (auto &MI : *entry_bb_) {
+    if (MI.getFlag(llvm::MachineInstr::FrameSetup) && !MI.isCFIInstruction()) {
+      frame_size_ = std::abs(MI.getOperand(2).getImm());
     }
   }
 
@@ -340,40 +347,25 @@ void RISCVDmr::duplicateInstructions() {
     // prologue
     for (auto &MI : *entry_bb_) {
       if (MI.getFlag(llvm::MachineInstr::FrameSetup) &&
-          !MI.isCFIInstruction() && isShadowInstr(&MI)) {
-        if (MF_->getName() != "main") {
-          MI.getOperand(1).setReg(riscv_common::kSP);
-        }
-
-        auto si{MF_->CloneMachineInstr(&MI)};
-        si->getOperand(0).setReg(riscv_common::kSP);
-        if (MF_->getName() == "main") {
-          si->getOperand(1).setReg(riscv_common::kSP);
+          !MI.isCFIInstruction()) {
+        if (!isShadowInstr(&MI)) {
+          MI.getOperand(2).setImm(frame_size_ * -2);
         } else {
-          MI.getOperand(2).setImm(0);
+          MI.getOperand(1).setReg(riscv_common::kSP);
+          MI.getOperand(2).setImm(frame_size_);
+
+          break;
         }
-        entry_bb_->insertAfter(MI, si);
-        break;
       }
     }
     // epilogue
     for (auto exit_BB : exit_bbs_) {
       for (auto &MI : *exit_BB) {
         if (MI.getFlag(llvm::MachineInstr::FrameDestroy) &&
-            isShadowInstr(&MI) && MI.getOperand(0).isReg() &&
-            MI.getOperand(0).getReg() == P2S_.at(riscv_common::kSP)) {
-          if (MF_->getName() != "main") {
-            MI.getOperand(1).setReg(riscv_common::kSP);
-          }
+            MI.getOperand(0).isReg() &&
+            MI.getOperand(0).getReg() == riscv_common::kSP) {
+          MI.getOperand(2).setImm(frame_size_ * 2);
 
-          auto si{MF_->CloneMachineInstr(&MI)};
-          si->getOperand(0).setReg(riscv_common::kSP);
-          if (MF_->getName() == "main") {
-            si->getOperand(1).setReg(riscv_common::kSP);
-          } else {
-            MI.getOperand(2).setImm(0);
-          }
-          exit_BB->insertAfter(MI, si);
           break;
         }
       }
@@ -955,6 +947,14 @@ void RISCVDmr::protectCalls() {
             .addReg(r)
             .addReg(P2S_.at(r))
             .addMBB(err_bb_);
+      }
+
+      if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_)) {
+        llvm::BuildMI(*MI->getParent(), std::next(MI->getIterator()),
+                      MI->getDebugLoc(), TII_->get(llvm::RISCV::ADD))
+            .addReg(P2S_.at(riscv_common::kSP))
+            .addReg(riscv_common::kSP)
+            .addImm(frame_size_);
       }
     }
   } else {
