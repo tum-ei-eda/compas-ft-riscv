@@ -223,7 +223,7 @@ class RISCVDmr : public llvm::MachineFunctionPass {
       {"__divdf3", true},      {"__muldf3", true},     {"__adddf3", true},
       {"__subdf3", true},      {"__modsi3", true},     {"__floatsisf", true},
       {"__floatunsisf", true}, {"__mulsf3", true},     {"strncmp", true},
-      {"__mulsi3", true},      {"memset", false},      {"memcpy", false},
+      {"__mulsi3", true},      {"memset", true},       {"memcpy", true},
       {"memcmp", true},        {"atan", true},         {"__extenddftf2", true},
       {"__multf3", true},      {"__addtf3", true},     {"__divtf3", true},
       {"__subtf3", true},      {"__trunctfdf2", true}, {"pow", true},
