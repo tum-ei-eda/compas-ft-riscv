@@ -961,6 +961,19 @@ void RISCVDmr::protectCalls() {
     assert(0 && "this protect-strategy for user-calls is not supported yet");
   }
 
+  // ----------
+  // now handling recursive indirect calls (jalr)
+  // ----------
+  for (auto &MI : indirect_calls_) {
+    if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_)) {
+      llvm::BuildMI(*MI->getParent(), std::next(MI->getIterator()),
+                    MI->getDebugLoc(), TII_->get(llvm::RISCV::ADD))
+          .addReg(P2S_.at(riscv_common::kSP))
+          .addReg(riscv_common::kSP)
+          .addImm(frame_size_);
+    }
+  }
+
 #ifdef DBG
   llvm::outs() << "COMPAS_DBG: protectCalls() done\n";
 #endif
