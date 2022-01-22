@@ -25,7 +25,7 @@ See the separate LICENSE file to determine your rights and responsibilities for 
 The supported SIHFT passes are:
 
 Data flow protection:
-- [ ] EDDI
+- [x] EDDI
 - [x] SWIFT
 - [x] NZDC
 - [x] NEMESIS
