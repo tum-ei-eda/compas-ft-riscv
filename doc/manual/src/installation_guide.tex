@@ -86,6 +86,8 @@ the corresponding patch is to be found at:\\\\
  \begin{lstlisting}[language=bash, basicstyle=\small\ttfamily]
 $ cd <llvm_src_folder>/llvm/lib/Target/RISCV/
 $ git clone https://github.com/tum-ei-eda/compas-ft-riscv
+$ cd compas-ft-riscv/
+$ git checkout tags/v1.0.1 -b v1.0.1
 $ cd <llvm_src_folder>
 $ patch -s -p0 < <path_to_patch>
 $ cd build
