@@ -43,6 +43,14 @@ bool RISCVDmr::ignoreMF() {
       llvm::outs() << "COMPAS: Ignoring " << fname_ << " for NZDC\n";
     }
   }
+  // is this function passed in NZDC+ list?
+  if (riscv_common::inCSString(llvm::cl::enable_nzdcp, fname_)) {
+    ret = false;
+  } else {
+    if (llvm::cl::enable_nzdcp.size()) {
+      llvm::outs() << "COMPAS: Ignoring " << fname_ << " for NZDC+\n";
+    }
+  }
   // is this function passed in SWIFT list?
   if (riscv_common::inCSString(llvm::cl::enable_swift, fname_)) {
     ret = false;
@@ -137,6 +145,15 @@ void RISCVDmr::init() {
     config_.psb = ProtectStrategyBranch::B2;
 
     llvm::outs() << "COMPAS: Running NZDC pass with " << schedule_string
+                 << " on " << fname_ << "\n";
+  } else if (riscv_common::inCSString(llvm::cl::enable_nzdcp, fname_)) {
+    // setting up nzdc configs
+    config_.pss = ProtectStrategyStore::S3;
+    config_.psl = ProtectStrategyLoad::L0;
+    config_.psuc = ProtectStrategyUserCall::UC3;
+    config_.psb = ProtectStrategyBranch::B3;
+
+    llvm::outs() << "COMPAS: Running NZDC+ pass with " << schedule_string
                  << " on " << fname_ << "\n";
   } else if (riscv_common::inCSString(llvm::cl::enable_swift, fname_)) {
     // setting swift configs
@@ -1051,6 +1068,69 @@ void RISCVDmr::protectBranches() {
                       si->getDebugLoc(), TII_->get(llvm::RISCV::JAL))
             .addReg(riscv_common::k0)
             .addMBB(err_bb_);
+      } else {
+        assert(0 && "what is this branch");
+      }
+    }
+  } else if (config_.psb == ProtectStrategyBranch::B3) { // nemesec
+    for (auto MI : branches_) {
+      if (MI->isUnconditionalBranch()) {
+        llvm::MachineBasicBlock::iterator insert{MI->getIterator()};
+        insert++;
+        llvm::BuildMI(*MI->getParent(), insert, MI->getDebugLoc(),
+                      TII_->get(llvm::RISCV::JAL))
+            .addReg(riscv_common::k0)
+            .addMBB(err_bb_);
+      } else if (MI->isConditionalBranch()) {
+        auto MBB{MI->getParent()};
+        
+        assert(MI->getOperand(2).isMBB() && "this branch is odd!");
+        auto taken_BB{MI->getOperand(2).getMBB()};
+        auto nottaken_BB{MBB->getFallThrough()};
+        
+        assert(nottaken_BB && "this branch has no fallthrough!");
+        
+        // fall-through path dup
+        // this needs to be a new basic block and replaced with an unconditional jump to it
+        auto nemesec_nottaken_BB{
+            MF_->CreateMachineBasicBlock()};//MBB->getBasicBlock())};
+        MF_->insert(MF_->end(), nemesec_nottaken_BB);
+        auto si{MF_->CloneMachineInstr(MI)};
+        for (auto &o : si->operands()) {
+          if (o.isReg()) {
+            o.setReg(P2S_.at(o.getReg()));
+          }
+        }
+        MBB->ReplaceUsesOfBlockWith(nottaken_BB, nemesec_nottaken_BB); // maybe isntead replaceSuccessor()
+        nemesec_nottaken_BB->addSuccessor(nottaken_BB);
+        nemesis_bbs_.emplace(nemesec_nottaken_BB);
+        
+        si->getOperand(2).setMBB(err_bb_);
+        nemesec_nottaken_BB->push_back(si);
+        llvm::MachineBasicBlock::iterator insert = nemesec_nottaken_BB->instr_end();
+        llvm::BuildMI(*si->getParent(), insert, si->getDebugLoc(), TII_->get(llvm::RISCV::JAL))
+          .addReg(riscv_common::k0)
+          .addMBB(nottaken_BB); // we need to jump back to fallthrough
+        insert = MI->getIterator();
+        llvm::BuildMI(*MI->getParent(), ++insert, MI->getDebugLoc(), TII_->get(llvm::RISCV::JAL))
+          .addReg(riscv_common::k0)
+          .addMBB(nemesec_nottaken_BB);
+        
+        // taken path duplication
+        auto nemesis_taken_BB{
+            MF_->CreateMachineBasicBlock()};
+        MF_->insert(MF_->end(), nemesis_taken_BB);
+        MBB->ReplaceUsesOfBlockWith(taken_BB, nemesis_taken_BB); // maybe isntead replaceSuccessor()
+        nemesis_taken_BB->addSuccessor(taken_BB);
+        nemesis_bbs_.emplace(nemesis_taken_BB);
+
+        si = MF_->CloneMachineInstr(si);
+        si->getOperand(2).setMBB(taken_BB);
+        MI->getOperand(2).setMBB(nemesis_taken_BB);
+        nemesis_taken_BB->insert(nemesis_taken_BB->begin(), si);
+        llvm::BuildMI(*nemesis_taken_BB, nemesis_taken_BB->end(), si->getDebugLoc(), TII_->get(llvm::RISCV::JAL))
+          .addReg(riscv_common::k0)
+          .addMBB(err_bb_);
       } else {
         assert(0 && "what is this branch");
       }
