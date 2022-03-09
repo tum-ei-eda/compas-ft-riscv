@@ -35,7 +35,11 @@ enum class RegType { I, FS, FD, FH };
 // ED1: same as ED0 but it quits after notifying safety-unit
 // ED2: on error-detection, call a function passing the specific checker's
 //      code
-enum class ErrorDetectionStrategy { ED0, ED1, ED2 };
+// ED3: on error-detection, invoke ecall with riscv-newlib codes: a7=SYS_exit=93
+// see: https://github.com/riscv-collab/riscv-newlib/blob/master/libgloss/riscv/machine/syscall.h
+// with error code in a0 indicating control flow error (-256) or dataflow error
+// (-512) 
+enum class ErrorDetectionStrategy { ED0, ED1, ED2, ED3 }; // TODO: these do not have a reasonable command line interface yet
 
 // for convenience:
 // zero register

@@ -117,7 +117,8 @@ void RISCVDmr::protectGP() {
 void RISCVDmr::init() {
   TII_ = MF_->getSubtarget().getInstrInfo();
   MRI_ = &MF_->getRegInfo();
-  config_.eds = riscv_common::ErrorDetectionStrategy::ED0;
+  config_.eds = riscv_common::ErrorDetectionStrategy::ED3; // TODO: should be
+                                                           // exposed to CLI
   for (auto &s : llvm::codegen::getMAttrs()) {
     if (!s.compare(std::string{"+f"}) || !s.compare(std::string{"+d"})) {
       uses_FPregfile_ = true;
@@ -153,7 +154,7 @@ void RISCVDmr::init() {
     config_.psuc = ProtectStrategyUserCall::UC3;
     config_.psb = ProtectStrategyBranch::B3;
 
-    llvm::outs() << "COMPAS: Running NZDC+ pass with " << schedule_string
+    llvm::outs() << "COMPAS: Running NZDC+sec pass with " << schedule_string
                  << " on " << fname_ << "\n";
   } else if (riscv_common::inCSString(llvm::cl::enable_swift, fname_)) {
     // setting swift configs
@@ -191,7 +192,8 @@ void RISCVDmr::init() {
   frame_size_ = 0;
 
   if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
-      config_.eds == riscv_common::ErrorDetectionStrategy::ED1) {
+      config_.eds == riscv_common::ErrorDetectionStrategy::ED1 ||
+      config_.eds == riscv_common::ErrorDetectionStrategy::ED3) {
     // insert an error-BB in MF_
     insertErrorBB();
   } else {
@@ -264,8 +266,8 @@ void RISCVDmr::init() {
 #endif
 }
 
-llvm::MachineInstr *RISCVDmr::genShadowFromPrimary(
-    const llvm::MachineInstr *MI) const {
+llvm::MachineInstr *
+RISCVDmr::genShadowFromPrimary(const llvm::MachineInstr *MI) const {
   auto si{MF_->CloneMachineInstr(MI)};
   for (auto &o : si->operands()) {
     if (o.isReg()) {
@@ -1083,17 +1085,25 @@ void RISCVDmr::protectBranches() {
             .addMBB(err_bb_);
       } else if (MI->isConditionalBranch()) {
         auto MBB{MI->getParent()};
-        
+
         assert(MI->getOperand(2).isMBB() && "this branch is odd!");
         auto taken_BB{MI->getOperand(2).getMBB()};
+
         auto nottaken_BB{MBB->getFallThrough()};
-        
         assert(nottaken_BB && "this branch has no fallthrough!");
-        
+
+        llvm::BuildMI(*MBB, MBB->end(), MI->getDebugLoc(),
+                      TII_->get(llvm::RISCV::JAL))
+            .addReg(riscv_common::k0)
+            .addMBB(
+                err_bb_); // push back an unconditional jump to error-BB to
+                          // protect previous unconditional jump to "not taken"
+
         // fall-through path dup
-        // this needs to be a new basic block and replaced with an unconditional jump to it
+        // this needs to be a new basic block and replaced with an unconditional
+        // jump to it
         auto nemesec_nottaken_BB{
-            MF_->CreateMachineBasicBlock()};//MBB->getBasicBlock())};
+            MF_->CreateMachineBasicBlock()}; // MBB->getBasicBlock())};
         MF_->insert(MF_->end(), nemesec_nottaken_BB);
         auto si{MF_->CloneMachineInstr(MI)};
         for (auto &o : si->operands()) {
@@ -1101,26 +1111,32 @@ void RISCVDmr::protectBranches() {
             o.setReg(P2S_.at(o.getReg()));
           }
         }
-        MBB->ReplaceUsesOfBlockWith(nottaken_BB, nemesec_nottaken_BB); // maybe isntead replaceSuccessor()
+
+        MBB->ReplaceUsesOfBlockWith(
+            nottaken_BB,
+            nemesec_nottaken_BB); // maybe instead replaceSuccessor()
         nemesec_nottaken_BB->addSuccessor(nottaken_BB);
         nemesis_bbs_.emplace(nemesec_nottaken_BB);
-        
+
         si->getOperand(2).setMBB(err_bb_);
         nemesec_nottaken_BB->push_back(si);
-        llvm::MachineBasicBlock::iterator insert = nemesec_nottaken_BB->instr_end();
-        llvm::BuildMI(*si->getParent(), insert, si->getDebugLoc(), TII_->get(llvm::RISCV::JAL))
-          .addReg(riscv_common::k0)
-          .addMBB(nottaken_BB); // we need to jump back to fallthrough
+        llvm::MachineBasicBlock::iterator insert =
+            nemesec_nottaken_BB->instr_end();
+        llvm::BuildMI(*si->getParent(), insert, si->getDebugLoc(),
+                      TII_->get(llvm::RISCV::JAL))
+            .addReg(riscv_common::k0)
+            .addMBB(nottaken_BB); // we need to jump back to fallthrough
         insert = MI->getIterator();
-        llvm::BuildMI(*MI->getParent(), ++insert, MI->getDebugLoc(), TII_->get(llvm::RISCV::JAL))
-          .addReg(riscv_common::k0)
-          .addMBB(nemesec_nottaken_BB);
-        
+        llvm::BuildMI(*MI->getParent(), ++insert, MI->getDebugLoc(),
+                      TII_->get(llvm::RISCV::JAL))
+            .addReg(riscv_common::k0)
+            .addMBB(nemesec_nottaken_BB);
+
         // taken path duplication
-        auto nemesis_taken_BB{
-            MF_->CreateMachineBasicBlock()};
+        auto nemesis_taken_BB{MF_->CreateMachineBasicBlock()};
         MF_->insert(MF_->end(), nemesis_taken_BB);
-        MBB->ReplaceUsesOfBlockWith(taken_BB, nemesis_taken_BB); // maybe isntead replaceSuccessor()
+        MBB->ReplaceUsesOfBlockWith(
+            taken_BB, nemesis_taken_BB); // maybe isntead replaceSuccessor()
         nemesis_taken_BB->addSuccessor(taken_BB);
         nemesis_bbs_.emplace(nemesis_taken_BB);
 
@@ -1128,9 +1144,10 @@ void RISCVDmr::protectBranches() {
         si->getOperand(2).setMBB(taken_BB);
         MI->getOperand(2).setMBB(nemesis_taken_BB);
         nemesis_taken_BB->insert(nemesis_taken_BB->begin(), si);
-        llvm::BuildMI(*nemesis_taken_BB, nemesis_taken_BB->end(), si->getDebugLoc(), TII_->get(llvm::RISCV::JAL))
-          .addReg(riscv_common::k0)
-          .addMBB(err_bb_);
+        llvm::BuildMI(*nemesis_taken_BB, nemesis_taken_BB->end(),
+                      si->getDebugLoc(), TII_->get(llvm::RISCV::JAL))
+            .addReg(riscv_common::k0)
+            .addMBB(err_bb_);
       } else {
         assert(0 && "what is this branch");
       }
@@ -1167,40 +1184,68 @@ void RISCVDmr::insertErrorBB() {
 
   auto DLL{MF_->front().front().getDebugLoc()};
 
-  // storing '1' to addr : (0xfff0 = 0x10000 - 0x10):
-  // lui t1, 16 -> makes t1 = 0x10000
-  llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL, TII_->get(llvm::RISCV::LUI))
-      .addReg(llvm::RISCV::X6)
-      .addImm(16);
-  // addi t2, zero, 1 -> makes t2 = 1
-  llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL, TII_->get(llvm::RISCV::ADDI))
-      .addReg(llvm::RISCV::X7)
-      .addReg(riscv_common::k0)
-      .addImm(1);
-  // sw t2, -16(t1) -> stores t2 to (t1 - 8) i.e. store 1 to 0xfff0
-  llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
-                TII_->get(isa_config_.store_opcode))
-      .addReg(llvm::RISCV::X7)
-      .addReg(llvm::RISCV::X6)
-      .addImm(-16);
+  if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
+      config_.eds == riscv_common::ErrorDetectionStrategy::ED1) {
+    // storing '1' to addr : (0xfff0 = 0x10000 - 0x10):
+    // lui t1, 16 -> makes t1 = 0x10000
+    llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
+                  TII_->get(llvm::RISCV::LUI))
+        .addReg(llvm::RISCV::X6)
+        .addImm(16);
+    // addi t2, zero, 1 -> makes t2 = 1
+    llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
+                  TII_->get(llvm::RISCV::ADDI))
+        .addReg(llvm::RISCV::X7)
+        .addReg(riscv_common::k0)
+        .addImm(1);
+    // sw t2, -16(t1) -> stores t2 to (t1 - 8) i.e. store 1 to 0xfff0
+    llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
+                  TII_->get(isa_config_.store_opcode))
+        .addReg(llvm::RISCV::X7)
+        .addReg(llvm::RISCV::X6)
+        .addImm(-16);
+  } else if (config_.eds == riscv_common::ErrorDetectionStrategy::ED3) {
+    // storing '93' to a7, aka SYS_exit code ECALL code:
+    llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
+                  TII_->get(llvm::RISCV::ADDI))
+        .addReg(llvm::RISCV::X17) // a7
+        .addReg(llvm::RISCV::X0)  // zero
+        .addImm(93);
+    // storing '-512' to a0, aka exit return value when ecall forces newlib sys
+    // exit:
+    llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
+                  TII_->get(llvm::RISCV::ADDI))
+        .addReg(llvm::RISCV::X10) // a7
+        .addReg(llvm::RISCV::X0)  // zero
+        .addImm(-512);
+    // invoke 'ecall'
+    llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
+                  TII_->get(llvm::RISCV::ECALL));
+  }
+  if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
+      config_.eds == riscv_common::ErrorDetectionStrategy::ED1 ||
+      config_.eds == riscv_common::ErrorDetectionStrategy::ED3) {
 
-  // to encode the error-BB in order to make it a label so as to be able to
-  // jump to it from anywhere in asm
-  err_bb_->addSuccessor(err_bb_);
-  // // keep on repeating this errBB as we dont want to execute code now
-  // // J err_bb_ = JALR X0, err_bb_ because J is a pseudo-jump instr in RISCV
-  // llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
-  // TII_->get(llvm::RISCV::JAL))
-  //     .addReg(riscv_common::k0)
-  //     .addMBB(err_bb_);
+    // to encode the error-BB in order to make it a label so as to be able to
+    // jump to it from anywhere in asm
+    err_bb_->addSuccessor(err_bb_);
+    // // keep on repeating this errBB as we dont want to execute code now
+    // // J err_bb_ = JALR X0, err_bb_ because J is a pseudo-jump instr in RISCV
+    // llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
+    // TII_->get(llvm::RISCV::JAL))
+    //     .addReg(riscv_common::k0)
+    //     .addMBB(err_bb_);
+  }
 
-  if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0) {
+  if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
+      config_.eds == riscv_common::ErrorDetectionStrategy::ED3 ) {
     // keep on repeating this errBB as we dont want to execute code now
     // J err_bb_ = JALR X0, err_bb_ because J is a pseudo-jump instr in RISCV
     llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
                   TII_->get(llvm::RISCV::JAL))
         .addReg(riscv_common::k0)
         .addMBB(err_bb_);
+
   } else {
     // quit early using ebreak
     llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
@@ -1310,10 +1355,10 @@ void RISCVDmr::repair() {
 
       RegMapType LiveP2S{MBB2Liveins[&MBB]};
 
-      auto getFreeShadowReg{[this, &LiveP2S](
-                                llvm::Register start_reg,
-                                llvm::Register end_reg,
-                                bool for_SP = false) -> llvm::Register {
+      auto getFreeShadowReg{[this,
+                             &LiveP2S](llvm::Register start_reg,
+                                       llvm::Register end_reg,
+                                       bool for_SP = false) -> llvm::Register {
         std::default_random_engine gen{};
         std::uniform_int_distribution<unsigned> unif_dist{start_reg, end_reg};
 
@@ -1681,8 +1726,8 @@ void RISCVDmr::repair() {
                     !riscv_common::setmapContains(P2S_,
                                                   it->getOperand(0).getReg())) {
                   it->getOperand(0).setReg(LiveP2S[riscv_common::kSP]);
-                  it++;  // to bypass current
-                  it++;  // to bypass primary stack alloc
+                  it++; // to bypass current
+                  it++; // to bypass primary stack alloc
                   break;
                 }
 
@@ -1770,7 +1815,7 @@ void RISCVDmr::repair() {
             for (auto it2{MI.getIterator()}; it2 != it; ++it2) {
               ignore_these.emplace(&*it2);
             }
-          }  // and now for lib calls that are not duplicated
+          } // and now for lib calls that are not duplicated
           else {
             for (llvm::MachineBasicBlock::iterator it{MI.getIterator()};
                  it != MBB.end(); ++it) {
@@ -1870,7 +1915,7 @@ void RISCVDmr::repair() {
                 LiveP2S[getPrimaryFromShadow(MI.getOperand(2).getReg())]);
           }
         }
-      }  // end of MI scan
+      } // end of MI scan
 
       if (!riscv_common::setmapContains(nemesis_bbs_, &MBB)) {
         // updating liveins of successors
@@ -1991,7 +2036,7 @@ void RISCVDmr::repair() {
         MBB.erase_instr(MI);
       }
 
-    }  // end of MBB scan
+    } // end of MBB scan
 
     bool keep_going{false};
     for (auto &MBB : *MF_) {
@@ -2003,7 +2048,7 @@ void RISCVDmr::repair() {
     if (!keep_going) {
       break;
     }
-  }  // end of while(1)
+  } // end of while(1)
 
   //
   //
