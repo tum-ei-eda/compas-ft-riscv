@@ -648,9 +648,9 @@ RISCVDmr::RegSetType RISCVDmr::getRetRegs(const llvm::MachineInstr *MI) const {
 std::string RISCVDmr::getCalledFuncName(const llvm::MachineInstr *MI) const {
   std::string called_func_name{};
   if (MI->getOperand(0).isGlobal()) {
-    called_func_name = MI->getOperand(0).getGlobal()->getName();
+    called_func_name = std::string(MI->getOperand(0).getGlobal()->getName());
   } else {
-    called_func_name = MI->getOperand(0).getSymbolName();
+    called_func_name = std::string(MI->getOperand(0).getSymbolName());
   }
 
   return called_func_name;
