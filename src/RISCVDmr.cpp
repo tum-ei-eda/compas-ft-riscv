@@ -993,6 +993,14 @@ void RISCVDmr::protectBranches() {
                       TII_->get(llvm::RISCV::JAL))
             .addReg(riscv_common::k0)
             .addMBB(err_bb_);
+
+        // NOTE: due to nemesis it can happen that the original successor chain
+        //       is being broken
+        //       so if we encounter an unconditional jump to previously
+        //       chained block then we have to reestablish the link
+        // TODO: this workaround only works if the unconditional branch follows
+        //       a conditional branch (which led to nemesis blocks)
+        MI->getParent()->addSuccessor(MI->getOperand(0).getMBB());
       } else if (MI->isConditionalBranch()) {
         auto MBB{MI->getParent()};
         assert(MI->getOperand(2).isMBB() && "this branch is odd!");
