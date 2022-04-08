@@ -238,11 +238,10 @@ void RISCVDmr::init() {
       } else if (MI.mayLoad()) {
         loads_.emplace(&MI);
       } else if (MI.isCall()) {
-        if (MI.getOpcode() == llvm::RISCV::PseudoCALLIndirect) {
+        if (MI.getOpcode() == llvm::RISCV::PseudoCALLIndirect || MI.getOpcode() == llvm::RISCV::PseudoTAILIndirect) { //[joh]: tail may also be an indirect call
           indirect_calls_.emplace(&MI);
           continue;
         }
-
         assert(MI.getOperand(0).isGlobal() || MI.getOperand(0).isSymbol());
 
         auto called_func_name{getCalledFuncName(&MI)};
@@ -266,14 +265,13 @@ void RISCVDmr::init() {
   }
 
   for (auto &MI : *entry_bb_) {
-    // filtering for stack allocation instruction (addi sp, sp, x)
-    if (MI.getFlag(llvm::MachineInstr::FrameSetup) && !MI.isCFIInstruction() &&
-        MI.getNumOperands() == 3 && MI.getOpcode() == llvm::RISCV::ADDI &&
-        MI.getOperand(0).isReg() &&
-        MI.getOperand(0).getReg() == riscv_common::kSP &&
-        MI.getOperand(1).isReg() &&
-        MI.getOperand(1).getReg() == riscv_common::kSP &&
-        MI.getOperand(2).isImm()) {
+    if (MI.getFlag(llvm::MachineInstr::FrameSetup)
+        && !MI.isCFIInstruction()
+        && MI.getOperand(0).isReg() && MI.getOperand(0).getReg() == riscv_common::kSP // is reg and stack pointer
+        && MI.getOperand(1).isReg() && MI.getOperand(1).getReg() == riscv_common::kSP // is reg and stack pointer
+        && MI.getOperand(2).isImm() // is immediate field
+        // < this check for `addi sp, sp, -<stacksize>` might just ask for trouble
+      ) {
       frame_size_ = std::abs(MI.getOperand(2).getImm());
     }
   }
@@ -455,6 +453,12 @@ void RISCVDmr::protectStores() {
     // for (auto MI : stores_to_protect_) {
     for (auto MI : stores_) {
       auto opcode{MI->getOpcode()};
+      if(MI->isInlineAsm() && MI->getOperand(0).isSymbol()) { //[joh]: inline fence.i also maystore
+#ifdef DBG
+        llvm::outs() << *MI << "RISCVDmr::protectStores(): skip inline assembly instructions -- needs fix\n";
+#endif
+        continue;
+      }
       auto data_reg{MI->getOperand(0).getReg()};
       auto addr_reg{MI->getOperand(1).getReg()};
       auto MBB{MI->getParent()};
