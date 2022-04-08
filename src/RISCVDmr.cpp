@@ -43,12 +43,20 @@ bool RISCVDmr::ignoreMF() {
       llvm::outs() << "COMPAS: Ignoring " << fname_ << " for NZDC\n";
     }
   }
-  // is this function passed in NZDC+ list?
-  if (riscv_common::inCSString(llvm::cl::enable_nzdcp, fname_)) {
+  // is this function passed in NZDC+NEMESIS list?
+  if (riscv_common::inCSString(llvm::cl::enable_nzdc_nemesis, fname_)) {
     ret = false;
   } else {
-    if (llvm::cl::enable_nzdcp.size()) {
-      llvm::outs() << "COMPAS: Ignoring " << fname_ << " for NZDC+\n";
+    if (llvm::cl::enable_nzdc_nemesis.size()) {
+      llvm::outs() << "COMPAS: Ignoring " << fname_ << " for NZDC+NEMESIS\n";
+    }
+  }
+  // is this function passed in NZDC+NEMESEC list?
+  if (riscv_common::inCSString(llvm::cl::enable_nzdc_nemesec, fname_)) {
+    ret = false;
+  } else {
+    if (llvm::cl::enable_nzdc_nemesec.size()) {
+      llvm::outs() << "COMPAS: Ignoring " << fname_ << " for NZDC+NEMESEC\n";
     }
   }
   // is this function passed in SWIFT list?
@@ -143,18 +151,27 @@ void RISCVDmr::init() {
     config_.pss = ProtectStrategyStore::S3;
     config_.psl = ProtectStrategyLoad::L0;
     config_.psuc = ProtectStrategyUserCall::UC3;
-    config_.psb = ProtectStrategyBranch::B2;
+    config_.psb = ProtectStrategyBranch::B0;
 
     llvm::outs() << "COMPAS: Running NZDC pass with " << schedule_string
                  << " on " << fname_ << "\n";
-  } else if (riscv_common::inCSString(llvm::cl::enable_nzdcp, fname_)) {
+  } else if (riscv_common::inCSString(llvm::cl::enable_nzdc_nemesis, fname_)) {
+    // setting up nzdc configs
+    config_.pss = ProtectStrategyStore::S3;
+    config_.psl = ProtectStrategyLoad::L0;
+    config_.psuc = ProtectStrategyUserCall::UC3;
+    config_.psb = ProtectStrategyBranch::B2;
+
+    llvm::outs() << "COMPAS: Running NZDC+NEMESIS pass with " << schedule_string
+                 << " on " << fname_ << "\n";
+  } else if (riscv_common::inCSString(llvm::cl::enable_nzdc_nemesec, fname_)) {
     // setting up nzdc configs
     config_.pss = ProtectStrategyStore::S3;
     config_.psl = ProtectStrategyLoad::L0;
     config_.psuc = ProtectStrategyUserCall::UC3;
     config_.psb = ProtectStrategyBranch::B3;
 
-    llvm::outs() << "COMPAS: Running NZDC+sec pass with " << schedule_string
+    llvm::outs() << "COMPAS: Running NZDC+NEMESEC pass with " << schedule_string
                  << " on " << fname_ << "\n";
   } else if (riscv_common::inCSString(llvm::cl::enable_swift, fname_)) {
     // setting swift configs
