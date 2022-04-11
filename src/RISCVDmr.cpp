@@ -230,7 +230,14 @@ void RISCVDmr::init() {
   }
 
   for (auto &MI : *entry_bb_) {
-    if (MI.getFlag(llvm::MachineInstr::FrameSetup) && !MI.isCFIInstruction()) {
+    // filtering for stack allocation instruction (addi sp, sp, x)
+    if (MI.getFlag(llvm::MachineInstr::FrameSetup) && !MI.isCFIInstruction() &&
+        MI.getNumOperands() == 3 && MI.getOpcode() == llvm::RISCV::ADDI &&
+        MI.getOperand(0).isReg() &&
+        MI.getOperand(0).getReg() == riscv_common::kSP &&
+        MI.getOperand(1).isReg() &&
+        MI.getOperand(1).getReg() == riscv_common::kSP &&
+        MI.getOperand(2).isImm()) {
       frame_size_ = std::abs(MI.getOperand(2).getImm());
     }
   }
