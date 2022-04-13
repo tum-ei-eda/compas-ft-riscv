@@ -37,8 +37,13 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   // for convenience
   llvm::MachineFunction *MF_{nullptr};
   const llvm::TargetInstrInfo *TII_{nullptr};
+  const llvm::TargetRegisterInfo *TRI_{nullptr};
   const llvm::MachineRegisterInfo *MRI_{nullptr};
 
+  // SH2: Infectous selective hardening (a DMR'ed function passes DMR onto its callees) // TBI
+  // SH1: Contained selective hardening and function call boundaries (a DMR'ed function does not pass DMR onto callees, non-DMR'ed callers prepare for DMR-callee)
+  // SH0: don't care
+  enum class SelectiveHardening { SH0, SH1, SH2 };
   // CGS: coarse grain scheduling of master and shadow instructions
   // FGS: fine grain scheduling of master and shadow instructions
   enum class InstructionSchedule { CGS, FGS };
@@ -72,6 +77,7 @@ class RISCVDmr : public llvm::MachineFunctionPass {
 
   // grouping above strategies/configs in a single container
   struct DMRConfig {
+    SelectiveHardening sh{SelectiveHardening::SH1};
     InstructionSchedule is{InstructionSchedule::CGS};
     ProtectStrategyStore pss{ProtectStrategyStore::S0};
     ProtectStrategyLoad psl{ProtectStrategyLoad::L0};
@@ -280,6 +286,7 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   int frame_size_{0};
 
   void init();
+  void updateSelectiveCalls();
   void duplicateInstructions();
   void protectStores();
   void protectLoads();

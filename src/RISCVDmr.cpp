@@ -84,24 +84,26 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
   fname_ = std::string{MF_->getName()};
 
   // if this function is not to be transformed then return early
-  if (ignoreMF()) {
-    return false;
-  }
-
   init();
-  duplicateInstructions();
-  protectCalls();
-  protectStores();
-  protectLoads();
-  protectBranches();
 
-  if (llvm::cl::enable_repair) {
-    repair();
+  if (!ignoreMF()) {
+    duplicateInstructions();
+    protectCalls();
+    protectStores();
+    protectLoads();
+    protectBranches();
+    if (llvm::cl::enable_repair) {
+      repair();
+    }
+    protectGP();
+  }
+  if (config_.sh != SelectiveHardening::SH0 && !user_calls_.empty()) {
+    llvm::outs() << "d0: Updating function call according to selective "
+                    "hardening technique\n";
+    updateSelectiveCalls();
   }
 
-  protectGP();
-
-  return true;
+  return !ignoreMF();
 }
 
 void RISCVDmr::protectGP() {
@@ -125,6 +127,7 @@ void RISCVDmr::protectGP() {
 void RISCVDmr::init() {
   TII_ = MF_->getSubtarget().getInstrInfo();
   MRI_ = &MF_->getRegInfo();
+  TRI_ = MRI_->getTargetRegisterInfo();
   config_.eds = riscv_common::ErrorDetectionStrategy::ED3; // TODO: should be
                                                            // exposed to CLI
   for (auto &s : llvm::codegen::getMAttrs()) {
@@ -238,7 +241,10 @@ void RISCVDmr::init() {
       } else if (MI.mayLoad()) {
         loads_.emplace(&MI);
       } else if (MI.isCall()) {
-        if (MI.getOpcode() == llvm::RISCV::PseudoCALLIndirect || MI.getOpcode() == llvm::RISCV::PseudoTAILIndirect) { //[joh]: tail may also be an indirect call
+        if (MI.getOpcode() == llvm::RISCV::PseudoCALLIndirect ||
+            MI.getOpcode() ==
+                llvm::RISCV::PseudoTAILIndirect) { //[joh]: tail may also be an
+                                                   // indirect call
           indirect_calls_.emplace(&MI);
           continue;
         }
@@ -265,13 +271,17 @@ void RISCVDmr::init() {
   }
 
   for (auto &MI : *entry_bb_) {
-    if (MI.getFlag(llvm::MachineInstr::FrameSetup)
-        && !MI.isCFIInstruction()
-        && MI.getOperand(0).isReg() && MI.getOperand(0).getReg() == riscv_common::kSP // is reg and stack pointer
-        && MI.getOperand(1).isReg() && MI.getOperand(1).getReg() == riscv_common::kSP // is reg and stack pointer
+    if (MI.getFlag(llvm::MachineInstr::FrameSetup) && !MI.isCFIInstruction() &&
+        MI.getOperand(0).isReg() &&
+        MI.getOperand(0).getReg() ==
+            riscv_common::kSP // is reg and stack pointer
+        && MI.getOperand(1).isReg() &&
+        MI.getOperand(1).getReg() ==
+            riscv_common::kSP       // is reg and stack pointer
         && MI.getOperand(2).isImm() // is immediate field
-        // < this check for `addi sp, sp, -<stacksize>` might just ask for trouble
-      ) {
+        // < this check for `addi sp, sp, -<stacksize>` might just ask for
+        // trouble
+    ) {
       frame_size_ = std::abs(MI.getOperand(2).getImm());
     }
   }
@@ -453,9 +463,12 @@ void RISCVDmr::protectStores() {
     // for (auto MI : stores_to_protect_) {
     for (auto MI : stores_) {
       auto opcode{MI->getOpcode()};
-      if(MI->isInlineAsm() && MI->getOperand(0).isSymbol()) { //[joh]: inline fence.i also maystore
+      if (MI->isInlineAsm() &&
+          MI->getOperand(0).isSymbol()) { //[joh]: inline fence.i also maystore
 #ifdef DBG
-        llvm::outs() << *MI << "RISCVDmr::protectStores(): skip inline assembly instructions -- needs fix\n";
+        llvm::outs() << *MI
+                     << "RISCVDmr::protectStores(): skip inline assembly "
+                        "instructions -- needs fix\n";
 #endif
         continue;
       }
@@ -699,6 +712,167 @@ void RISCVDmr::moveIntoShadow(llvm::MachineBasicBlock *MBB,
         .addReg(rp);
   } else if (riscv_common::getRegType(rp) == riscv_common::RegType::FH) {
     assert(0 && "TODO");
+  }
+}
+
+void RISCVDmr::updateSelectiveCalls() {
+
+  auto is_func_dmr = [&](const std::string &func_name) {
+    return (riscv_common::inCSString(llvm::cl::enable_nzdc, func_name) ||
+            riscv_common::inCSString(llvm::cl::enable_nzdc_nemesis,
+                                     func_name) ||
+            riscv_common::inCSString(llvm::cl::enable_nzdc_nemesec,
+                                     func_name) ||
+            riscv_common::inCSString(llvm::cl::enable_swift, func_name) ||
+            riscv_common::inCSString(llvm::cl::enable_eddi, func_name))
+               ? true
+               : false;
+  };
+
+  if (config_.sh == SelectiveHardening::SH0) {
+
+  } else if (config_.sh == SelectiveHardening::SH1) {
+    for (auto MI : user_calls_) {
+      auto callee_func_name{getCalledFuncName(MI)};
+      auto callee_is_dmr = is_func_dmr(callee_func_name);
+      auto caller_is_dmr = is_func_dmr(fname_);
+
+      if (callee_is_dmr) {   // the callee is a DMRed function
+        if (caller_is_dmr) { // the caller is a DMRed function, so we do not
+                             // have to do anything here since calling
+                             // convention is not changing
+          llvm::outs()
+              << "dbg: both caller[" << fname_ << "]->callee["
+              << callee_func_name
+              << "] are DMR: so don't care about calling convention...\n";
+        } else { // the caller is not a DMR so we have to prepare all calls to
+                 // DMR-functions
+          llvm::outs() << "dbg: caller[" << fname_ << "]->DMR-callee["
+                       << callee_func_name
+                       << "] adhere to DMR-callee calling convention...\n";
+
+          // 0) get live shadow registers
+          // 1) if isTail() then add `ra` to lives/spills
+          // 2) if isTail() replace `tail` with `call` + `ret`
+          // 3) spill lives to stack
+          // 4) duplicate primaries to shadows before `call`
+          // 5) unspill lives from stack after `call`
+
+          llvm::LivePhysRegs lregs(*TRI_);
+          auto MBB{MI->getParent()};
+          lregs.addLiveIns(*MBB);
+#ifdef DBG
+          for (auto &li : MBB->liveins()) {
+            llvm::outs() << "li: " << li.PhysReg << "\n";
+          }
+          for (auto &lo : MBB->liveouts()) {
+            llvm::outs() << "lo: " << lo.PhysReg << "\n";
+          }
+#endif // DBG
+          llvm::SmallVector<
+              std::pair<llvm::MCPhysReg, const llvm::MachineOperand *>, 2>
+              Clobbers;
+#ifdef DBG
+          for (auto &lr : lregs) {
+            llvm::outs() << "ilr: x" << lr - llvm::RISCV::X0 << "\n";
+          }
+#endif // DBG
+          auto call_iter = MI->getIterator();
+          for (const auto &mi : *MBB) {
+            // lregs.accumulate(mi);
+            if (&mi == MI)
+              break;
+            Clobbers.clear();
+            lregs.stepForward(mi, Clobbers);
+#ifdef DBG
+            llvm::outs() << "mi: " << mi << "\n";
+#endif
+          }
+
+          RegSetType spill_regs{};
+          for (const auto &lr : lregs) {
+            if (riscv_common::mapValContains(P2S_, lr)) { // live is a shadow
+              spill_regs.emplace(lr);
+            }
+#ifdef DBG
+            llvm::outs() << "clr: x" << lr - llvm::RISCV::X0 << "\n";
+#endif // DBG
+          }
+
+          if (spill_regs.find(llvm::RISCV::X1) == spill_regs.end() &&
+              TII_->isTailCall(*MI)) {
+            spill_regs.emplace(
+                llvm::RISCV::X1); // if the call is a `tail` we need to replace
+                                  // it with a `call+ret` to allow restoration
+                                  // of non-DMR context before return
+          }
+#ifdef DBG
+          for (const auto &sr : spill_regs) {
+            llvm::outs() << "sr: x" << sr - llvm::RISCV::X0 << "\n";
+          }
+#endif // DBG
+       // insert the spill segment
+          std::vector<llvm::Register> sregs(spill_regs.begin(),
+                                            spill_regs.end());
+          auto insert = call_iter;
+          riscv_common::saveRegs(sregs, MBB, insert);
+          if (TII_->isTailCall(*MI)) {
+          }
+          // insert the default duplication segment, i.e., move all primaries
+          // into their shadows
+          for (const auto &regpair : P2S_) {
+            if (riscv_common::getRegType(regpair.first) ==
+                riscv_common::RegType::I) {
+              moveIntoShadow(MBB, insert, regpair.first, regpair.second);
+
+            } else {
+              // FIXME: only handle Base Integer Registers for now
+            }
+          }
+
+          insert = MI->getIterator();
+          ++insert;
+          if (TII_->isTailCall(*MI)) { // replace `tail`s with `call+ret`s
+            MI->setDesc(TII_->get(llvm::RISCV::PseudoCALL));
+
+            llvm::BuildMI(*MBB, insert, MI->getDebugLoc(),
+                          TII_->get(llvm::RISCV::PseudoRET));
+          }
+          insert = MI->getIterator();
+          ++insert;
+          riscv_common::loadRegs(sregs, MBB, insert);
+
+          insert = MI->getIterator();
+          ++insert;
+          for (const auto &regpair : P2S_) {
+            if (riscv_common::getRegType(regpair.first) ==
+                riscv_common::RegType::I) {
+              llvm::BuildMI(*MBB, insert, MI->getDebugLoc(),
+                            TII_->get(llvm::RISCV::BNE))
+                  .addReg(regpair.first)
+                  .addReg(regpair.second)
+                  .addMBB(err_bb_);
+            } else {
+              // FIXME: only handle Base Integer Registers for now
+            }
+          }
+        }
+      } else {               // the callee is not a DMR-function
+        if (caller_is_dmr) { // the caller is a DMRed function, we need to
+                             // prepare non-DMR calling convention.
+          llvm::outs() << "dbg: DMR-caller[" << fname_ << "]->callee["
+                       << callee_func_name
+                       << "] adhere to non-DMR-callee calling convention...\n";
+        } else { // the caller is a not DMRed function, so business as usual.
+          llvm::outs()
+              << "dbg: both caller [" << fname_ << "]->callee["
+              << callee_func_name
+              << "] are not DMR: so don't care about calling convention...\n";
+        }
+      }
+    }
+  } else if (config_.sh == SelectiveHardening::SH2) {
+    // not implemented yet.
   }
 }
 
@@ -1259,7 +1433,7 @@ void RISCVDmr::insertErrorBB() {
   }
 
   if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
-      config_.eds == riscv_common::ErrorDetectionStrategy::ED3 ) {
+      config_.eds == riscv_common::ErrorDetectionStrategy::ED3) {
     // keep on repeating this errBB as we dont want to execute code now
     // J err_bb_ = JALR X0, err_bb_ because J is a pseudo-jump instr in RISCV
     llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
