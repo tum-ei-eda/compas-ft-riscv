@@ -84,7 +84,8 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
   fname_ = std::string{MF_->getName()};
 
   // if this function is not to be transformed then return early
-  init();
+  init(); // FIXME: init() will insert errorBBs for all functions (non-DMR, DMR,
+          // and DMR calling non-DMRs alike)
 
   if (!ignoreMF()) {
     duplicateInstructions();
@@ -821,8 +822,6 @@ void RISCVDmr::updateSelectiveCalls() {
                                             spill_regs.end());
           auto insert = call_iter;
           riscv_common::saveRegs(sregs, MBB, insert);
-          if (TII_->isTailCall(*MI)) {
-          }
           // insert the default duplication segment, i.e., move all primaries
           // into their shadows
           for (const auto &regpair : P2S_) {
@@ -868,6 +867,79 @@ void RISCVDmr::updateSelectiveCalls() {
           llvm::outs() << "dbg: DMR-caller[" << fname_ << "]->callee["
                        << callee_func_name
                        << "] adhere to non-DMR-callee calling convention...\n";
+          // live shadows involving t0-t6, a0-a7 can be corrupted by non-DMR
+          // function, so we need to prepare those
+
+          auto MBB{MI->getParent()};
+          for (const auto &r : MBB->liveouts()) {
+            llvm::outs() << "or: x" << r.PhysReg - llvm::RISCV::X0 << "\n";
+          }
+          if (TII_->isTailCall(*MI)) { // replace `tail`s with `call+ret`
+            MI->addImplicitDefUseOperands(*MF_);
+          }
+
+          auto ret_regs{getRetRegs(MI)};
+          auto insert{MI->getIterator()};
+          ++insert;
+
+          RegSetType spill_regs;
+          for (unsigned r = llvm::RISCV::X3; r <= llvm::RISCV::X31; ++r) {
+            if (!riscv_common::setmapContains(callee_saved_regs_, r)) {
+              spill_regs.emplace(r);
+            }
+          }
+          // ret-regs would be changed after func call hence dont need to stack
+          // them. FIXME: Also remove a0 and a1 always when indirect call is a
+          // tail
+          if (riscv_common::setmapContains(ret_regs, llvm::RISCV::X10) ||
+              (TII_->isTailCall(*MI))) {
+            spill_regs.erase(llvm::RISCV::X10);
+          }
+          if (riscv_common::setmapContains(ret_regs, llvm::RISCV::X11) ||
+              (TII_->isTailCall(*MI))) {
+            spill_regs.erase(llvm::RISCV::X11);
+          }
+
+          if (spill_regs.find(llvm::RISCV::X1) == spill_regs.end() &&
+              TII_->isTailCall(*MI)) {
+            spill_regs.emplace(
+                llvm::RISCV::X1); // if the call is a `tail` we need to replace
+                                  // it with a `call+ret` to allow restoration
+                                  // of DMR context before return, because we
+                                  // could return back to a DMR-function instead
+                                  // of a non-DMR one
+          }
+
+          std::vector<llvm::Register> sregs(spill_regs.begin(),
+                                            spill_regs.end());
+
+          riscv_common::saveRegs(sregs, MBB, MI->getIterator());
+
+          insert = MI->getIterator();
+          ++insert;
+
+          if (TII_->isTailCall(*MI)) { // replace `tail`s with `call+ret`s
+            MI->setDesc(TII_->get(llvm::RISCV::PseudoCALL));
+            llvm::BuildMI(*MBB, insert, MI->getDebugLoc(),
+                          TII_->get(llvm::RISCV::PseudoRET));
+            ret_regs.insert(llvm::RISCV::X10);
+            ret_regs.insert(
+                llvm::RISCV::X11); // FIXME: We do not really know here, whether
+                                   // x10 and x11 are actually used for return
+          }
+          insert = MI->getIterator();
+          ++insert;
+          // copying the return value/s to shadow reg
+          llvm::outs() << "MI:" << *MI << "\n";
+
+          for (const auto &r : ret_regs) {
+            llvm::outs() << "ret_reg: x" << r - llvm::RISCV::X0 << "\n";
+            moveIntoShadow(MI->getParent(), insert, r, P2S_.at(r));
+          }
+          insert = MI->getIterator();
+          ++insert;
+          riscv_common::loadRegs(sregs, MBB, insert);
+
         } else { // the caller is a not DMRed function, so business as usual.
           llvm::outs()
               << "dbg: both caller [" << fname_ << "]->callee["
@@ -1270,6 +1342,10 @@ void RISCVDmr::protectBranches() {
                       si->getDebugLoc(), TII_->get(llvm::RISCV::JAL))
             .addReg(riscv_common::k0)
             .addMBB(err_bb_);
+      } else if (MI->isIndirectBranch()) {
+        llvm::outs()
+            << "\tWARNING: Branch protection not applicable. Is indirect MI:"
+            << *MI << "\n";
       } else {
         assert(0 && "what is this branch");
       }
@@ -1348,6 +1424,10 @@ void RISCVDmr::protectBranches() {
                       si->getDebugLoc(), TII_->get(llvm::RISCV::JAL))
             .addReg(riscv_common::k0)
             .addMBB(err_bb_);
+      } else if (MI->isIndirectBranch()) {
+        llvm::outs()
+            << "\tWARNING: Branch protection not applicable. Is indirect MI:"
+            << *MI << "\n";
       } else {
         assert(0 && "what is this branch");
       }
