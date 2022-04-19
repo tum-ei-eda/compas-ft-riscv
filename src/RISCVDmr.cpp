@@ -463,12 +463,17 @@ void RISCVDmr::protectStores() {
     // for (auto MI : stores_to_protect_) {
     for (auto MI : stores_) {
       auto opcode{MI->getOpcode()};
-      if (MI->isInlineAsm() &&
-          MI->getOperand(0).isSymbol()) { //[joh]: inline fence.i also maystore
+      if (MI->hasOrderedMemoryRef() || //[joh] do not protect volatile or
+                                       // ordered
+                                       // memory instr
+          (MI->isInlineAsm() &&
+           MI->getOperand(0)
+               .isSymbol())) { //[joh]: inline fence.i also maystore
 #ifdef DBG
-        llvm::outs() << *MI
-                     << "RISCVDmr::protectStores(): skip inline assembly "
-                        "instructions -- needs fix\n";
+        llvm::outs()
+            << *MI
+            << "RISCVDmr::protectStores(): skip inline assembly and volatiles"
+               "instructions -- needs fix\n";
 #endif
         continue;
       }
