@@ -250,6 +250,7 @@ void RISCVCfcss::harden() {
             continue;
           }
 
+
           if (MI2.getOperand(0).isReg() && MI2.getOperand(0).getReg() == kD &&
               MI2.getOpcode() == llvm::RISCV::ADDI &&
               MI2.getOperand(1).isReg() &&
