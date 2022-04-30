@@ -913,8 +913,14 @@ void RISCVDmr::updateSelectiveCalls() {
           std::vector<llvm::Register> sregs(spill_regs.begin(),
                                             spill_regs.end());
 
-          riscv_common::saveRegs(sregs, MBB, MI->getIterator());
+          if(use_shadow_for_stack_ops_) {
+            riscv_common::saveRegs(sregs, MBB, MI->getIterator(),
+                                   P2S_.at(riscv_common::kSP));
 
+          }
+          else {
+            riscv_common::saveRegs(sregs, MBB, MI->getIterator());
+          }
           insert = MI->getIterator();
           ++insert;
 
@@ -938,8 +944,12 @@ void RISCVDmr::updateSelectiveCalls() {
           }
           insert = MI->getIterator();
           ++insert;
-          riscv_common::loadRegs(sregs, MBB, insert);
-
+          if(use_shadow_for_stack_ops_) {
+            riscv_common::loadRegs(sregs, MBB, insert, P2S_.at(riscv_common::kSP));
+          }
+          else {
+            riscv_common::loadRegs(sregs, MBB, insert);
+          }
         } else { // the caller is a not DMRed function, so business as usual.
           llvm::outs()
               << "dbg: both caller [" << fname_ << "]->callee["
