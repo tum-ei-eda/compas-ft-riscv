@@ -71,6 +71,13 @@ void RISCVCfcss::init() {
   // unique signatures for each block
   unsigned cnt{0};
   for (auto &MBB : *MF_) {
+    // there could be err-BBs from other passes
+    // the convention is if a BB keeps jumping to itself then this is also
+    // an error-BB
+    if (MBB.succ_size() == 1 && &MBB == *MBB.succ_begin()) {
+      continue;
+    }
+
     for (auto PBB : MBB.predecessors()) {
       mbb_info_[&MBB].predecessors.emplace(PBB);
     }
@@ -259,10 +266,17 @@ void RISCVCfcss::harden() {
 
 bool RISCVCfcss::hasMultipleFaninSBB(llvm::MachineBasicBlock *PBB) {
   unsigned num_succ_fanin{0};
+  std::set<int> already_seen{};
+
   for (auto SBB : PBB->successors()) {
+    if (riscv_common::setmapContains(already_seen, SBB->getNumber())) {
+      continue;
+    }
+
     if (mbb_info_[SBB].is_fanin) {
       num_succ_fanin++;
     }
+    already_seen.emplace(SBB->getNumber());
   }
 
   return (num_succ_fanin >= 2);
