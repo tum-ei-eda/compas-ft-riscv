@@ -40,6 +40,9 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   const llvm::TargetRegisterInfo *TRI_{nullptr};
   const llvm::MachineRegisterInfo *MRI_{nullptr};
 
+  bool calls_dmr_user_func_{false};
+  bool calls_nondmr_user_func_{false};
+
   // SH2: Infectous selective hardening (a DMR'ed function passes DMR onto its callees) // TBI
   // SH1: Contained selective hardening and function call boundaries (a DMR'ed function does not pass DMR onto callees, non-DMR'ed callers prepare for DMR-callee)
   // SH0: don't care
@@ -291,7 +294,9 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   int frame_size_{0};
 
   void init();
-  SelectiveCallingConvention updateSelectiveCalls();
+  void analyze_function();
+  void calc_framesize();
+  void updateSelectiveCalls();
   void duplicateInstructions();
   void protectStores();
   void protectLoads();
@@ -300,6 +305,7 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   void protectGP();
   void repair();
   bool ignoreMF();
+  bool is_func_dmr(const std::string &func_name);
   // TODO: hide some of the following??
   llvm::MachineInstr *genShadowFromPrimary(const llvm::MachineInstr *) const;
   virtual void insertErrorBB();
