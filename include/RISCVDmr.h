@@ -44,6 +44,11 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   // SH1: Contained selective hardening and function call boundaries (a DMR'ed function does not pass DMR onto callees, non-DMR'ed callers prepare for DMR-callee)
   // SH0: don't care
   enum class SelectiveHardening { SH0, SH1, SH2 };
+  // SCC0: non-DMR calling non-DMR function -> standard
+  // SCC1: non-DMR calling DMR
+  // SCC2: DMR calling non-DMR
+  // SCC3: DMR calling DMR
+  enum class SelectiveCallingConvention {SCC0, SCC1, SCC2, SCC3};
   // CGS: coarse grain scheduling of master and shadow instructions
   // FGS: fine grain scheduling of master and shadow instructions
   enum class InstructionSchedule { CGS, FGS };
@@ -286,7 +291,7 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   int frame_size_{0};
 
   void init();
-  void updateSelectiveCalls();
+  SelectiveCallingConvention updateSelectiveCalls();
   void duplicateInstructions();
   void protectStores();
   void protectLoads();

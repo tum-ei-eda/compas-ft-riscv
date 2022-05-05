@@ -82,6 +82,7 @@ bool RISCVDmr::ignoreMF() {
 bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
   MF_ = &MF;
   fname_ = std::string{MF_->getName()};
+  bool needs_errorBB = false;
 
   // if this function is not to be transformed then return early
   init(); // FIXME: init() will insert errorBBs for all functions (non-DMR, DMR,
@@ -97,11 +98,24 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
       repair();
     }
     protectGP();
+    needs_errorBB = true;
   }
   if (config_.sh != SelectiveHardening::SH0 && !user_calls_.empty()) {
     llvm::outs() << "d0: Updating function call according to selective "
                     "hardening technique\n";
-    updateSelectiveCalls();
+    // only if we are in a non-DMRed function we now need to force an ErrorBlock insertion
+    needs_errorBB |= (updateSelectiveCalls() == SelectiveCallingConvention::SCC1);
+  }
+
+  if (needs_errorBB) {
+    if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
+        config_.eds == riscv_common::ErrorDetectionStrategy::ED1 ||
+        config_.eds == riscv_common::ErrorDetectionStrategy::ED3) {
+      // insert an error-BB in MF_
+      insertErrorBB();
+    } else {
+      assert(0 && "TODO");
+    }
   }
 
   return !ignoreMF();
@@ -212,6 +226,7 @@ void RISCVDmr::init() {
   shadow_loads_.clear();
   frame_size_ = 0;
 
+/*
   if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
       config_.eds == riscv_common::ErrorDetectionStrategy::ED1 ||
       config_.eds == riscv_common::ErrorDetectionStrategy::ED3) {
@@ -220,7 +235,7 @@ void RISCVDmr::init() {
   } else {
     assert(0 && "TODO");
   }
-
+*/
   // collecting special instruction points in containers for later use
   // std::set<llvm::MachineInstr *> stores_avoid_for_prot{};
   std::set<std::string> already_seen_func_names{};
@@ -721,7 +736,7 @@ void RISCVDmr::moveIntoShadow(llvm::MachineBasicBlock *MBB,
   }
 }
 
-void RISCVDmr::updateSelectiveCalls() {
+RISCVDmr::SelectiveCallingConvention RISCVDmr::updateSelectiveCalls() {
 
   auto is_func_dmr = [&](const std::string &func_name) {
     return (riscv_common::inCSString(llvm::cl::enable_nzdc, func_name) ||
@@ -751,6 +766,7 @@ void RISCVDmr::updateSelectiveCalls() {
               << "dbg: both caller[" << fname_ << "]->callee["
               << callee_func_name
               << "] are DMR: so don't care about calling convention...\n";
+          return SelectiveCallingConvention::SCC3;
         } else { // the caller is not a DMR so we have to prepare all calls to
                  // DMR-functions
           llvm::outs() << "dbg: caller[" << fname_ << "]->DMR-callee["
@@ -861,6 +877,8 @@ void RISCVDmr::updateSelectiveCalls() {
             }
           }
         }
+        return SelectiveCallingConvention::SCC1;
+
       } else {               // the callee is not a DMR-function
         if (caller_is_dmr) { // the caller is a DMRed function, we need to
                              // prepare non-DMR calling convention.
@@ -950,16 +968,21 @@ void RISCVDmr::updateSelectiveCalls() {
           else {
             riscv_common::loadRegs(sregs, MBB, insert);
           }
+
+          return SelectiveCallingConvention::SCC2;
         } else { // the caller is a not DMRed function, so business as usual.
           llvm::outs()
               << "dbg: both caller [" << fname_ << "]->callee["
               << callee_func_name
               << "] are not DMR: so don't care about calling convention...\n";
+
+          return SelectiveCallingConvention::SCC0;
         }
       }
     }
   } else if (config_.sh == SelectiveHardening::SH2) {
     // not implemented yet.
+    return SelectiveCallingConvention::SCC0;
   }
 }
 
