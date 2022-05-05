@@ -115,7 +115,7 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
     protectGP();
   } else {
     analyze_function(); // FIXME
-    if(calls_dmr_user_func_) {
+    if (calls_dmr_user_func_) {
       add_errorBB_once();
     }
     calc_framesize();
@@ -237,9 +237,9 @@ void RISCVDmr::init() {
   shadow_loads_.clear();
   frame_size_ = 0;
 
-  #ifdef DBG
-    llvm::outs() << "COMPAS_DBG: init() done\n";
-  #endif
+#ifdef DBG
+  llvm::outs() << "COMPAS_DBG: init() done\n";
+#endif
 }
 void RISCVDmr::analyze_function() {
   // collecting special instruction points in containers for later use
@@ -273,9 +273,12 @@ void RISCVDmr::analyze_function() {
         assert(MI.getOperand(0).isGlobal() || MI.getOperand(0).isSymbol());
 
         auto called_func_name{getCalledFuncName(&MI)};
-        if (riscv_common::setmapContains(knownLibcalls2Duplicable_,
+        if (!is_func_dmr(called_func_name) &&
+            riscv_common::setmapContains(knownLibcalls2Duplicable_,
                                          called_func_name)) {
           lib_calls_.emplace(&MI);
+          llvm::outs() << "\tNOTE: Considering " << called_func_name
+                       << " as a lib-func call\n";
         } else {
           user_calls_.emplace(&MI);
 
@@ -294,16 +297,16 @@ void RISCVDmr::analyze_function() {
 
   for (auto MI : user_calls_) {
     auto callee_func_name{getCalledFuncName(MI)};
-    if( is_func_dmr(callee_func_name)) {
+    if (is_func_dmr(callee_func_name)) {
       calls_dmr_user_func_ = true;
     } else {
       calls_nondmr_user_func_ = true;
     }
   }
 
-  #ifdef DBG
-    llvm::outs() << "COMPAS_DBG: analyze_function() done\n";
-  #endif
+#ifdef DBG
+  llvm::outs() << "COMPAS_DBG: analyze_function() done\n";
+#endif
 }
 
 void RISCVDmr::calc_framesize() {
@@ -759,10 +762,8 @@ void RISCVDmr::moveIntoShadow(llvm::MachineBasicBlock *MBB,
 
 bool RISCVDmr::is_func_dmr(const std::string &func_name) {
   return (riscv_common::inCSString(llvm::cl::enable_nzdc, func_name) ||
-          riscv_common::inCSString(llvm::cl::enable_nzdc_nemesis,
-                                   func_name) ||
-          riscv_common::inCSString(llvm::cl::enable_nzdc_nemesec,
-                                   func_name) ||
+          riscv_common::inCSString(llvm::cl::enable_nzdc_nemesis, func_name) ||
+          riscv_common::inCSString(llvm::cl::enable_nzdc_nemesec, func_name) ||
           riscv_common::inCSString(llvm::cl::enable_swift, func_name) ||
           riscv_common::inCSString(llvm::cl::enable_eddi, func_name))
              ? true
@@ -992,7 +993,6 @@ void RISCVDmr::updateSelectiveCalls() {
               << "dbg: both caller [" << fname_ << "]->callee["
               << callee_func_name
               << "] are not DMR: so don't care about calling convention...\n";
-
         }
       }
     }
