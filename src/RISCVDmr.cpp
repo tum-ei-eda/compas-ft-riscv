@@ -328,6 +328,7 @@ void RISCVDmr::duplicateInstructions() {
       .addReg(P2S_.at(riscv_common::kRA))
       .addReg(riscv_common::kRA)
       .addImm(0);
+
   if (fname_ == "main") {
     llvm::BuildMI(MF_->front(), std::begin(MF_->front()),
                   MF_->front().front().getDebugLoc(),
@@ -845,6 +846,7 @@ void RISCVDmr::protectCalls() {
 
     auto &entry_BB{MF_->front()};
     llvm::MachineBasicBlock::iterator insert{entry_BB.front().getIterator()};
+    insert++;
 
     if (fname_ != "main") {
       for (unsigned r = llvm::RISCV::X0; r <= llvm::RISCV::X31; ++r) {

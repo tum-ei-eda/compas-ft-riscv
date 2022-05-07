@@ -156,12 +156,40 @@ void RISCVRasm::harden() {
 
         // NOTE: stack would be used to pass args if they exceed arg regs hence
         //       we shouldn't use stack for CFC signatures
-        // for G, we simply move the expected value back into G
-        llvm::BuildMI(MBB, insert, MI.getDebugLoc(),
-                      TII_->get(llvm::RISCV::ADDI))
-            .addReg(kRTS)
-            .addReg(riscv_common::k0)
-            .addImm(mbb_sigs_[&MBB].first);
+
+        if (MI.getOpcode() == llvm::RISCV::PseudoCALLIndirect ||
+            !(riscv_common::inCSString(llvm::cl::enable_nzdc,
+                                       std::string{MF_->getName()}) &&
+              riscv_common::setmapContains(knownLibcalls2Duplicable_,
+                                           getCalledFuncName(&MI)))) {
+          // if we are in DMR func and we are going to libcall via this MI call
+          // then no need to stack RTS explicitly as this is already done in DMR
+          // else: we stack RTS as below
+
+          riscv_common::saveRegs({kRTS}, &MBB, MI.getIterator());
+          riscv_common::loadRegs({kRTS}, &MBB, insert);
+
+          if (riscv_common::inCSString(llvm::cl::enable_nzdc,
+                                       std::string{MF_->getName()})) {
+            llvm::BuildMI(MBB, MI.getIterator(), MI.getDebugLoc(),
+                          TII_->get(llvm::RISCV::ADDI))
+                .addReg(P2S_.at(riscv_common::kSP))
+                .addReg(P2S_.at(riscv_common::kSP))
+                .addImm(-4);
+            llvm::BuildMI(MBB, insert, MI.getDebugLoc(),
+                          TII_->get(llvm::RISCV::ADDI))
+                .addReg(P2S_.at(riscv_common::kSP))
+                .addReg(P2S_.at(riscv_common::kSP))
+                .addImm(4);
+          }
+        }
+
+        // alternatively: for G, we simply move the expected value back into G
+        //        llvm::BuildMI(MBB, insert, MI.getDebugLoc(),
+        //                      TII_->get(llvm::RISCV::ADDI))
+        //            .addReg(kRTS)
+        //            .addReg(riscv_common::k0)
+        //            .addImm(mbb_sigs_[&MBB].first);
 
         continue;
       }
