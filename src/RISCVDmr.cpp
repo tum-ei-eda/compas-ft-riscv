@@ -544,8 +544,21 @@ void RISCVDmr::protectStores() {
 
       if (riscv_common::setmapContains(LBStore2Load_, opcode)) {
         auto shadow_zero{P2S_.at(riscv_common::k0)};
+
+        // [joh]: change MI prim to shadow (data* -> addr*)
+        bool src_is_zero = MI->getOperand(0).getReg() == riscv_common::k0;
+        if(src_is_zero) {
+          MI->getOperand(0).setReg(shadow_zero);
+          MI->getOperand(1).setReg(P2S_.at(addr_reg));
+        }
+
         auto si{MF_->CloneMachineInstr(MI)};
-        si->getOperand(1).setReg(P2S_.at(addr_reg));
+        if(!src_is_zero) {
+          si->getOperand(1).setReg(P2S_.at(addr_reg));
+        } else {
+          // [joh]: load back from primary addr
+          si->getOperand(1).setReg(addr_reg);
+        }
         si->setDesc(TII_->get(LBStore2Load_.at(opcode)));
         MBB->insertAfter(MI, si);
         loadbacks_.emplace(si);
