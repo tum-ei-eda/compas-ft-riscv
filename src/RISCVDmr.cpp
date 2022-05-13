@@ -509,12 +509,30 @@ void RISCVDmr::protectStores() {
           (MI->isInlineAsm() &&
            MI->getOperand(0)
                .isSymbol())) { //[joh]: inline fence.i also maystore
-#ifdef DBG
+//#ifdef DBG
         llvm::outs()
+            << "WARNING:"
             << *MI
             << "RISCVDmr::protectStores(): skip inline assembly and volatiles"
                "instructions -- needs fix\n";
-#endif
+//#end
+#ifdef SWITCH_VOLATILE
+        for (const auto &op : MI->operands()) {
+          if (op.isReg()) {
+            if (riscv_common::getRegType(op.getReg()) ==
+                riscv_common::RegType::I) {
+              llvm::BuildMI(*MI->getParent(), MI->getIterator(),
+                            MI->getDebugLoc(), TII_->get(llvm::RISCV::BNE))
+                  .addReg(op.getReg())
+                  .addReg(P2S_.at(op.getReg()))
+                  .addMBB(err_bb_);
+            } else {
+              syncFPRegs(MI->getParent(), MI->getIterator(), op.getReg(),
+                         P2S_.at(op.getReg()));
+            }
+          }
+        }
+#endif //ifdef SWITCH_VOLATILE
         continue;
       }
       auto data_reg{MI->getOperand(0).getReg()};
