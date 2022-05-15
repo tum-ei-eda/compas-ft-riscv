@@ -431,8 +431,15 @@ void RISCVDmr::protectStores() {
         auto si{MF_->CloneMachineInstr(MI)};
         si->getOperand(1).setReg(P2S_.at(addr_reg));
         si->setDesc(TII_->get(LBStore2Load_.at(opcode)));
-        MBB->insertAfter(MI, si);
-        loadbacks_.emplace(si);
+
+        // in case we are storing zero to memory then loadback is pointless
+        // and could lead even to exceptions on some implementations
+        // as zero is immune to soft-erors (being wired) hence
+        // suffice to just check with shadow_zero alone
+        if (data_reg != riscv_common::k0) {
+          MBB->insertAfter(MI, si);
+          loadbacks_.emplace(si);
+        }
 
         if (opcode == llvm::RISCV::FSW || opcode == llvm::RISCV::FSD) {
           // loadback for FP stores
