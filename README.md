@@ -4,6 +4,13 @@ COMPAS: Compiler-assisted Software-implemented Hardware Fault Tolerance implemen
 Repo to house SIHFT passes for LLVM to create COMPAS, a compiler that adds fault tolerance on instruction level for RISCV 32/64 targets.
 COMPAS is implemented such that it can be used as patch for the RISC-V LLVM toolchain.
 
+## Citation
+If you want to cite this work, please use the following paper.
+U Sharif, D Mueller-Gritschneder, U Schlichtmann
+COMPAS: Compiler-assisted Software-implemented Hardware Fault Tolerance for RISC-V 
+11th Mediterranean Conference on Embedded Computing (MECO), 2022
+
+
 ## User Guide
 Detailed instructions on compiler installation and usage can be found in `doc/manual`. We provide the manual as pdf.
 
