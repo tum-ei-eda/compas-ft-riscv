@@ -10,21 +10,13 @@ If you want to cite this work, please use the following paper.
 U Sharif, D Mueller-Gritschneder, U Schlichtmann: COMPAS: Compiler-assisted Software-implemented Hardware Fault Tolerance for RISC-V, 11th Mediterranean Conference on Embedded Computing (MECO), 2022
 
 @INPROCEEDINGS{9797144,
-
   author={Sharif, Uzair and Mueller-Gritschneder, Daniel and Schlichtmann, Ulf},
-
   booktitle={2022 11th Mediterranean Conference on Embedded Computing (MECO)}, 
-
   title={COMPAS: Compiler-assisted Software-implemented Hardware Fault Tolerance for RISC-V}, 
-
   year={2022},
-
   volume={},
-
   number={},
-
   pages={1-4},
-
   doi={10.1109/MECO55406.2022.9797144}}
 
 
