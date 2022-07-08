@@ -6,8 +6,11 @@ COMPAS is implemented such that it can be used as patch for the RISC-V LLVM tool
 
 ## Citation
 If you want to cite this work, please use the following paper.
+
 U Sharif, D Mueller-Gritschneder, U Schlichtmann
+
 COMPAS: Compiler-assisted Software-implemented Hardware Fault Tolerance for RISC-V 
+
 11th Mediterranean Conference on Embedded Computing (MECO), 2022
 
 
