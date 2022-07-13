@@ -29,7 +29,7 @@ class RISCVRasm : public RISCVDmr {
   // override the transformation function
   bool runOnMachineFunction(llvm::MachineFunction &) override;
 
- private:
+protected:
   // RTS register
   const unsigned kRTS{llvm::RISCV::X5};
   // check register
@@ -45,10 +45,32 @@ class RISCVRasm : public RISCVDmr {
   std::set<llvm::MachineBasicBlock *> err_bbs_{};
 
   // for initialization purposes
-  void init();
+  virtual void init() override;
   // this applies the RASM transformation on each BB
-  void harden();
+  virtual void harden();
   // inserts an error-handler BB to the machine function so that in case of
   // error detection we end up in this block
   void insertErrorBB() override;
+};
+
+class RISCVRacfed : public RISCVRasm {
+public:
+  // constructor
+  RISCVRacfed();
+  // override the transformation function
+  bool runOnMachineFunction(llvm::MachineFunction &) override;
+private:
+  // map containing the signature check instruction for each MBB
+  std::map<const llvm::MachineBasicBlock *, llvm::MachineInstr *> mbb_signature_check_instrs_{};
+  // map containing the runtime signature random arbitration (S-=subRanPrevVal) instruction for each MBB
+  std::map<const llvm::MachineBasicBlock *, llvm::MachineInstr *> mbb_signature_arbr_instrs_{};
+  // map each MBB to its sum of all intra-block instruction updates
+  std::map<const llvm::MachineBasicBlock *, short> mbb_sum_ii_sigs_{};
+  // map each MBB to its sum of all intra-block instruction updates
+  std::map<const llvm::MachineBasicBlock *, std::map<const llvm::MachineInstr *, short> > mi_random_value_{};
+  // for initialization purposes
+  virtual void init() override;
+  // this applies the RASM transformation on each BB
+  virtual void harden() override;
+
 };

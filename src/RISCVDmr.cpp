@@ -23,6 +23,7 @@
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 
+#define SWITCH_VOLATILE
 // #define DBG
 
 llvm::FunctionPass *llvm::createRISCVDmr() { return new RISCVDmr(); }
@@ -509,10 +510,9 @@ void RISCVDmr::protectStores() {
           (MI->isInlineAsm() &&
            MI->getOperand(0)
                .isSymbol())) { //[joh]: inline fence.i also maystore
-//#ifdef DBG
+                               //#ifdef DBG
         llvm::outs()
-            << "WARNING:"
-            << *MI
+            << "WARNING:" << *MI
             << "RISCVDmr::protectStores(): skip inline assembly and volatiles"
                "instructions -- needs fix\n";
 //#end
@@ -532,7 +532,7 @@ void RISCVDmr::protectStores() {
             }
           }
         }
-#endif //ifdef SWITCH_VOLATILE
+#endif // ifdef SWITCH_VOLATILE
         continue;
       }
       auto data_reg{MI->getOperand(0).getReg()};
@@ -547,13 +547,13 @@ void RISCVDmr::protectStores() {
 
         // [joh]: change MI prim to shadow (data* -> addr*)
         bool src_is_zero = MI->getOperand(0).getReg() == riscv_common::k0;
-        if(src_is_zero) {
+        if (src_is_zero) {
           MI->getOperand(0).setReg(shadow_zero);
           MI->getOperand(1).setReg(P2S_.at(addr_reg));
         }
 
         auto si{MF_->CloneMachineInstr(MI)};
-        if(!src_is_zero) {
+        if (!src_is_zero) {
           si->getOperand(1).setReg(P2S_.at(addr_reg));
         } else {
           // [joh]: load back from primary addr
@@ -1237,7 +1237,8 @@ void RISCVDmr::protectCalls() {
           continue;
         }
         if (riscv_common::inCSString(llvm::cl::enable_cfcss, fname_) ||
-            riscv_common::inCSString(llvm::cl::enable_rasm, fname_)) {
+            riscv_common::inCSString(llvm::cl::enable_rasm, fname_) ||
+            riscv_common::inCSString(llvm::cl::enable_racfed, fname_)) {
           if (r == llvm::RISCV::X5) {
             continue;
           }

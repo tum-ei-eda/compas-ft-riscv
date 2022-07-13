@@ -21,7 +21,7 @@
 #include "llvm/CodeGen/MachineFunctionPass.h"
 
 class RISCVDmr : public llvm::MachineFunctionPass {
- public:
+public:
   using RegSetType = std::set<llvm::Register>;
   using RegMapType = std::map<llvm::Register, llvm::Register>;
 
@@ -33,7 +33,7 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   // override the transformation function
   bool runOnMachineFunction(llvm::MachineFunction &) override;
 
- protected:
+protected:
   // for convenience
   llvm::MachineFunction *MF_{nullptr};
   const llvm::TargetInstrInfo *TII_{nullptr};
@@ -43,15 +43,16 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   bool calls_dmr_user_func_{false};
   bool calls_nondmr_user_func_{false};
 
-  // SH2: Infectous selective hardening (a DMR'ed function passes DMR onto its callees) // TBI
-  // SH1: Contained selective hardening and function call boundaries (a DMR'ed function does not pass DMR onto callees, non-DMR'ed callers prepare for DMR-callee)
-  // SH0: don't care
+  // SH2: Infectous selective hardening (a DMR'ed function passes DMR onto its
+  // callees) // TBI SH1: Contained selective hardening and function call
+  // boundaries (a DMR'ed function does not pass DMR onto callees, non-DMR'ed
+  // callers prepare for DMR-callee) SH0: don't care
   enum class SelectiveHardening { SH0, SH1, SH2 };
   // SCC0: non-DMR calling non-DMR function -> standard
   // SCC1: non-DMR calling DMR
   // SCC2: DMR calling non-DMR
   // SCC3: DMR calling DMR
-  enum class SelectiveCallingConvention {SCC0, SCC1, SCC2, SCC3};
+  enum class SelectiveCallingConvention { SCC0, SCC1, SCC2, SCC3 };
   // CGS: coarse grain scheduling of master and shadow instructions
   // FGS: fine grain scheduling of master and shadow instructions
   enum class InstructionSchedule { CGS, FGS };
@@ -78,8 +79,8 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   enum class ProtectStrategyLibCall { LC0, LC1, LC2 };
   // B1: check branch operands before branch (aka EDDI/SWIFT branch check)
   // B2: duplicate branch (aka NEMESIS)
-  // B3: duplicate branch and force negative offsets to harden fallthroughs (aka NEMESEC)
-  // B0: dont protect
+  // B3: duplicate branch and force negative offsets to harden fallthroughs (aka
+  // NEMESEC) B0: dont protect
   enum class ProtectStrategyBranch { B0, B1, B2, B3 };
   // TODO: maybe group all protect strategies into one concept
 
@@ -111,22 +112,22 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   // // MBBInfo handle
   // std::map<llvm::MachineBasicBlock *, MBBInfo> mbb_info_{};
   // mapping between primary and shadow registers
-  const RegMapType P2S_{{llvm::RISCV::X0, llvm::RISCV::X27},   // zero  : s11
-                        {llvm::RISCV::X1, llvm::RISCV::X7},    // ra    : t2
-                        {llvm::RISCV::X2, llvm::RISCV::X9},    // sp    : s1
-                        {llvm::RISCV::X3, llvm::RISCV::X22},   // gp    : s6
-                        {llvm::RISCV::X4, llvm::RISCV::X28},   // tp    : t3
-                        {llvm::RISCV::X5, llvm::RISCV::X29},   // t0    : t4
-                        {llvm::RISCV::X6, llvm::RISCV::X30},   // t1    : t5
-                        {llvm::RISCV::X8, llvm::RISCV::X31},   // s0/fp : t6
-                        {llvm::RISCV::X10, llvm::RISCV::X24},  // a0    : s8
-                        {llvm::RISCV::X11, llvm::RISCV::X25},  // a1    : s9
-                        {llvm::RISCV::X12, llvm::RISCV::X26},  // a2    : s10
-                        {llvm::RISCV::X13, llvm::RISCV::X21},  // a3    : s5
-                        {llvm::RISCV::X14, llvm::RISCV::X20},  // a4    : s4
-                        {llvm::RISCV::X15, llvm::RISCV::X23},  // a5    : s7
-                        {llvm::RISCV::X16, llvm::RISCV::X19},  // a6    : s3
-                        {llvm::RISCV::X17, llvm::RISCV::X18},  // a7    : s2
+  const RegMapType P2S_{{llvm::RISCV::X0, llvm::RISCV::X27},  // zero  : s11
+                        {llvm::RISCV::X1, llvm::RISCV::X7},   // ra    : t2
+                        {llvm::RISCV::X2, llvm::RISCV::X9},   // sp    : s1
+                        {llvm::RISCV::X3, llvm::RISCV::X22},  // gp    : s6
+                        {llvm::RISCV::X4, llvm::RISCV::X28},  // tp    : t3
+                        {llvm::RISCV::X5, llvm::RISCV::X29},  // t0    : t4
+                        {llvm::RISCV::X6, llvm::RISCV::X30},  // t1    : t5
+                        {llvm::RISCV::X8, llvm::RISCV::X31},  // s0/fp : t6
+                        {llvm::RISCV::X10, llvm::RISCV::X24}, // a0    : s8
+                        {llvm::RISCV::X11, llvm::RISCV::X25}, // a1    : s9
+                        {llvm::RISCV::X12, llvm::RISCV::X26}, // a2    : s10
+                        {llvm::RISCV::X13, llvm::RISCV::X21}, // a3    : s5
+                        {llvm::RISCV::X14, llvm::RISCV::X20}, // a4    : s4
+                        {llvm::RISCV::X15, llvm::RISCV::X23}, // a5    : s7
+                        {llvm::RISCV::X16, llvm::RISCV::X19}, // a6    : s3
+                        {llvm::RISCV::X17, llvm::RISCV::X18}, // a7    : s2
 
                         {llvm::RISCV::F0_F, llvm::RISCV::F7_F},
                         {llvm::RISCV::F1_F, llvm::RISCV::F9_F},
@@ -293,7 +294,7 @@ class RISCVDmr : public llvm::MachineFunctionPass {
   bool use_shadow_for_stack_ops_{true};
   int frame_size_{0};
 
-  void init();
+  virtual void init();
   void analyze_function();
   void calc_framesize();
   void updateSelectiveCalls();
