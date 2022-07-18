@@ -23,6 +23,8 @@
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 
+#include "RISCVRasm.h"
+
 #define SWITCH_VOLATILE
 // #define DBG
 
@@ -508,9 +510,8 @@ void RISCVDmr::protectStores() {
                                        // ordered
                                        // memory instr
           (MI->isInlineAsm() &&
-           MI->getOperand(0)
-               .isSymbol())) { //[joh]: inline fence.i also maystore
-                               //#ifdef DBG
+           MI->getOperand(0).isSymbol())) { //[joh]: inline fence.i also
+                                            // maystore #ifdef DBG
         llvm::outs()
             << "WARNING:" << *MI
             << "RISCVDmr::protectStores(): skip inline assembly and volatiles"
@@ -957,6 +958,7 @@ void RISCVDmr::updateSelectiveCalls() {
               spill_regs.emplace(r);
             }
           }
+
           // ret-regs would be changed after func call hence dont need to stack
           // them. FIXME: Also remove a0 and a1 always when indirect call is a
           // tail
@@ -977,6 +979,17 @@ void RISCVDmr::updateSelectiveCalls() {
                                   // of DMR context before return, because we
                                   // could return back to a DMR-function instead
                                   // of a non-DMR one
+          }
+
+          // if the caller is also protected with RACFED we need to be careful
+          // with preserving the runtime signature register S. Since it has to
+          // be stacked, but all push and pop instructions are protected with
+          // intra-block signature updates, we need to stack the runtime
+          // signature register as near as possible to the function call itself
+          // which is handled by the RACFED pass
+          if (riscv_common::inCSString(llvm::cl::enable_racfed,
+                                       std::string{MF_->getName()})) {
+            spill_regs.erase(RISCVRacfed::get_runtime_signature_reg());
           }
 
           std::vector<llvm::Register> sregs(spill_regs.begin(),
@@ -1397,14 +1410,42 @@ void RISCVDmr::protectBranches() {
         auto taken_BB{MI->getOperand(2).getMBB()};
 
         // fall-through path dup
+
+        auto nottaken_BB{MBB->getFallThrough()};
+
+        auto nemesis_nottaken_BB{MF_->CreateMachineBasicBlock()};
+
+        llvm::MachineFunction::iterator mbb;
+        for (mbb = MF_->begin(); mbb != MF_->end(); ++mbb) {
+          if (&(*mbb) == nottaken_BB)
+            break;
+        }
+        MF_->insert(mbb, nemesis_nottaken_BB);
+
         auto si{MF_->CloneMachineInstr(MI)};
         for (auto &o : si->operands()) {
           if (o.isReg()) {
             o.setReg(P2S_.at(o.getReg()));
           }
         }
+
+        MBB->ReplaceUsesOfBlockWith(
+            nottaken_BB,
+            nemesis_nottaken_BB); // maybe instead replaceSuccessor()
+        nemesis_nottaken_BB->addSuccessor(nottaken_BB);
+        nemesis_bbs_.emplace(nemesis_nottaken_BB);
+
+        //        auto si{MF_->CloneMachineInstr(MI)};
+        //        for (auto &o : si->operands()) {
+        //          if (o.isReg()) {
+        //            o.setReg(P2S_.at(o.getReg()));
+        //          }
+        //        }
+        //        si->getOperand(2).setMBB(err_bb_);
+        //        MBB->insertAfter(MI, si);
+
         si->getOperand(2).setMBB(err_bb_);
-        MBB->insertAfter(MI, si);
+        nemesis_nottaken_BB->push_back(si);
 
         // taken path dup
         auto nemesis_taken_BB{
