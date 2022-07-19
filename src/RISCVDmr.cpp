@@ -1420,9 +1420,40 @@ void RISCVDmr::protectBranches() {
         assert(MI->getOperand(2).isMBB() && "this branch is odd!");
         auto taken_BB{MI->getOperand(2).getMBB()};
 
+        if (err_bb_ == taken_BB) {
+          continue; // do not duplicate error existing dmr checks implemented
+                    // with conditional branching
+        }
+
+        llvm::MachineInstr *si;
+
         // fall-through path dup
 
-        auto nottaken_BB{MBB->getFallThrough()};
+        llvm::MachineBasicBlock *nottaken_BB = MBB->getFallThrough();
+        if (nottaken_BB == nullptr) {
+          // no fallthrough found. Most likely we have a
+          // "b<cond> <>, taken \\ j nottaken" situation here, where the
+          // unconditional is part of the MBB, i.e. LLVM IR did not terminate BB
+          // with conditional branch. Solution: splice BB here at conditional!
+          llvm::outs() << "No fallthrough successor found for MBB[" << MBB
+                       << "]: " << *MBB << "\n";
+          MBB->splitAt(*MI); // we split the the MBB at the conditional branch,
+                             // because we need real CFG conform basic block
+                             // traversal for hardening
+          nottaken_BB = MBB->getFallThrough(); // now MBB has the correct
+                                               // implicit fallthrough on not
+                                               // taking the conditional branch
+          MBB->addSuccessor(
+              taken_BB); // due to split the conditional branch is still active
+                         // but the taken not a registered successor
+        }
+        assert(nottaken_BB != nullptr && taken_BB != nullptr &&
+               "Conditional branch is odd!");
+
+        llvm::outs() //<< "split MBB into \n"
+            << "\n* not-taken[" << nottaken_BB << "]:" << *nottaken_BB
+            << "\n* taken[" << taken_BB << "]:" << *taken_BB << " of MBB["
+            << MBB << "]: " << *MBB << "\n";
 
         auto nemesis_nottaken_BB{MF_->CreateMachineBasicBlock()};
 
@@ -1433,27 +1464,25 @@ void RISCVDmr::protectBranches() {
         }
         MF_->insert(mbb, nemesis_nottaken_BB);
 
-        auto si{MF_->CloneMachineInstr(MI)};
+        si = MF_->CloneMachineInstr(MI);
         for (auto &o : si->operands()) {
           if (o.isReg()) {
             o.setReg(P2S_.at(o.getReg()));
           }
         }
 
-        MBB->ReplaceUsesOfBlockWith(
-            nottaken_BB,
-            nemesis_nottaken_BB); // maybe instead replaceSuccessor()
+        if (MBB->isSuccessor(nottaken_BB)) {
+          MBB->replaceSuccessor(nottaken_BB, nemesis_nottaken_BB);
+          // MBB->ReplaceUsesOfBlockWith(nottaken_BB, nemesis_nottaken_BB);
+        } else {
+          llvm::outs() << "not taken[" << nottaken_BB << "]:" << *nottaken_BB
+                       << "not a successor of MBB[" << MBB << "]: " << *MBB
+                       << "\n";
+          assert(false && "Not a sucessor!");
+        }
+
         nemesis_nottaken_BB->addSuccessor(nottaken_BB);
         nemesis_bbs_.emplace(nemesis_nottaken_BB);
-
-        //        auto si{MF_->CloneMachineInstr(MI)};
-        //        for (auto &o : si->operands()) {
-        //          if (o.isReg()) {
-        //            o.setReg(P2S_.at(o.getReg()));
-        //          }
-        //        }
-        //        si->getOperand(2).setMBB(err_bb_);
-        //        MBB->insertAfter(MI, si);
 
         si->getOperand(2).setMBB(err_bb_);
         nemesis_nottaken_BB->push_back(si);
