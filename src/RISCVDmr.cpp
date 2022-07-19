@@ -1105,6 +1105,17 @@ void RISCVDmr::protectCalls() {
       regs_need_preservation.clear();
     }
 
+    // if the caller is also protected with RACFED we need to be careful
+    // with preserving the runtime signature register S. Since it has to
+    // be stacked, but all push and pop instructions are protected with
+    // intra-block signature updates, we need to stack the runtime
+    // signature register as near as possible to the function call itself
+    // which is handled by the RACFED pass
+    if (riscv_common::inCSString(llvm::cl::enable_racfed,
+                                 std::string{MF_->getName()})) {
+      regs_need_preservation.erase(RISCVRacfed::get_runtime_signature_reg());
+    }
+
     std::vector<llvm::Register> stacked_regs{regs_need_preservation.begin(),
                                              regs_need_preservation.end()};
 
