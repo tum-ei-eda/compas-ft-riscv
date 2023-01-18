@@ -21,6 +21,8 @@
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 
+#define N_MIN_INTRA_INSTRUCTION_COUNT 3
+
 llvm::FunctionPass *llvm::createRISCVRasm() { return new RISCVRasm(); }
 
 llvm::FunctionPass *llvm::createRISCVRacfed() { return new RISCVRacfed(); }
@@ -1017,7 +1019,7 @@ void RISCVRacfed::generate_intrablock_signature_updates() {
 
     mbb_sum_ii_sigs_[&MBB] = 0; // force to 0
 
-    if (orig_instrs.size() > 2) {
+    if (orig_instrs.size() >= N_MIN_INTRA_INSTRUCTION_COUNT) {
       // There is no point in intra block protection for basic blocks with
       // only 2 or 1 instruction since all intra block errors are also legal
       // control flow
