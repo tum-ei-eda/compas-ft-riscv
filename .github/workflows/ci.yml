@@ -1,0 +1,66 @@
+name: Build LLVM and patch LLVM with COMPAS
+
+on:
+  push:
+    paths-ignore:
+    - doc/
+  pull_request:
+    paths-ignore:
+    - doc/
+  workflow_dispatch: {}
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build_etiss:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake git
+
+    - name: Requirements (LLVM base build)
+      working-directory: ${{runner.workspace}}
+      run: |
+        git clone --recurse-submodules https://github.com/llvm/llvm-project.git llvm-project_src
+        cd llvm-project_src
+        git checkout llvmorg-13.0.0
+        cmake -S llvm -B build -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_INSTALL_PREFIX=${{runner.workspace}}/llvm_install \
+          -DCMAKE_CXX_STANDARD=17 \
+          -DLLVM_ENABLE_PROJECTS=clang \
+          -DLLVM_TARGETS_TO_BUILD=RISCV \
+          -DLLVM_ENABLE_ASSERTIONS=ON \
+          ../llvm
+        cmake --build build --parallel $(nproc)
+
+    - name: Clone COMPAS (into LLVM)
+      working-directory: ${{runner.workspace}}/llvm-project_src/llvm/lib/Target/RISCV/
+      uses: actions/checkout@v4
+      with:
+        path: compas-ft-riscv_src
+        submodules: true
+
+    - name: Patch (LLVM base build)
+      working-directory: ${{runner.workspace}}/llvm-project_src
+      run: |
+        patch -s p0 < llvm/lib/Target/RISCV/compas-ft-riscv/patches/llvm13.0.0_src.patch
+
+    - name: Re-Compile LLVM with COMPAS
+      working-directory: ${{runner.workspace}}/llvm-project_src
+      run: |
+        cmake --build build --parallel $(nproc)
+
+    - name: Install LLVM
+      working-directory: ${{runner.workspace}}/llvm-project_src
+      run: |
+        cmake --build build --parallel $(nproc) --target install
+
+    - name: Upload compiled ETISS
+      uses: actions/upload-artifact@v4
+      with:
+        name: llvm13.0.0-compas-u22.04-prebuilt
+        path: ${{runner.workspace}}/llvm_install
