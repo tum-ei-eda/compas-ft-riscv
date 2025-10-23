@@ -40,12 +40,13 @@ jobs:
     - name: Clone COMPAS (into LLVM)
       uses: actions/checkout@v4
       with:
-        path: ${{runner.workspace}}/llvm-project_src/llvm/lib/Target/RISCV/compas-ft-riscv_src
+        path: compas-ft-riscv_src
         submodules: true
 
     - name: Patch (LLVM base build)
       working-directory: ${{runner.workspace}}/llvm-project_src
       run: |
+        ln -s ${{runner.workspace}}/compas-ft-riscv_src llvm/lib/Target/RISCV/compas-ft-riscv
         patch -s p0 < llvm/lib/Target/RISCV/compas-ft-riscv/patches/llvm13.0.0_src.patch
 
     - name: Re-Compile LLVM with COMPAS
