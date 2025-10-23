@@ -31,7 +31,7 @@ struct ISAConfig {
 };
 // Reg Types
 enum class RegType { I, FS, FD, FH };
-// ED0: on error-detection, jump to error-block and keep on executing it
+// ED0: on error-detection, jump to error-block and keep executing it
 // ED1: same as ED0 but it quits after notifying safety-unit
 // ED2: on error-detection, call a function passing the specific checker's
 //      code

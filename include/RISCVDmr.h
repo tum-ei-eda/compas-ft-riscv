@@ -80,7 +80,7 @@ protected:
   // B1: check branch operands before branch (aka EDDI/SWIFT branch check)
   // B2: duplicate branch (aka NEMESIS)
   // B3: duplicate branch and force negative offsets to harden fallthroughs (aka
-  // NEMESEC) B0: dont protect
+  // COMPASEC) B0: dont protect
   enum class ProtectStrategyBranch { B0, B1, B2, B3 };
   // TODO: maybe group all protect strategies into one concept
 

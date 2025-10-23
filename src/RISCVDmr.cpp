@@ -1573,7 +1573,7 @@ void RISCVDmr::protectBranches() {
         auto nemesis_taken_BB{MF_->CreateMachineBasicBlock()};
         MF_->insert(MF_->end(), nemesis_taken_BB);
         MBB->ReplaceUsesOfBlockWith(
-            taken_BB, nemesis_taken_BB); // maybe isntead replaceSuccessor()
+            taken_BB, nemesis_taken_BB); // maybe instead replaceSuccessor()
         nemesis_taken_BB->addSuccessor(taken_BB);
         nemesis_bbs_.emplace(nemesis_taken_BB);
 

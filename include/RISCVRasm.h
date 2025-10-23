@@ -45,7 +45,8 @@ protected:
   // pointer to err-bb that is introdcued in this pass
   llvm::MachineBasicBlock *cf_err_bb_{nullptr};
   // map each MBB to its signatures
-  std::map<const llvm::MachineBasicBlock *, std::pair<short, short>> mbb_sigs_{};
+  std::map<const llvm::MachineBasicBlock *, std::pair<short, short>>
+      mbb_sigs_{};
   // for random number generation using uniform distribution
   std::default_random_engine gen_{};
   std::uniform_int_distribution<short> unif_dist_{-500, 500};
@@ -94,7 +95,8 @@ protected:
   calculate_adjustment(const llvm::MachineBasicBlock *source_bb,
                        const llvm::MachineBasicBlock *target_bb) override;
 
-  virtual void save_restore_runtime_signature(llvm::MachineInstr *call_instr) override;
+  virtual void
+  save_restore_runtime_signature(llvm::MachineInstr *call_instr) override;
 
   virtual void generate_intrablock_signature_updates() override;
 
