@@ -82,7 +82,7 @@ NZDC: https://ieeexplore.ieee.org/document/7544291
 NEMESIS: https://ieeexplore.ieee.org/document/8203792  
 
 CFCSS: https://ieeexplore.ieee.org/document/994926  
-RASM: https://ieeexplore.ieee.org/document/8067656
-RACFED: https://doi.org/10.1007/978-3-319-99130-6_15
+RASM: https://ieeexplore.ieee.org/document/8067656  
+RACFED: https://doi.org/10.1007/978-3-319-99130-6_15  
 
 REPAIR: https://dl.acm.org/doi/abs/10.1145/3477001
