@@ -38,10 +38,9 @@ jobs:
         cmake --build build --parallel $(nproc)
 
     - name: Clone COMPAS (into LLVM)
-      working-directory: ${{runner.workspace}}/llvm-project_src/llvm/lib/Target/RISCV/
       uses: actions/checkout@v4
       with:
-        path: compas-ft-riscv_src
+        path: ${{runner.workspace}}/llvm-project_src/llvm/lib/Target/RISCV/compas-ft-riscv_src
         submodules: true
 
     - name: Patch (LLVM base build)
