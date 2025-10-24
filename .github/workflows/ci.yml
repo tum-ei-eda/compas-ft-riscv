@@ -37,7 +37,7 @@ jobs:
           ../llvm
         cmake --build build --parallel $(nproc)
 
-    - name: Clone COMPAS (into LLVM)
+    - name: Clone COMPAS
       uses: actions/checkout@v4
       with:
         path: compas-ft-riscv_src
@@ -45,9 +45,8 @@ jobs:
 
     - name: Patch (LLVM base build)
       run: |
-        cd ${{runner.workspace}}/llvm-project_src
-        ln -s ${PWD}/../compas-ft-riscv_src llvm/lib/Target/RISCV/compas-ft-riscv
-        patch -s p0 < llvm/lib/Target/RISCV/compas-ft-riscv/patches/llvm13.0.0_src.patch
+        ln -s ${{runner.workspace}}/compas-ft-riscv_src ${{runner.workspace}}/llvm-project_src/llvm/lib/Target/RISCV/compas-ft-riscv
+        cd ${{runner.workspace}}/llvm-project_src && patch -s p0 < llvm/lib/Target/RISCV/compas-ft-riscv/patches/llvm13.0.0_src.patch
 
     - name: Re-Compile LLVM with COMPAS
       working-directory: ${{runner.workspace}}/llvm-project_src
