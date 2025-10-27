@@ -56,9 +56,11 @@ void RISCVCfcss::init() {
   // reset
   mbb_info_.clear();
   cf_err_bb_ = nullptr;
-
+  config_.eds = riscv_common::ErrorDetectionStrategy::ED3; // TODO: should be
+                                                           // exposed to CLI
   if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
-      config_.eds == riscv_common::ErrorDetectionStrategy::ED1) {
+      config_.eds == riscv_common::ErrorDetectionStrategy::ED1 ||
+      config_.eds == riscv_common::ErrorDetectionStrategy::ED3) {
     // insert an error-BB in MF_
     insertErrorBB();
   } else {
@@ -291,30 +293,52 @@ void RISCVCfcss::insertErrorBB() {
 
   auto DLL{MF_->front().front().getDebugLoc()};
 
-  // storing '1' to addr : (0xfff8 = 0x10000 - 0x8):
-  // lui t1, 16 -> makes t1 = 0x10000
-  llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
-                TII_->get(llvm::RISCV::LUI))
-      .addReg(llvm::RISCV::X6)
-      .addImm(16);
-  // addi t2, zero, 1 -> makes t2 = 1
-  llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
-                TII_->get(llvm::RISCV::ADDI))
-      .addReg(llvm::RISCV::X7)
-      .addReg(riscv_common::k0)
-      .addImm(1);
-  // sw t2, -8(t1) -> stores t2 to (t1 - 8) i.e. store 1 to 0xfff8
-  llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
-                TII_->get(isa_config_.store_opcode))
-      .addReg(llvm::RISCV::X7)
-      .addReg(llvm::RISCV::X6)
-      .addImm(-8);
-
-  // to encode the error-BB in order to make it a label so as to be able to
-  // jump to it from anywhere in asm
-  cf_err_bb_->addSuccessor(cf_err_bb_);
-
   if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0) {
+    // storing '1' to addr : (0xfff8 = 0x10000 - 0x8):
+    // lui t1, 16 -> makes t1 = 0x10000
+    llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
+                  TII_->get(llvm::RISCV::LUI))
+        .addReg(llvm::RISCV::X6)
+        .addImm(16);
+    // addi t2, zero, 1 -> makes t2 = 1
+    llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
+                  TII_->get(llvm::RISCV::ADDI))
+        .addReg(llvm::RISCV::X7)
+        .addReg(riscv_common::k0)
+        .addImm(1);
+    // sw t2, -8(t1) -> stores t2 to (t1 - 8) i.e. store 1 to 0xfff8
+    llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
+                  TII_->get(isa_config_.store_opcode))
+        .addReg(llvm::RISCV::X7)
+        .addReg(llvm::RISCV::X6)
+        .addImm(-8);
+
+  } else if (config_.eds == riscv_common::ErrorDetectionStrategy::ED3) {
+    // storing '93' to a7, aka SYS_exit code ECALL code:
+    llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
+                  TII_->get(llvm::RISCV::ADDI))
+        .addReg(llvm::RISCV::X17) // a7
+        .addReg(llvm::RISCV::X0)  // zero
+        .addImm(93);
+    // storing '-512' to a0, aka exit return value when ecall forces newlib sys
+    // exit:
+    llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
+                  TII_->get(llvm::RISCV::ADDI))
+        .addReg(llvm::RISCV::X10) // a7
+        .addReg(llvm::RISCV::X0)  // zero
+        .addImm(-256);
+    // invoke 'ecall'
+    llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
+                  TII_->get(llvm::RISCV::ECALL));
+  }
+
+  if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
+      config_.eds == riscv_common::ErrorDetectionStrategy::ED3) {
+
+    // to encode the error-BB in order to make it a label so as to be able to
+    // jump to it from anywhere in asm
+    cf_err_bb_->addSuccessor(cf_err_bb_);
+
     // keep on repeating this errBB as we dont want to execute code now
     // J cf_err_bb_ = JALR X0, cf_err_bb_ because J is a pseudo-jump instr in
     // RISCV

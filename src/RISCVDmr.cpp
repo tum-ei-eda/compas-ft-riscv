@@ -23,6 +23,9 @@
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 
+#include "RISCVRasm.h"
+
+#define SWITCH_VOLATILE
 // #define DBG
 
 llvm::FunctionPass *llvm::createRISCVDmr() { return new RISCVDmr(); }
@@ -41,6 +44,22 @@ bool RISCVDmr::ignoreMF() {
   } else {
     if (llvm::cl::enable_nzdc.size()) {
       llvm::outs() << "COMPAS: Ignoring " << fname_ << " for NZDC\n";
+    }
+  }
+  // is this function passed in NZDC+NEMESIS list?
+  if (riscv_common::inCSString(llvm::cl::enable_nzdc_nemesis, fname_)) {
+    ret = false;
+  } else {
+    if (llvm::cl::enable_nzdc_nemesis.size()) {
+      llvm::outs() << "COMPAS: Ignoring " << fname_ << " for NZDC+NEMESIS\n";
+    }
+  }
+  // is this function passed in NZDC+NEMESEC list?
+  if (riscv_common::inCSString(llvm::cl::enable_nzdc_nemesec, fname_)) {
+    ret = false;
+  } else {
+    if (llvm::cl::enable_nzdc_nemesec.size()) {
+      llvm::outs() << "COMPAS: Ignoring " << fname_ << " for NZDC+NEMESEC\n";
     }
   }
   // is this function passed in SWIFT list?
@@ -64,28 +83,56 @@ bool RISCVDmr::ignoreMF() {
 }
 
 bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
+
   MF_ = &MF;
   fname_ = std::string{MF_->getName()};
-
+  auto add_errorBB_once = [&]() {
+    if (err_bb_ == nullptr) {
+      if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
+          config_.eds == riscv_common::ErrorDetectionStrategy::ED1 ||
+          config_.eds == riscv_common::ErrorDetectionStrategy::ED3) {
+        // insert an error-BB in MF_
+        insertErrorBB();
+      } else {
+        assert(0 && "TODO");
+      }
+    }
+  };
   // if this function is not to be transformed then return early
-  if (ignoreMF()) {
-    return false;
+  init(); // FIXME: init() will insert errorBBs for all functions (non-DMR, DMR,
+          // and DMR calling non-DMRs alike)
+
+  auto ignore = ignoreMF();
+  if (!ignore) {
+    add_errorBB_once();
+    analyze_function();
+    calc_framesize();
+    duplicateInstructions();
+    protectCalls();
+    protectStores();
+    protectLoads();
+    protectBranches();
+    if (llvm::cl::enable_repair) {
+      repair();
+    }
+    protectGP();
+  } else {
+    analyze_function(); // FIXME
+    if (calls_dmr_user_func_) {
+      add_errorBB_once();
+    }
+    calc_framesize();
   }
 
-  init();
-  duplicateInstructions();
-  protectCalls();
-  protectStores();
-  protectLoads();
-  protectBranches();
-
-  if (llvm::cl::enable_repair) {
-    repair();
+  if (config_.sh != SelectiveHardening::SH0 && !user_calls_.empty()) {
+    llvm::outs() << "d0: Updating function call according to selective "
+                    "hardening technique\n";
+    // only if we are in a non-DMRed function we now need to force an ErrorBlock
+    // insertion
+    updateSelectiveCalls();
   }
 
-  protectGP();
-
-  return true;
+  return !ignore;
 }
 
 void RISCVDmr::protectGP() {
@@ -109,7 +156,9 @@ void RISCVDmr::protectGP() {
 void RISCVDmr::init() {
   TII_ = MF_->getSubtarget().getInstrInfo();
   MRI_ = &MF_->getRegInfo();
-  config_.eds = riscv_common::ErrorDetectionStrategy::ED0;
+  TRI_ = MRI_->getTargetRegisterInfo();
+  config_.eds = riscv_common::ErrorDetectionStrategy::ED3; // TODO: should be
+                                                           // exposed to CLI
   for (auto &s : llvm::codegen::getMAttrs()) {
     if (!s.compare(std::string{"+f"}) || !s.compare(std::string{"+d"})) {
       uses_FPregfile_ = true;
@@ -134,9 +183,27 @@ void RISCVDmr::init() {
     config_.pss = ProtectStrategyStore::S3;
     config_.psl = ProtectStrategyLoad::L0;
     config_.psuc = ProtectStrategyUserCall::UC3;
-    config_.psb = ProtectStrategyBranch::B2;
+    config_.psb = ProtectStrategyBranch::B0;
 
     llvm::outs() << "COMPAS: Running NZDC pass with " << schedule_string
+                 << " on " << fname_ << "\n";
+  } else if (riscv_common::inCSString(llvm::cl::enable_nzdc_nemesis, fname_)) {
+    // setting up nzdc configs
+    config_.pss = ProtectStrategyStore::S3;
+    config_.psl = ProtectStrategyLoad::L0;
+    config_.psuc = ProtectStrategyUserCall::UC3;
+    config_.psb = ProtectStrategyBranch::B2;
+
+    llvm::outs() << "COMPAS: Running NZDC+NEMESIS pass with " << schedule_string
+                 << " on " << fname_ << "\n";
+  } else if (riscv_common::inCSString(llvm::cl::enable_nzdc_nemesec, fname_)) {
+    // setting up nzdc configs
+    config_.pss = ProtectStrategyStore::S3;
+    config_.psl = ProtectStrategyLoad::L0;
+    config_.psuc = ProtectStrategyUserCall::UC3;
+    config_.psb = ProtectStrategyBranch::B3;
+
+    llvm::outs() << "COMPAS: Running NZDC+NEMESEC pass with " << schedule_string
                  << " on " << fname_ << "\n";
   } else if (riscv_common::inCSString(llvm::cl::enable_swift, fname_)) {
     // setting swift configs
@@ -173,14 +240,11 @@ void RISCVDmr::init() {
   shadow_loads_.clear();
   frame_size_ = 0;
 
-  if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
-      config_.eds == riscv_common::ErrorDetectionStrategy::ED1) {
-    // insert an error-BB in MF_
-    insertErrorBB();
-  } else {
-    assert(0 && "TODO");
-  }
-
+#ifdef DBG
+  llvm::outs() << "COMPAS_DBG: init() done\n";
+#endif
+}
+void RISCVDmr::analyze_function() {
   // collecting special instruction points in containers for later use
   // std::set<llvm::MachineInstr *> stores_avoid_for_prot{};
   std::set<std::string> already_seen_func_names{};
@@ -202,17 +266,22 @@ void RISCVDmr::init() {
       } else if (MI.mayLoad()) {
         loads_.emplace(&MI);
       } else if (MI.isCall()) {
-        if (MI.getOpcode() == llvm::RISCV::PseudoCALLIndirect) {
+        if (MI.getOpcode() == llvm::RISCV::PseudoCALLIndirect ||
+            MI.getOpcode() ==
+                llvm::RISCV::PseudoTAILIndirect) { //[joh]: tail may also be an
+                                                   // indirect call
           indirect_calls_.emplace(&MI);
           continue;
         }
-
         assert(MI.getOperand(0).isGlobal() || MI.getOperand(0).isSymbol());
 
         auto called_func_name{getCalledFuncName(&MI)};
-        if (riscv_common::setmapContains(knownLibcalls2Duplicable_,
+        if (!is_func_dmr(called_func_name) &&
+            riscv_common::setmapContains(knownLibcalls2Duplicable_,
                                          called_func_name)) {
           lib_calls_.emplace(&MI);
+          llvm::outs() << "\tNOTE: Considering " << called_func_name
+                       << " as a lib-func call\n";
         } else {
           user_calls_.emplace(&MI);
 
@@ -229,26 +298,44 @@ void RISCVDmr::init() {
     }
   }
 
+  for (auto MI : user_calls_) {
+    auto callee_func_name{getCalledFuncName(MI)};
+    if (is_func_dmr(callee_func_name)) {
+      calls_dmr_user_func_ = true;
+    } else {
+      calls_nondmr_user_func_ = true;
+    }
+  }
+
+#ifdef DBG
+  llvm::outs() << "COMPAS_DBG: analyze_function() done\n";
+#endif
+}
+
+void RISCVDmr::calc_framesize() {
   for (auto &MI : *entry_bb_) {
-    // filtering for stack allocation instruction (addi sp, sp, x)
     if (MI.getFlag(llvm::MachineInstr::FrameSetup) && !MI.isCFIInstruction() &&
-        MI.getNumOperands() == 3 && MI.getOpcode() == llvm::RISCV::ADDI &&
         MI.getOperand(0).isReg() &&
-        MI.getOperand(0).getReg() == riscv_common::kSP &&
-        MI.getOperand(1).isReg() &&
-        MI.getOperand(1).getReg() == riscv_common::kSP &&
-        MI.getOperand(2).isImm()) {
+        MI.getOperand(0).getReg() ==
+            riscv_common::kSP // is reg and stack pointer
+        && MI.getOperand(1).isReg() &&
+        MI.getOperand(1).getReg() ==
+            riscv_common::kSP       // is reg and stack pointer
+        && MI.getOperand(2).isImm() // is immediate field
+        // < this check for `addi sp, sp, -<stacksize>` might just ask for
+        // trouble
+    ) {
       frame_size_ = std::abs(MI.getOperand(2).getImm());
     }
   }
 
 #ifdef DBG
-  llvm::outs() << "COMPAS_DBG: init() done\n";
+  llvm::outs() << "COMPAS_DBG: calc_framesize() done\n";
 #endif
 }
 
-llvm::MachineInstr *RISCVDmr::genShadowFromPrimary(
-    const llvm::MachineInstr *MI) const {
+llvm::MachineInstr *
+RISCVDmr::genShadowFromPrimary(const llvm::MachineInstr *MI) const {
   auto si{MF_->CloneMachineInstr(MI)};
   for (auto &o : si->operands()) {
     if (o.isReg()) {
@@ -419,6 +506,36 @@ void RISCVDmr::protectStores() {
     // for (auto MI : stores_to_protect_) {
     for (auto MI : stores_) {
       auto opcode{MI->getOpcode()};
+      if (MI->hasOrderedMemoryRef() || //[joh] do not protect volatile or
+                                       // ordered
+                                       // memory instr
+          (MI->isInlineAsm() &&
+           MI->getOperand(0).isSymbol())) { //[joh]: inline fence.i also
+                                            // maystore #ifdef DBG
+        llvm::outs()
+            << "WARNING:" << *MI
+            << "RISCVDmr::protectStores(): skip inline assembly and volatiles"
+               "instructions -- needs fix\n";
+//#end
+#ifdef SWITCH_VOLATILE
+        for (const auto &op : MI->operands()) {
+          if (op.isReg()) {
+            if (riscv_common::getRegType(op.getReg()) ==
+                riscv_common::RegType::I) {
+              llvm::BuildMI(*MI->getParent(), MI->getIterator(),
+                            MI->getDebugLoc(), TII_->get(llvm::RISCV::BNE))
+                  .addReg(op.getReg())
+                  .addReg(P2S_.at(op.getReg()))
+                  .addMBB(err_bb_);
+            } else {
+              syncFPRegs(MI->getParent(), MI->getIterator(), op.getReg(),
+                         P2S_.at(op.getReg()));
+            }
+          }
+        }
+#endif // ifdef SWITCH_VOLATILE
+        continue;
+      }
       auto data_reg{MI->getOperand(0).getReg()};
       auto addr_reg{MI->getOperand(1).getReg()};
       auto MBB{MI->getParent()};
@@ -428,8 +545,21 @@ void RISCVDmr::protectStores() {
 
       if (riscv_common::setmapContains(LBStore2Load_, opcode)) {
         auto shadow_zero{P2S_.at(riscv_common::k0)};
+
+        // [joh]: change MI prim to shadow (data* -> addr*)
+        bool src_is_zero = MI->getOperand(0).getReg() == riscv_common::k0;
+        if (src_is_zero) {
+          MI->getOperand(0).setReg(shadow_zero);
+          MI->getOperand(1).setReg(P2S_.at(addr_reg));
+        }
+
         auto si{MF_->CloneMachineInstr(MI)};
-        si->getOperand(1).setReg(P2S_.at(addr_reg));
+        if (!src_is_zero) {
+          si->getOperand(1).setReg(P2S_.at(addr_reg));
+        } else {
+          // [joh]: load back from primary addr
+          si->getOperand(1).setReg(addr_reg);
+        }
         si->setDesc(TII_->get(LBStore2Load_.at(opcode)));
         MBB->insertAfter(MI, si);
         loadbacks_.emplace(si);
@@ -629,9 +759,9 @@ RISCVDmr::RegSetType RISCVDmr::getRetRegs(const llvm::MachineInstr *MI) const {
 std::string RISCVDmr::getCalledFuncName(const llvm::MachineInstr *MI) const {
   std::string called_func_name{};
   if (MI->getOperand(0).isGlobal()) {
-    called_func_name = MI->getOperand(0).getGlobal()->getName();
+    called_func_name = std::string(MI->getOperand(0).getGlobal()->getName());
   } else {
-    called_func_name = MI->getOperand(0).getSymbolName();
+    called_func_name = std::string(MI->getOperand(0).getSymbolName());
   }
 
   return called_func_name;
@@ -659,6 +789,259 @@ void RISCVDmr::moveIntoShadow(llvm::MachineBasicBlock *MBB,
         .addReg(rp);
   } else if (riscv_common::getRegType(rp) == riscv_common::RegType::FH) {
     assert(0 && "TODO");
+  }
+}
+
+bool RISCVDmr::is_func_dmr(const std::string &func_name) {
+  return (riscv_common::inCSString(llvm::cl::enable_nzdc, func_name) ||
+          riscv_common::inCSString(llvm::cl::enable_nzdc_nemesis, func_name) ||
+          riscv_common::inCSString(llvm::cl::enable_nzdc_nemesec, func_name) ||
+          riscv_common::inCSString(llvm::cl::enable_swift, func_name) ||
+          riscv_common::inCSString(llvm::cl::enable_eddi, func_name))
+             ? true
+             : false;
+}
+
+void RISCVDmr::updateSelectiveCalls() {
+
+  if (config_.sh == SelectiveHardening::SH0) {
+
+  } else if (config_.sh == SelectiveHardening::SH1) {
+    for (auto MI : user_calls_) {
+      auto callee_func_name{getCalledFuncName(MI)};
+      auto callee_is_dmr = is_func_dmr(callee_func_name);
+      auto caller_is_dmr = is_func_dmr(fname_);
+
+      if (callee_is_dmr) {   // the callee is a DMRed function
+        if (caller_is_dmr) { // the caller is a DMRed function, so we do not
+                             // have to do anything here since calling
+                             // convention is not changing
+          llvm::outs()
+              << "dbg: both caller[" << fname_ << "]->callee["
+              << callee_func_name
+              << "] are DMR: so don't care about calling convention...\n";
+        } else { // the caller is not a DMR so we have to prepare all calls to
+                 // DMR-functions
+          llvm::outs() << "dbg: caller[" << fname_ << "]->DMR-callee["
+                       << callee_func_name
+                       << "] adhere to DMR-callee calling convention...\n";
+
+          // 0) get live shadow registers
+          // 1) if isTail() then add `ra` to lives/spills
+          // 2) if isTail() replace `tail` with `call` + `ret`
+          // 3) spill lives to stack
+          // 4) duplicate primaries to shadows before `call`
+          // 5) unspill lives from stack after `call`
+
+          llvm::LivePhysRegs lregs(*TRI_);
+          auto MBB{MI->getParent()};
+          lregs.addLiveIns(*MBB);
+#ifdef DBG
+          for (auto &li : MBB->liveins()) {
+            llvm::outs() << "li: " << li.PhysReg << "\n";
+          }
+          for (auto &lo : MBB->liveouts()) {
+            llvm::outs() << "lo: " << lo.PhysReg << "\n";
+          }
+#endif // DBG
+          llvm::SmallVector<
+              std::pair<llvm::MCPhysReg, const llvm::MachineOperand *>, 2>
+              Clobbers;
+#ifdef DBG
+          for (auto &lr : lregs) {
+            llvm::outs() << "ilr: x" << lr - llvm::RISCV::X0 << "\n";
+          }
+#endif // DBG
+          auto call_iter = MI->getIterator();
+          for (const auto &mi : *MBB) {
+            // lregs.accumulate(mi);
+            if (&mi == MI)
+              break;
+            Clobbers.clear();
+            lregs.stepForward(mi, Clobbers);
+#ifdef DBG
+            llvm::outs() << "mi: " << mi << "\n";
+#endif
+          }
+
+          RegSetType spill_regs{};
+          for (const auto &lr : lregs) {
+            if (riscv_common::mapValContains(P2S_, lr)) { // live is a shadow
+              spill_regs.emplace(lr);
+            }
+#ifdef DBG
+            llvm::outs() << "clr: x" << lr - llvm::RISCV::X0 << "\n";
+#endif // DBG
+          }
+
+          if (spill_regs.find(llvm::RISCV::X1) == spill_regs.end() &&
+              TII_->isTailCall(*MI)) {
+            spill_regs.emplace(
+                llvm::RISCV::X1); // if the call is a `tail` we need to replace
+                                  // it with a `call+ret` to allow restoration
+                                  // of non-DMR context before return
+          }
+#ifdef DBG
+          for (const auto &sr : spill_regs) {
+            llvm::outs() << "sr: x" << sr - llvm::RISCV::X0 << "\n";
+          }
+#endif // DBG
+       // insert the spill segment
+          std::vector<llvm::Register> sregs(spill_regs.begin(),
+                                            spill_regs.end());
+          auto insert = call_iter;
+          riscv_common::saveRegs(sregs, MBB, insert);
+          // insert the default duplication segment, i.e., move all primaries
+          // into their shadows
+          for (const auto &regpair : P2S_) {
+            if (riscv_common::getRegType(regpair.first) ==
+                riscv_common::RegType::I) {
+              moveIntoShadow(MBB, insert, regpair.first, regpair.second);
+
+            } else {
+              // FIXME: only handle Base Integer Registers for now
+            }
+          }
+
+          insert = MI->getIterator();
+          ++insert;
+          if (TII_->isTailCall(*MI)) { // replace `tail`s with `call+ret`s
+            MI->setDesc(TII_->get(llvm::RISCV::PseudoCALL));
+
+            llvm::BuildMI(*MBB, insert, MI->getDebugLoc(),
+                          TII_->get(llvm::RISCV::PseudoRET));
+          }
+          insert = MI->getIterator();
+          ++insert;
+          riscv_common::loadRegs(sregs, MBB, insert);
+
+          insert = MI->getIterator();
+          ++insert;
+          for (const auto &regpair : P2S_) {
+            if (riscv_common::getRegType(regpair.first) ==
+                riscv_common::RegType::I) {
+              llvm::BuildMI(*MBB, insert, MI->getDebugLoc(),
+                            TII_->get(llvm::RISCV::BNE))
+                  .addReg(regpair.first)
+                  .addReg(regpair.second)
+                  .addMBB(err_bb_);
+            } else {
+              // FIXME: only handle Base Integer Registers for now
+            }
+          }
+        }
+
+      } else {               // the callee is not a DMR-function
+        if (caller_is_dmr) { // the caller is a DMRed function, we need to
+                             // prepare non-DMR calling convention.
+          llvm::outs() << "dbg: DMR-caller[" << fname_ << "]->callee["
+                       << callee_func_name
+                       << "] adhere to non-DMR-callee calling convention...\n";
+          // live shadows involving t0-t6, a0-a7 can be corrupted by non-DMR
+          // function, so we need to prepare those
+
+          auto MBB{MI->getParent()};
+          for (const auto &r : MBB->liveouts()) {
+            llvm::outs() << "or: x" << r.PhysReg - llvm::RISCV::X0 << "\n";
+          }
+          if (TII_->isTailCall(*MI)) { // replace `tail`s with `call+ret`
+            MI->addImplicitDefUseOperands(*MF_);
+          }
+
+          auto ret_regs{getRetRegs(MI)};
+          auto insert{MI->getIterator()};
+          ++insert;
+
+          RegSetType spill_regs;
+          for (unsigned r = llvm::RISCV::X3; r <= llvm::RISCV::X31; ++r) {
+            if (!riscv_common::setmapContains(callee_saved_regs_, r)) {
+              spill_regs.emplace(r);
+            }
+          }
+
+          // ret-regs would be changed after func call hence dont need to stack
+          // them. FIXME: Also remove a0 and a1 always when indirect call is a
+          // tail
+          if (riscv_common::setmapContains(ret_regs, llvm::RISCV::X10) ||
+              (TII_->isTailCall(*MI))) {
+            spill_regs.erase(llvm::RISCV::X10);
+          }
+          if (riscv_common::setmapContains(ret_regs, llvm::RISCV::X11) ||
+              (TII_->isTailCall(*MI))) {
+            spill_regs.erase(llvm::RISCV::X11);
+          }
+
+          if (spill_regs.find(llvm::RISCV::X1) == spill_regs.end() &&
+              TII_->isTailCall(*MI)) {
+            spill_regs.emplace(
+                llvm::RISCV::X1); // if the call is a `tail` we need to replace
+                                  // it with a `call+ret` to allow restoration
+                                  // of DMR context before return, because we
+                                  // could return back to a DMR-function instead
+                                  // of a non-DMR one
+          }
+
+          // if the caller is also protected with RACFED we need to be careful
+          // with preserving the runtime signature register S. Since it has to
+          // be stacked, but all push and pop instructions are protected with
+          // intra-block signature updates, we need to stack the runtime
+          // signature register as near as possible to the function call itself
+          // which is handled by the RACFED pass
+          if (riscv_common::inCSString(llvm::cl::enable_racfed,
+                                       std::string{MF_->getName()})) {
+            spill_regs.erase(RISCVRacfed::get_runtime_signature_reg());
+          }
+
+          std::vector<llvm::Register> sregs(spill_regs.begin(),
+                                            spill_regs.end());
+
+          if (use_shadow_for_stack_ops_) {
+            riscv_common::saveRegs(sregs, MBB, MI->getIterator(),
+                                   P2S_.at(riscv_common::kSP));
+
+          } else {
+            riscv_common::saveRegs(sregs, MBB, MI->getIterator());
+          }
+          insert = MI->getIterator();
+          ++insert;
+
+          if (TII_->isTailCall(*MI)) { // replace `tail`s with `call+ret`s
+            MI->setDesc(TII_->get(llvm::RISCV::PseudoCALL));
+            llvm::BuildMI(*MBB, insert, MI->getDebugLoc(),
+                          TII_->get(llvm::RISCV::PseudoRET));
+            ret_regs.insert(llvm::RISCV::X10);
+            ret_regs.insert(
+                llvm::RISCV::X11); // FIXME: We do not really know here, whether
+                                   // x10 and x11 are actually used for return
+          }
+          insert = MI->getIterator();
+          ++insert;
+          // copying the return value/s to shadow reg
+          llvm::outs() << "MI:" << *MI << "\n";
+
+          for (const auto &r : ret_regs) {
+            llvm::outs() << "ret_reg: x" << r - llvm::RISCV::X0 << "\n";
+            moveIntoShadow(MI->getParent(), insert, r, P2S_.at(r));
+          }
+          insert = MI->getIterator();
+          ++insert;
+          if (use_shadow_for_stack_ops_) {
+            riscv_common::loadRegs(sregs, MBB, insert,
+                                   P2S_.at(riscv_common::kSP));
+          } else {
+            riscv_common::loadRegs(sregs, MBB, insert);
+          }
+
+        } else { // the caller is a not DMRed function, so business as usual.
+          llvm::outs()
+              << "dbg: both caller [" << fname_ << "]->callee["
+              << callee_func_name
+              << "] are not DMR: so don't care about calling convention...\n";
+        }
+      }
+    }
+  } else if (config_.sh == SelectiveHardening::SH2) {
+    // not implemented yet.
   }
 }
 
@@ -720,6 +1103,17 @@ void RISCVDmr::protectCalls() {
 
     if (llvm::cl::enable_repair) {
       regs_need_preservation.clear();
+    }
+
+    // if the caller is also protected with RACFED we need to be careful
+    // with preserving the runtime signature register S. Since it has to
+    // be stacked, but all push and pop instructions are protected with
+    // intra-block signature updates, we need to stack the runtime
+    // signature register as near as possible to the function call itself
+    // which is handled by the RACFED pass
+    if (riscv_common::inCSString(llvm::cl::enable_racfed,
+                                 std::string{MF_->getName()})) {
+      regs_need_preservation.erase(RISCVRacfed::get_runtime_signature_reg());
     }
 
     std::vector<llvm::Register> stacked_regs{regs_need_preservation.begin(),
@@ -867,7 +1261,8 @@ void RISCVDmr::protectCalls() {
           continue;
         }
         if (riscv_common::inCSString(llvm::cl::enable_cfcss, fname_) ||
-            riscv_common::inCSString(llvm::cl::enable_rasm, fname_)) {
+            riscv_common::inCSString(llvm::cl::enable_rasm, fname_) ||
+            riscv_common::inCSString(llvm::cl::enable_racfed, fname_)) {
           if (r == llvm::RISCV::X5) {
             continue;
           }
@@ -1025,15 +1420,72 @@ void RISCVDmr::protectBranches() {
         assert(MI->getOperand(2).isMBB() && "this branch is odd!");
         auto taken_BB{MI->getOperand(2).getMBB()};
 
+        if (err_bb_ == taken_BB) {
+          continue; // do not duplicate error existing dmr checks implemented
+                    // with conditional branching
+        }
+
+        llvm::MachineInstr *si;
+
         // fall-through path dup
-        auto si{MF_->CloneMachineInstr(MI)};
+
+        llvm::MachineBasicBlock *nottaken_BB = MBB->getFallThrough();
+        if (nottaken_BB == nullptr) {
+          // no fallthrough found. Most likely we have a
+          // "b<cond> <>, taken \\ j nottaken" situation here, where the
+          // unconditional is part of the MBB, i.e. LLVM IR did not terminate BB
+          // with conditional branch. Solution: splice BB here at conditional!
+          llvm::outs() << "No fallthrough successor found for MBB[" << MBB
+                       << "]: " << *MBB << "\n";
+          MBB->splitAt(*MI); // we split the the MBB at the conditional branch,
+                             // because we need real CFG conform basic block
+                             // traversal for hardening
+          nottaken_BB = MBB->getFallThrough(); // now MBB has the correct
+                                               // implicit fallthrough on not
+                                               // taking the conditional branch
+          MBB->addSuccessor(
+              taken_BB); // due to split the conditional branch is still active
+                         // but the taken not a registered successor
+        }
+        assert(nottaken_BB != nullptr && taken_BB != nullptr &&
+               "Conditional branch is odd!");
+
+        llvm::outs() //<< "split MBB into \n"
+            << "\n* not-taken[" << nottaken_BB << "]:" << *nottaken_BB
+            << "\n* taken[" << taken_BB << "]:" << *taken_BB << " of MBB["
+            << MBB << "]: " << *MBB << "\n";
+
+        auto nemesis_nottaken_BB{MF_->CreateMachineBasicBlock()};
+
+        llvm::MachineFunction::iterator mbb;
+        for (mbb = MF_->begin(); mbb != MF_->end(); ++mbb) {
+          if (&(*mbb) == nottaken_BB)
+            break;
+        }
+        MF_->insert(mbb, nemesis_nottaken_BB);
+
+        si = MF_->CloneMachineInstr(MI);
         for (auto &o : si->operands()) {
           if (o.isReg()) {
             o.setReg(P2S_.at(o.getReg()));
           }
         }
+
+        if (MBB->isSuccessor(nottaken_BB)) {
+          MBB->replaceSuccessor(nottaken_BB, nemesis_nottaken_BB);
+          // MBB->ReplaceUsesOfBlockWith(nottaken_BB, nemesis_nottaken_BB);
+        } else {
+          llvm::outs() << "not taken[" << nottaken_BB << "]:" << *nottaken_BB
+                       << "not a successor of MBB[" << MBB << "]: " << *MBB
+                       << "\n";
+          assert(false && "Not a sucessor!");
+        }
+
+        nemesis_nottaken_BB->addSuccessor(nottaken_BB);
+        nemesis_bbs_.emplace(nemesis_nottaken_BB);
+
         si->getOperand(2).setMBB(err_bb_);
-        MBB->insertAfter(MI, si);
+        nemesis_nottaken_BB->push_back(si);
 
         // taken path dup
         auto nemesis_taken_BB{
@@ -1051,6 +1503,92 @@ void RISCVDmr::protectBranches() {
                       si->getDebugLoc(), TII_->get(llvm::RISCV::JAL))
             .addReg(riscv_common::k0)
             .addMBB(err_bb_);
+      } else if (MI->isIndirectBranch()) {
+        llvm::outs()
+            << "\tWARNING: Branch protection not applicable. Is indirect MI:"
+            << *MI << "\n";
+      } else {
+        assert(0 && "what is this branch");
+      }
+    }
+  } else if (config_.psb == ProtectStrategyBranch::B3) { // nemesec
+    for (auto MI : branches_) {
+      if (MI->isUnconditionalBranch()) {
+        llvm::MachineBasicBlock::iterator insert{MI->getIterator()};
+        insert++;
+        llvm::BuildMI(*MI->getParent(), insert, MI->getDebugLoc(),
+                      TII_->get(llvm::RISCV::JAL))
+            .addReg(riscv_common::k0)
+            .addMBB(err_bb_);
+      } else if (MI->isConditionalBranch()) {
+        auto MBB{MI->getParent()};
+
+        assert(MI->getOperand(2).isMBB() && "this branch is odd!");
+        auto taken_BB{MI->getOperand(2).getMBB()};
+
+        auto nottaken_BB{MBB->getFallThrough()};
+        assert(nottaken_BB && "this branch has no fallthrough!");
+
+        llvm::BuildMI(*MBB, MBB->end(), MI->getDebugLoc(),
+                      TII_->get(llvm::RISCV::JAL))
+            .addReg(riscv_common::k0)
+            .addMBB(
+                err_bb_); // push back an unconditional jump to error-BB to
+                          // protect previous unconditional jump to "not taken"
+
+        // fall-through path dup
+        // this needs to be a new basic block and replaced with an unconditional
+        // jump to it
+        auto nemesec_nottaken_BB{
+            MF_->CreateMachineBasicBlock()}; // MBB->getBasicBlock())};
+        MF_->insert(MF_->end(), nemesec_nottaken_BB);
+        auto si{MF_->CloneMachineInstr(MI)};
+        for (auto &o : si->operands()) {
+          if (o.isReg()) {
+            o.setReg(P2S_.at(o.getReg()));
+          }
+        }
+
+        MBB->ReplaceUsesOfBlockWith(
+            nottaken_BB,
+            nemesec_nottaken_BB); // maybe instead replaceSuccessor()
+        nemesec_nottaken_BB->addSuccessor(nottaken_BB);
+        nemesis_bbs_.emplace(nemesec_nottaken_BB);
+
+        si->getOperand(2).setMBB(err_bb_);
+        nemesec_nottaken_BB->push_back(si);
+        llvm::MachineBasicBlock::iterator insert =
+            nemesec_nottaken_BB->instr_end();
+        llvm::BuildMI(*si->getParent(), insert, si->getDebugLoc(),
+                      TII_->get(llvm::RISCV::JAL))
+            .addReg(riscv_common::k0)
+            .addMBB(nottaken_BB); // we need to jump back to fallthrough
+        insert = MI->getIterator();
+        llvm::BuildMI(*MI->getParent(), ++insert, MI->getDebugLoc(),
+                      TII_->get(llvm::RISCV::JAL))
+            .addReg(riscv_common::k0)
+            .addMBB(nemesec_nottaken_BB);
+
+        // taken path duplication
+        auto nemesis_taken_BB{MF_->CreateMachineBasicBlock()};
+        MF_->insert(MF_->end(), nemesis_taken_BB);
+        MBB->ReplaceUsesOfBlockWith(
+            taken_BB, nemesis_taken_BB); // maybe instead replaceSuccessor()
+        nemesis_taken_BB->addSuccessor(taken_BB);
+        nemesis_bbs_.emplace(nemesis_taken_BB);
+
+        si = MF_->CloneMachineInstr(si);
+        si->getOperand(2).setMBB(taken_BB);
+        MI->getOperand(2).setMBB(nemesis_taken_BB);
+        nemesis_taken_BB->insert(nemesis_taken_BB->begin(), si);
+        llvm::BuildMI(*nemesis_taken_BB, nemesis_taken_BB->end(),
+                      si->getDebugLoc(), TII_->get(llvm::RISCV::JAL))
+            .addReg(riscv_common::k0)
+            .addMBB(err_bb_);
+      } else if (MI->isIndirectBranch()) {
+        llvm::outs()
+            << "\tWARNING: Branch protection not applicable. Is indirect MI:"
+            << *MI << "\n";
       } else {
         assert(0 && "what is this branch");
       }
@@ -1087,40 +1625,68 @@ void RISCVDmr::insertErrorBB() {
 
   auto DLL{MF_->front().front().getDebugLoc()};
 
-  // storing '1' to addr : (0xfff0 = 0x10000 - 0x10):
-  // lui t1, 16 -> makes t1 = 0x10000
-  llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL, TII_->get(llvm::RISCV::LUI))
-      .addReg(llvm::RISCV::X6)
-      .addImm(16);
-  // addi t2, zero, 1 -> makes t2 = 1
-  llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL, TII_->get(llvm::RISCV::ADDI))
-      .addReg(llvm::RISCV::X7)
-      .addReg(riscv_common::k0)
-      .addImm(1);
-  // sw t2, -16(t1) -> stores t2 to (t1 - 8) i.e. store 1 to 0xfff0
-  llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
-                TII_->get(isa_config_.store_opcode))
-      .addReg(llvm::RISCV::X7)
-      .addReg(llvm::RISCV::X6)
-      .addImm(-16);
+  if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
+      config_.eds == riscv_common::ErrorDetectionStrategy::ED1) {
+    // storing '1' to addr : (0xfff0 = 0x10000 - 0x10):
+    // lui t1, 16 -> makes t1 = 0x10000
+    llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
+                  TII_->get(llvm::RISCV::LUI))
+        .addReg(llvm::RISCV::X6)
+        .addImm(16);
+    // addi t2, zero, 1 -> makes t2 = 1
+    llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
+                  TII_->get(llvm::RISCV::ADDI))
+        .addReg(llvm::RISCV::X7)
+        .addReg(riscv_common::k0)
+        .addImm(1);
+    // sw t2, -16(t1) -> stores t2 to (t1 - 8) i.e. store 1 to 0xfff0
+    llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
+                  TII_->get(isa_config_.store_opcode))
+        .addReg(llvm::RISCV::X7)
+        .addReg(llvm::RISCV::X6)
+        .addImm(-16);
+  } else if (config_.eds == riscv_common::ErrorDetectionStrategy::ED3) {
+    // storing '93' to a7, aka SYS_exit code ECALL code:
+    llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
+                  TII_->get(llvm::RISCV::ADDI))
+        .addReg(llvm::RISCV::X17) // a7
+        .addReg(llvm::RISCV::X0)  // zero
+        .addImm(93);
+    // storing '-512' to a0, aka exit return value when ecall forces newlib sys
+    // exit:
+    llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
+                  TII_->get(llvm::RISCV::ADDI))
+        .addReg(llvm::RISCV::X10) // a7
+        .addReg(llvm::RISCV::X0)  // zero
+        .addImm(-512);
+    // invoke 'ecall'
+    llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
+                  TII_->get(llvm::RISCV::ECALL));
+  }
+  if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
+      config_.eds == riscv_common::ErrorDetectionStrategy::ED1 ||
+      config_.eds == riscv_common::ErrorDetectionStrategy::ED3) {
 
-  // to encode the error-BB in order to make it a label so as to be able to
-  // jump to it from anywhere in asm
-  err_bb_->addSuccessor(err_bb_);
-  // // keep on repeating this errBB as we dont want to execute code now
-  // // J err_bb_ = JALR X0, err_bb_ because J is a pseudo-jump instr in RISCV
-  // llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
-  // TII_->get(llvm::RISCV::JAL))
-  //     .addReg(riscv_common::k0)
-  //     .addMBB(err_bb_);
+    // to encode the error-BB in order to make it a label so as to be able to
+    // jump to it from anywhere in asm
+    err_bb_->addSuccessor(err_bb_);
+    // // keep on repeating this errBB as we dont want to execute code now
+    // // J err_bb_ = JALR X0, err_bb_ because J is a pseudo-jump instr in RISCV
+    // llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
+    // TII_->get(llvm::RISCV::JAL))
+    //     .addReg(riscv_common::k0)
+    //     .addMBB(err_bb_);
+  }
 
-  if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0) {
+  if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
+      config_.eds == riscv_common::ErrorDetectionStrategy::ED3) {
     // keep on repeating this errBB as we dont want to execute code now
     // J err_bb_ = JALR X0, err_bb_ because J is a pseudo-jump instr in RISCV
     llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
                   TII_->get(llvm::RISCV::JAL))
         .addReg(riscv_common::k0)
         .addMBB(err_bb_);
+
   } else {
     // quit early using ebreak
     llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
@@ -1230,10 +1796,10 @@ void RISCVDmr::repair() {
 
       RegMapType LiveP2S{MBB2Liveins[&MBB]};
 
-      auto getFreeShadowReg{[this, &LiveP2S](
-                                llvm::Register start_reg,
-                                llvm::Register end_reg,
-                                bool for_SP = false) -> llvm::Register {
+      auto getFreeShadowReg{[this,
+                             &LiveP2S](llvm::Register start_reg,
+                                       llvm::Register end_reg,
+                                       bool for_SP = false) -> llvm::Register {
         std::default_random_engine gen{};
         std::uniform_int_distribution<unsigned> unif_dist{start_reg, end_reg};
 
@@ -1601,8 +2167,8 @@ void RISCVDmr::repair() {
                     !riscv_common::setmapContains(P2S_,
                                                   it->getOperand(0).getReg())) {
                   it->getOperand(0).setReg(LiveP2S[riscv_common::kSP]);
-                  it++;  // to bypass current
-                  it++;  // to bypass primary stack alloc
+                  it++; // to bypass current
+                  it++; // to bypass primary stack alloc
                   break;
                 }
 
@@ -1690,7 +2256,7 @@ void RISCVDmr::repair() {
             for (auto it2{MI.getIterator()}; it2 != it; ++it2) {
               ignore_these.emplace(&*it2);
             }
-          }  // and now for lib calls that are not duplicated
+          } // and now for lib calls that are not duplicated
           else {
             for (llvm::MachineBasicBlock::iterator it{MI.getIterator()};
                  it != MBB.end(); ++it) {
@@ -1790,7 +2356,7 @@ void RISCVDmr::repair() {
                 LiveP2S[getPrimaryFromShadow(MI.getOperand(2).getReg())]);
           }
         }
-      }  // end of MI scan
+      } // end of MI scan
 
       if (!riscv_common::setmapContains(nemesis_bbs_, &MBB)) {
         // updating liveins of successors
@@ -1911,7 +2477,7 @@ void RISCVDmr::repair() {
         MBB.erase_instr(MI);
       }
 
-    }  // end of MBB scan
+    } // end of MBB scan
 
     bool keep_going{false};
     for (auto &MBB : *MF_) {
@@ -1923,7 +2489,7 @@ void RISCVDmr::repair() {
     if (!keep_going) {
       break;
     }
-  }  // end of while(1)
+  } // end of while(1)
 
   //
   //

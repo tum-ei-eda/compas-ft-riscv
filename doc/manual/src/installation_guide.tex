@@ -29,7 +29,7 @@ $ sudo apt install build-essential cmake git
 
 \subsection{Build LLVM Project}
 \label{sec:build-llvm}
-The LLVM Project has to be compiled from source. We recommend downloading version 13.0.0 from LLVM Releases webpage:
+The LLVM Project has to be compiled from source. We recommend downloading version 13.0.1 from LLVM Releases webpage:
 \\\\
 \url{https://releases.llvm.org/} \\
 
@@ -39,16 +39,13 @@ llvm project from source:
 \begin{framed}
  \begin{lstlisting}[language=bash, basicstyle=\small\ttfamily]
 $ cd <llvm_src_folder>
-$ mkdir build
-$ cd build
-$ cmake -DCMAKE_BUILD_TYPE=Release
+$ cmake -S llvm -B build -DCMAKE_BUILD_TYPE=Release
         -DCMAKE_INSTALL_PREFIX=<install_location>
         -DCMAKE_CXX_STANDARD=17
         -DLLVM_ENABLE_PROJECTS=clang
         -DLLVM_TARGETS_TO_BUILD=RISCV
         -DLLVM_ENABLE_ASSERTIONS=ON
-        ../llvm
-$ make
+$ cmake --build build --parallel $(nproc)
   \end{lstlisting}
 \end{framed}
 
@@ -80,19 +77,17 @@ with a compatible patch file. For this, we provide various patches in our passes
 Each patch is compatible with a specific llvm project source tree.
 In case this tutorial is followed to build llvm project using Sec.~\ref{sec:build-llvm},
 the corresponding patch is to be found at:\\\\
-\texttt{$<$compas-ft-riscv$>$/patches/llvm13.0.0\_src.patch}
+\texttt{$<$compas-ft-riscv$>$/patches/compas1.1.0\_llvm13.0.1\_src.patch}
 
 \begin{framed}
  \begin{lstlisting}[language=bash, basicstyle=\small\ttfamily]
 $ cd <llvm_src_folder>/llvm/lib/Target/RISCV/
 $ git clone https://github.com/tum-ei-eda/compas-ft-riscv
 $ cd compas-ft-riscv/
-$ git checkout tags/v1.0.1 -b v1.0.1
+$ git checkout tags/v1.1.0 -b v1.1.0
 $ cd <llvm_src_folder>
-$ patch -s -p0 < <path_to_patch>
-$ cd build
-$ make
-$ make install
+$ git apply llvm/lib/Target/RISCV/compas-ft-riscv/patches/compas1.1.0_llvm13.0.1_src.patch
+$ cmake --build build --parallel $(nproc) --target install
 \end{lstlisting}
 \end{framed}
 
