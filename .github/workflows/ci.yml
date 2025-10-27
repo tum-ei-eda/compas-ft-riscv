@@ -40,7 +40,7 @@ jobs:
     - name: Clone COMPAS
       uses: actions/checkout@v4
       with:
-        path: ${{runner.workspace}}/compas-ft-riscv_src
+        path: compas-ft-riscv_src
         submodules: true
 
     - name: Patch (LLVM base build)
