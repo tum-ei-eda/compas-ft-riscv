@@ -25,6 +25,8 @@
 bool riscv_common::inCSString(std::string cs_string, std::string x) {
   std::istringstream iss{cs_string};
   std::string f{};
+  if (cs_string == "-1")
+    return true;
   while (std::getline(iss, f, ',')) {
     if (x.compare(f) == 0) {
       return true;

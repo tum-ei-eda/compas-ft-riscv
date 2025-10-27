@@ -23,13 +23,13 @@
 #include "common.h"
 
 class RISCVCfcss : public RISCVDmr {
- public:
+public:
   // constructor
   RISCVCfcss();
   // override the transformation function
   bool runOnMachineFunction(llvm::MachineFunction &) override;
 
- private:
+private:
   struct MBBInfo {
     unsigned s{0};
     unsigned d{0};
@@ -48,7 +48,7 @@ class RISCVCfcss : public RISCVDmr {
   std::map<llvm::MachineBasicBlock *, MBBInfo> mbb_info_{};
 
   // for initialization purposes
-  void init();
+  void init() override;
   // this applies the CFCSS transformation on each BB
   void harden();
   // inserts an error-handler BB to the machine function so that in case of

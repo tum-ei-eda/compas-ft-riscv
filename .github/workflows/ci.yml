@@ -1,0 +1,71 @@
+name: Build LLVM and patch LLVM with COMPAS
+
+on:
+  push:
+    paths-ignore:
+    - doc/
+  pull_request:
+    paths-ignore:
+    - doc/
+  workflow_dispatch: {}
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        config:
+          - { name: "Ubuntu-22.04-Release", os: ubuntu-22.04, compas_version: "1.1.0", cmakegen: "Release", llvm_url: "https://github.com/llvm/llvm-project.git", llvm_prefix: "llvm-project", llvm_version: "13.0.1", packages: "build-essential cmake git" }
+
+    runs-on: ${{ matrix.config.os }}
+    name: ${{ matrix.config.name }}_compas${{ matrix.config.compas_version }}_llvm${{ matrix.config.llvm_version }}_build
+
+    steps:
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ${{ matrix.config.packages }}
+
+    - name: Requirements (LLVM base build)
+      working-directory: ${{runner.workspace}}
+      run: |
+        git clone --recurse-submodules ${{ matrix.config.llvm_url }} ${{ matrix.config.llvm_prefix }}_src
+        cd ${{ matrix.config.llvm_prefix }}_src
+        git checkout llvmorg-${{ matrix.config.llvm_version }}
+        cmake -S llvm -B build -DCMAKE_BUILD_TYPE=${{ matrix.config.cmakegen }} \
+          -DCMAKE_INSTALL_PREFIX=${{runner.workspace}}/llvm_install \
+          -DCMAKE_CXX_STANDARD=17 \
+          -DLLVM_ENABLE_PROJECTS=clang \
+          -DLLVM_TARGETS_TO_BUILD=RISCV \
+          -DLLVM_ENABLE_ASSERTIONS=ON
+        cmake --build build --parallel $(nproc)
+
+    - name: Clone COMPAS
+      uses: actions/checkout@v4
+      with:
+        path: compas-ft-riscv_src
+        submodules: true
+
+    - name: Patch (LLVM base build)
+      run: |
+        ln -s ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src ${{runner.workspace}}/${{ matrix.config.llvm_prefix }}_src/llvm/lib/Target/RISCV/compas-ft-riscv
+        cd ${{runner.workspace}}/${{ matrix.config.llvm_prefix }}_src
+        git apply llvm/lib/Target/RISCV/compas-ft-riscv/patches/llvm${{ matrix.config.llvm_version }}_src.patch
+
+    - name: Re-Compile LLVM with COMPAS
+      working-directory: ${{runner.workspace}}/${{ matrix.config.llvm_prefix }}_src
+      run: |
+        cmake --build build --parallel $(nproc)
+
+    - name: Install LLVM
+      working-directory: ${{runner.workspace}}/${{ matrix.config.llvm_prefix }}_src
+      run: |
+        cmake --build build --parallel $(nproc) --target install
+
+    - name: Upload pre-built LLVM w/ Compas Patch
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.config.config.name }}_compas${{ matrix.config.compas_version }}_llvm${{ matrix.config.llvm_version }}_prebuilt
+        path: ${{runner.workspace}}/llvm_install

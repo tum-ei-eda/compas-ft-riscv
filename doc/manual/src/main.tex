@@ -36,11 +36,11 @@
 \title{
 \textbf{COMPAS-FT-RISCV} \\
 \large Compiler Assisted Fault Tolerance for RISCV Architectures \\
-\small Version 1.0.1
+\small Version 1.1.0
 }
 \author{
 ESL Group, Chair of Electronic Design Automation \\
-Department of Electrical and Computer Engineering \\
+School of Computation, Information and Technology \\
 Technical University of Munich
 }
 
@@ -91,8 +91,10 @@ Specifically, we have implemented the following \ac{sihft} methods:
  \item{NZDC \cite{nzdc} for data-flow protection}
  \item{NEMESIS \cite{nemesis} for conditional branch protection}
  \item{CFCSS \cite{cfcss} for control flow protection}
- \item{RASM \cite{rasm} for control flow protection}
+ \item{RASM \cite{rasm} for control flow protection (inter basic block runtime signature monitoring)}
+ \item{RACFED \cite{racfed for control flow protection (inter and intra block runtime signature monitoring)}}
  \item{REPAIR \cite{repair} for combined data-flow and control-flow protection}
+ \item{CompaSeC \cite{compasec} for security-focused combined data-flow (NEMESEC) and control-flow (RACFED) with fallback duplicate parameter volatile store protection.}
 \end{itemize}
 
 This document serves to be the user manual for the developed compiler. We now provide instructions on how to setup the

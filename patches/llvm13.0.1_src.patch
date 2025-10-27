@@ -53,10 +53,10 @@ index 961781bec193..f4a9fbebd01e 100644
  add_subdirectory(TargetInfo)
 +add_subdirectory(compas-ft-riscv)
 diff --git a/llvm/lib/Target/RISCV/RISCV.h b/llvm/lib/Target/RISCV/RISCV.h
-index ef1f97067e12..0aac1a535800 100644
+index ef1f97067e12..89dbedc73d38 100644
 --- a/llvm/lib/Target/RISCV/RISCV.h
 +++ b/llvm/lib/Target/RISCV/RISCV.h
-@@ -15,8 +15,36 @@
+@@ -15,8 +15,38 @@
  #define LLVM_LIB_TARGET_RISCV_RISCV_H
  
  #include "MCTargetDesc/RISCVBaseInfo.h"
@@ -69,6 +69,8 @@ index ef1f97067e12..0aac1a535800 100644
 +inline opt<std::string> enable_cfcss{"CFCSS", desc("CFCSS pass for CFP"),
 +                                     value_desc("pass")};
 +inline opt<std::string> enable_rasm{"RASM", desc("RASM pass for CFP"),
++                                    value_desc("pass")};
++inline opt<std::string> enable_racfed{"RACFED", desc("RACFED pass for CFP"),
 +                                    value_desc("pass")};
 +inline opt<std::string> enable_nzdc{"NZDC", desc("NZDC pass for DFP"),
 +                                    value_desc("pass")};
@@ -93,7 +95,7 @@ index ef1f97067e12..0aac1a535800 100644
  namespace llvm {
  class RISCVRegisterBankInfo;
  class RISCVSubtarget;
-@@ -52,6 +80,10 @@ void initializeRISCVInsertVSETVLIPass(PassRegistry &);
+@@ -52,6 +82,11 @@ void initializeRISCVInsertVSETVLIPass(PassRegistry &);
  InstructionSelector *createRISCVInstructionSelector(const RISCVTargetMachine &,
                                                      RISCVSubtarget &,
                                                      RISCVRegisterBankInfo &);
@@ -101,21 +103,24 @@ index ef1f97067e12..0aac1a535800 100644
 +
 +FunctionPass *createRISCVCfcss();
 +FunctionPass *createRISCVRasm();
++FunctionPass *createRISCVRacfed();
 +FunctionPass *createRISCVDmr();
 +} // namespace llvm
  
  #endif
 diff --git a/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp b/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
-index 388cce00bdf3..eaf45c459971 100644
+index 388cce00bdf3..e6e6bd0761b9 100644
 --- a/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
 +++ b/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
-@@ -106,6 +106,101 @@ BitVector RISCVRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
+@@ -106,6 +106,103 @@ BitVector RISCVRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
    markSuperRegs(Reserved, RISCV::FFLAGS);
    markSuperRegs(Reserved, RISCV::FCSR);
  
 +  if (riscv_common::inCSString(llvm::cl::enable_cfcss,
 +                               std::string{MF.getName()}) ||
 +      riscv_common::inCSString(llvm::cl::enable_rasm,
++                               std::string{MF.getName()}) ||
++      riscv_common::inCSString(llvm::cl::enable_racfed,
 +                               std::string{MF.getName()})) {
 +    markSuperRegs(Reserved, RISCV::X5);
 +    markSuperRegs(Reserved, RISCV::X29);
@@ -212,17 +217,18 @@ index 388cce00bdf3..eaf45c459971 100644
    return Reserved;
  }
 diff --git a/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp b/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
-index b18ee6009217..e535617f78d3 100644
+index b18ee6009217..b962aa97f684 100644
 --- a/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
 +++ b/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
-@@ -188,6 +188,10 @@ void RISCVPassConfig::addPreEmitPass2() {
+@@ -188,6 +188,11 @@ void RISCVPassConfig::addPreEmitPass2() {
    // possibility for other passes to break the requirements for forward
    // progress in the LR/SC block.
    addPass(createRISCVExpandAtomicPseudoPass());
-+  
++
 +  addPass(createRISCVDmr());
 +  addPass(createRISCVCfcss());
 +  addPass(createRISCVRasm());
++  addPass(createRISCVRacfed());
  }
  
  void RISCVPassConfig::addPreRegAlloc() {
