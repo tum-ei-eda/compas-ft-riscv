@@ -45,7 +45,7 @@ jobs:
 
     - name: Patch (LLVM base build)
       run: |
-        ln -s ${{runner.workspace}}/compas-ft-riscv_src ${{runner.workspace}}/llvm-project_src/llvm/lib/Target/RISCV/compas-ft-riscv
+        ln -s ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src ${{runner.workspace}}/llvm-project_src/llvm/lib/Target/RISCV/compas-ft-riscv
         ls -la ${{runner.workspace}}/compas-ft-riscv_src
         ls -la ${{runner.workspace}}/llvm-project_src/llvm/lib/Target/RISCV/
         ls -la ${{runner.workspace}}/llvm-project_src/llvm/lib/Target/RISCV/compas-ft-riscv
