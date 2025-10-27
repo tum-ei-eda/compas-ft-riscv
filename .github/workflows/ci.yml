@@ -27,14 +27,13 @@ jobs:
       run: |
         git clone --recurse-submodules https://github.com/llvm/llvm-project.git llvm-project_src
         cd llvm-project_src
-        git checkout llvmorg-13.0.0
+        git checkout llvmorg-13.0.1
         cmake -S llvm -B build -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_INSTALL_PREFIX=${{runner.workspace}}/llvm_install \
           -DCMAKE_CXX_STANDARD=17 \
           -DLLVM_ENABLE_PROJECTS=clang \
           -DLLVM_TARGETS_TO_BUILD=RISCV \
-          -DLLVM_ENABLE_ASSERTIONS=ON \
-          ../llvm
+          -DLLVM_ENABLE_ASSERTIONS=ON
         cmake --build build --parallel $(nproc)
 
     - name: Clone COMPAS
@@ -46,11 +45,8 @@ jobs:
     - name: Patch (LLVM base build)
       run: |
         ln -s ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src ${{runner.workspace}}/llvm-project_src/llvm/lib/Target/RISCV/compas-ft-riscv
-        ls -la ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
-        ls -la ${{runner.workspace}}/llvm-project_src/llvm/lib/Target/RISCV/
-        ls -la ${{runner.workspace}}/llvm-project_src/llvm/lib/Target/RISCV/compas-ft-riscv
         cd ${{runner.workspace}}/llvm-project_src
-        patch -s p0 < llvm/lib/Target/RISCV/compas-ft-riscv/patches/llvm13.0.0_src.patch
+        git apply llvm/lib/Target/RISCV/compas-ft-riscv/patches/llvm13.0.1_src.patch
 
     - name: Re-Compile LLVM with COMPAS
       working-directory: ${{runner.workspace}}/llvm-project_src
@@ -65,5 +61,5 @@ jobs:
     - name: Upload compiled ETISS
       uses: actions/upload-artifact@v4
       with:
-        name: llvm13.0.0-compas-u22.04-prebuilt
+        name: llvm13.0.1-compas1.1.0-u22.04-prebuilt
         path: ${{runner.workspace}}/llvm_install
