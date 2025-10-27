@@ -37,8 +37,11 @@ options is provided in Table~\ref{tab:sihft-options}.
   \textbf{Option} & \textbf{Description}                                     \\
   \hline
   -NZDC=foo,bar   & apply NZDC transformation on \textit{foo,bar} functions  \\
+  -NZDC+NEMSIS=foo,bar   & apply NZDC and NEMESIS transformation on \textit{foo,bar} functions  \\
+  -NZDC+NEMSEC=foo,bar   & apply NZDC and NEMESEC (NEMESIS w/ store fallbacks) transformation on \textit{foo,bar} functions  \\
   -SWIFT=foo,bar  & apply SWIFT transformation on \textit{foo,bar} functions \\
   -RASM=foo,bar   & apply RASM transformation on \textit{foo,bar} functions  \\
+  -RACFED=foo,bar & apply RACFED transformation on \textit{foo,bar} functions  \\
   -CFCSS=foo,bar  & apply CFCSS transformation on \textit{foo,bar} functions \\
   -FGS            & use fine-grain scheduling for NZDC code                  \\
   -REPAIR         & use REPAIR transformation on NZDC code                   \\
