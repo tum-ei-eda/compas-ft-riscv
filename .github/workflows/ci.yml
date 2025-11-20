@@ -20,6 +20,7 @@ jobs:
           - { os: ubuntu-22.04, compas_version: "1.1.0", cmakegen: "Release", packages: "build-essential cmake git" }
         llvm:
           - {src: 'true', tag: '13.0.1', url: "https://github.com/llvm/llvm-project.git", prefix: "llvm-project",}
+          - {src: 'true', tag: '14.0.6', url: "https://github.com/llvm/llvm-project.git", prefix: "llvm-project",}
           - {src: 'true', tag: '16.0.6', url: "https://github.com/llvm/llvm-project.git", prefix: "llvm-project",}
 
     runs-on: ${{ matrix.config.os }}
