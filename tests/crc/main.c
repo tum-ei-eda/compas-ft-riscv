@@ -23,7 +23,8 @@ int
 main(void)
 {
 	unsigned char  test[] = "123456789";
-
+    
+    unsigned long crc=0;
 
 	/*
 	 * Print the check value for the selected CRC algorithm.
@@ -34,14 +35,16 @@ main(void)
 	 * Compute the CRC of the test message, slowly.
 	 */
 	printf("The crcSlow() of \"123456789\" is 0x%X\n", crcSlow(test, strlen(test)));
-  crcSlow(test,9);
+    crc = crcSlow(test,9);
 	
 	/*
 	 * Compute the CRC of the test message, more efficiently.
 	 */
 	crcInit();
 	printf("The crcFast() of \"123456789\" is 0x%X\n", crcFast(test, strlen(test)));
-  crcFast(test,9);
+    crc = crcFast(test,9);
 
-  return 0;
+    printf("finished with 0x%lX\n", crc);
+
+    return 0;
 }   /* main() */

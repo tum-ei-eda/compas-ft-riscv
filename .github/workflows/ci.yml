@@ -67,5 +67,5 @@ jobs:
     - name: Upload pre-built LLVM w/ Compas Patch
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.config.config.name }}_compas${{ matrix.config.compas_version }}_llvm${{ matrix.config.llvm_version }}_prebuilt
+        name: ${{ matrix.config.name }}_compas${{ matrix.config.compas_version }}_llvm${{ matrix.config.llvm_version }}_prebuilt
         path: ${{runner.workspace}}/llvm_install
