@@ -1,0 +1,236 @@
+diff --git a/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp b/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp
+index 3e8e190eecc3..b4f06fa0e522 100644
+--- a/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp
++++ b/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp
+@@ -881,18 +881,26 @@ static void emitComments(const MachineInstr &MI, raw_ostream &CommentOS) {
+   } else if ((Size = MI.getFoldedRestoreSize(TII))) {
+     if (*Size) {
+       if (*Size == unsigned(MemoryLocation::UnknownSize))
+-        CommentOS << "Unknown-size Folded Reload\n";
++        if (MI.mayStore()) {
++          CommentOS << "Unknown-size Folded Reload\n";
++        }
+       else
+-        CommentOS << *Size << "-byte Folded Reload\n";
++        if (MI.mayStore()) {
++          CommentOS << *Size << "-byte Folded Reload\n";
++        }
+     }
+   } else if ((Size = MI.getSpillSize(TII))) {
+     CommentOS << *Size << "-byte Spill\n";
+   } else if ((Size = MI.getFoldedSpillSize(TII))) {
+     if (*Size) {
+       if (*Size == unsigned(MemoryLocation::UnknownSize))
+-        CommentOS << "Unknown-size Folded Spill\n";
++        if (MI.mayStore()) {
++          CommentOS << "Unknown-size Folded Spill\n";
++        }
+       else
+-        CommentOS << *Size << "-byte Folded Spill\n";
++        if (MI.mayStore()) {
++          CommentOS << *Size << "-byte Folded Spill\n";
++        }
+     }
+   }
+ 
+diff --git a/llvm/lib/Target/RISCV/CMakeLists.txt b/llvm/lib/Target/RISCV/CMakeLists.txt
+index 1e042147223a..3a6f301baf75 100644
+--- a/llvm/lib/Target/RISCV/CMakeLists.txt
++++ b/llvm/lib/Target/RISCV/CMakeLists.txt
+@@ -56,6 +56,9 @@ add_llvm_target(RISCVCodeGen
+   TransformUtils
+   GlobalISel
+ 
++  LINK_LIBS
++  Sihft
++
+   ADD_TO_COMPONENT
+   RISCV
+   )
+@@ -64,3 +67,4 @@ add_subdirectory(AsmParser)
+ add_subdirectory(Disassembler)
+ add_subdirectory(MCTargetDesc)
+ add_subdirectory(TargetInfo)
++add_subdirectory(compas-ft-riscv)
+diff --git a/llvm/lib/Target/RISCV/RISCV.h b/llvm/lib/Target/RISCV/RISCV.h
+index 03462240fd93..2871c621c8c6 100644
+--- a/llvm/lib/Target/RISCV/RISCV.h
++++ b/llvm/lib/Target/RISCV/RISCV.h
+@@ -15,8 +15,39 @@
+ #define LLVM_LIB_TARGET_RISCV_RISCV_H
+ 
+ #include "MCTargetDesc/RISCVBaseInfo.h"
++#include "llvm/Support/CommandLine.h"
+ #include "llvm/Target/TargetMachine.h"
+ 
++namespace llvm::cl {
++inline opt<bool> reserve_rf{"RRF", desc("reserve half of RegFiles"),
++                            value_desc("pass")};
++inline opt<std::string> enable_cfcss{"CFCSS", desc("CFCSS pass for CFP"),
++                                     value_desc("pass")};
++inline opt<std::string> enable_rasm{"RASM", desc("RASM pass for CFP"),
++                                    value_desc("pass")};
++inline opt<std::string> enable_racfed{"RACFED", desc("RACFED pass for CFP"),
++                                    value_desc("pass")};
++inline opt<std::string> enable_nzdc{"NZDC", desc("NZDC pass for DFP"),
++                                    value_desc("pass")};
++inline opt<std::string> enable_nzdc_nemesis{"NZDC+NEMESIS", desc("NZDC+NEMESIS pass for DFP"),
++                                    value_desc("pass")};
++inline opt<std::string> enable_nzdc_nemesec{"NZDC+NEMESEC", desc("NZDC+NEMESEC pass for DFP"),
++                                     value_desc("pass")};
++inline opt<std::string> enable_swift{"SWIFT", desc("SWIFT pass for DFP"),
++                                     value_desc("pass")};
++inline opt<std::string> enable_eddi{"EDDI", desc("EDDI pass for DFP"),
++                                    value_desc("pass")};
++inline opt<std::string> enable_fgs{
++    "FGS", desc("fine grain schedule for instr. DMR"), value_desc("pass")};
++inline opt<bool> enable_repair{"REPAIR", desc("REPAIR pass on top of DMR"),
++                               value_desc("pass")};
++} // namespace llvm::cl
++
++namespace riscv_common {
++bool inCSString(std::string, std::string);
++}
++
++
+ namespace llvm {
+ class RISCVRegisterBankInfo;
+ class RISCVSubtarget;
+@@ -58,6 +89,12 @@ void initializeRISCVInsertVSETVLIPass(PassRegistry &);
+ InstructionSelector *createRISCVInstructionSelector(const RISCVTargetMachine &,
+                                                     RISCVSubtarget &,
+                                                     RISCVRegisterBankInfo &);
+-}
++void initializeRISCVDAGToDAGISelPass(PassRegistry &);
++
++FunctionPass *createRISCVCfcss();
++FunctionPass *createRISCVRasm();
++FunctionPass *createRISCVRacfed();
++FunctionPass *createRISCVDmr();
++} // namespace llvm
+ 
+ #endif
+diff --git a/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp b/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
+index 35363bf37c0d..d8c137c7d6ad 100644
+--- a/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
++++ b/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
+@@ -106,6 +106,103 @@ BitVector RISCVRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
+   markSuperRegs(Reserved, RISCV::FRM);
+   markSuperRegs(Reserved, RISCV::FFLAGS);
+ 
++  if (riscv_common::inCSString(llvm::cl::enable_cfcss,
++                               std::string{MF.getName()}) ||
++      riscv_common::inCSString(llvm::cl::enable_rasm,
++                               std::string{MF.getName()}) ||
++      riscv_common::inCSString(llvm::cl::enable_racfed,
++                               std::string{MF.getName()})) {
++    markSuperRegs(Reserved, RISCV::X5);
++    markSuperRegs(Reserved, RISCV::X29);
++  }
++
++  // DMR passes -> have to reserve half of reg file
++  if (llvm::cl::reserve_rf ||
++      riscv_common::inCSString(llvm::cl::enable_nzdc,
++                               std::string{MF.getName()}) ||
++      riscv_common::inCSString(llvm::cl::enable_nzdc_nemesis,
++                               std::string{MF.getName()}) ||
++      riscv_common::inCSString(llvm::cl::enable_nzdc_nemesec,
++                               std::string{MF.getName()}) ||
++      riscv_common::inCSString(llvm::cl::enable_swift,
++                               std::string{MF.getName()}) ||
++      riscv_common::inCSString(llvm::cl::enable_eddi,
++                               std::string{MF.getName()})) {
++    // these are availale for FP DMR purposes alongwith their shadows
++    markSuperRegs(Reserved, RISCV::F8_F);
++    markSuperRegs(Reserved, RISCV::F8_D);
++    markSuperRegs(Reserved, RISCV::F8_H);
++
++    // half of each regfile is reserved
++    markSuperRegs(Reserved, RISCV::X7);
++    markSuperRegs(Reserved, RISCV::X9);
++    markSuperRegs(Reserved, RISCV::X18);
++    markSuperRegs(Reserved, RISCV::X19);
++    markSuperRegs(Reserved, RISCV::X20);
++    markSuperRegs(Reserved, RISCV::X21);
++    markSuperRegs(Reserved, RISCV::X22);
++    markSuperRegs(Reserved, RISCV::X23);
++    markSuperRegs(Reserved, RISCV::X24);
++    markSuperRegs(Reserved, RISCV::X25);
++    markSuperRegs(Reserved, RISCV::X26);
++    markSuperRegs(Reserved, RISCV::X27);
++    markSuperRegs(Reserved, RISCV::X28);
++    markSuperRegs(Reserved, RISCV::X29);
++    markSuperRegs(Reserved, RISCV::X30);
++    markSuperRegs(Reserved, RISCV::X31);
++
++    markSuperRegs(Reserved, RISCV::F7_F);
++    markSuperRegs(Reserved, RISCV::F9_F);
++    markSuperRegs(Reserved, RISCV::F18_F);
++    markSuperRegs(Reserved, RISCV::F19_F);
++    markSuperRegs(Reserved, RISCV::F20_F);
++    markSuperRegs(Reserved, RISCV::F21_F);
++    markSuperRegs(Reserved, RISCV::F22_F);
++    markSuperRegs(Reserved, RISCV::F23_F);
++    markSuperRegs(Reserved, RISCV::F24_F);
++    markSuperRegs(Reserved, RISCV::F25_F);
++    markSuperRegs(Reserved, RISCV::F26_F);
++    markSuperRegs(Reserved, RISCV::F27_F);
++    markSuperRegs(Reserved, RISCV::F28_F);
++    markSuperRegs(Reserved, RISCV::F29_F);
++    markSuperRegs(Reserved, RISCV::F30_F);
++    markSuperRegs(Reserved, RISCV::F31_F);
++
++    markSuperRegs(Reserved, RISCV::F7_D);
++    markSuperRegs(Reserved, RISCV::F9_D);
++    markSuperRegs(Reserved, RISCV::F18_D);
++    markSuperRegs(Reserved, RISCV::F19_D);
++    markSuperRegs(Reserved, RISCV::F20_D);
++    markSuperRegs(Reserved, RISCV::F21_D);
++    markSuperRegs(Reserved, RISCV::F22_D);
++    markSuperRegs(Reserved, RISCV::F23_D);
++    markSuperRegs(Reserved, RISCV::F24_D);
++    markSuperRegs(Reserved, RISCV::F25_D);
++    markSuperRegs(Reserved, RISCV::F26_D);
++    markSuperRegs(Reserved, RISCV::F27_D);
++    markSuperRegs(Reserved, RISCV::F28_D);
++    markSuperRegs(Reserved, RISCV::F29_D);
++    markSuperRegs(Reserved, RISCV::F30_D);
++    markSuperRegs(Reserved, RISCV::F31_D);
++
++    markSuperRegs(Reserved, RISCV::F7_H);
++    markSuperRegs(Reserved, RISCV::F9_H);
++    markSuperRegs(Reserved, RISCV::F18_H);
++    markSuperRegs(Reserved, RISCV::F19_H);
++    markSuperRegs(Reserved, RISCV::F20_H);
++    markSuperRegs(Reserved, RISCV::F21_H);
++    markSuperRegs(Reserved, RISCV::F22_H);
++    markSuperRegs(Reserved, RISCV::F23_H);
++    markSuperRegs(Reserved, RISCV::F24_H);
++    markSuperRegs(Reserved, RISCV::F25_H);
++    markSuperRegs(Reserved, RISCV::F26_H);
++    markSuperRegs(Reserved, RISCV::F27_H);
++    markSuperRegs(Reserved, RISCV::F28_H);
++    markSuperRegs(Reserved, RISCV::F29_H);
++    markSuperRegs(Reserved, RISCV::F30_H);
++    markSuperRegs(Reserved, RISCV::F31_H);
++  }
++
+   assert(checkAllSuperRegsMarked(Reserved));
+   return Reserved;
+ }
+diff --git a/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp b/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
+index 0248ea0039bc..fa10d5ad21d2 100644
+--- a/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
++++ b/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
+@@ -197,6 +197,11 @@ void RISCVPassConfig::addPreEmitPass2() {
+   // possibility for other passes to break the requirements for forward
+   // progress in the LR/SC block.
+   addPass(createRISCVExpandAtomicPseudoPass());
++
++  addPass(createRISCVDmr());
++  addPass(createRISCVCfcss());
++  addPass(createRISCVRasm());
++  addPass(createRISCVRacfed());
+ }
+ 
+ void RISCVPassConfig::addMachineSSAOptimization() {
