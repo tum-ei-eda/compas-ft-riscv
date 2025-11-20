@@ -1,5 +1,5 @@
 diff --git a/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp b/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp
-index 0b1e32c87..6bb0b28cb 100644
+index 0b1e32c87fc3..6bb0b28cb37e 100644
 --- a/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp
 +++ b/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp
 @@ -1065,18 +1065,26 @@ static void emitComments(const MachineInstr &MI, raw_ostream &CommentOS) {
@@ -34,7 +34,7 @@ index 0b1e32c87..6bb0b28cb 100644
    }
  
 diff --git a/llvm/lib/Target/RISCV/CMakeLists.txt b/llvm/lib/Target/RISCV/CMakeLists.txt
-index f909e0017..13115ba69 100644
+index f909e0017e2b..13115ba6926f 100644
 --- a/llvm/lib/Target/RISCV/CMakeLists.txt
 +++ b/llvm/lib/Target/RISCV/CMakeLists.txt
 @@ -63,6 +63,9 @@ add_llvm_target(RISCVCodeGen
@@ -53,7 +53,7 @@ index f909e0017..13115ba69 100644
  add_subdirectory(TargetInfo)
 +add_subdirectory(compas-ft-riscv)
 diff --git a/llvm/lib/Target/RISCV/RISCV.h b/llvm/lib/Target/RISCV/RISCV.h
-index c42fb070a..262f0586c 100644
+index c42fb070aade..3774102b9d06 100644
 --- a/llvm/lib/Target/RISCV/RISCV.h
 +++ b/llvm/lib/Target/RISCV/RISCV.h
 @@ -15,8 +15,39 @@
@@ -96,23 +96,20 @@ index c42fb070a..262f0586c 100644
  namespace llvm {
  class AsmPrinter;
  class FunctionPass;
-@@ -69,12 +100,4 @@ FunctionPass *createRISCVInsertVSETVLIPass();
- void initializeRISCVInsertVSETVLIPass(PassRegistry &);
+@@ -75,6 +106,11 @@ InstructionSelector *createRISCVInstructionSelector(const RISCVTargetMachine &,
+                                                     RISCVSubtarget &,
+                                                     RISCVRegisterBankInfo &);
+ void initializeRISCVDAGToDAGISelPass(PassRegistry &);
++
++FunctionPass *createRISCVCfcss();
++FunctionPass *createRISCVRasm();
++FunctionPass *createRISCVRacfed();
++FunctionPass *createRISCVDmr();
+ } // namespace llvm
  
- FunctionPass *createRISCVRedundantCopyEliminationPass();
--void initializeRISCVRedundantCopyEliminationPass(PassRegistry &);
--
--InstructionSelector *createRISCVInstructionSelector(const RISCVTargetMachine &,
--                                                    RISCVSubtarget &,
--                                                    RISCVRegisterBankInfo &);
--void initializeRISCVDAGToDAGISelPass(PassRegistry &);
--} // namespace llvm
--
--#endif
-+vo
-\ No newline at end of file
+ #endif
 diff --git a/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp b/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
-index 927845aa2..05bb1b5ca 100644
+index 927845aa23d1..48ed8885734b 100644
 --- a/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
 +++ b/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
 @@ -114,6 +114,103 @@ BitVector RISCVRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
@@ -219,49 +216,8 @@ index 927845aa2..05bb1b5ca 100644
    assert(checkAllSuperRegsMarked(Reserved));
    return Reserved;
  }
-@@ -749,38 +846,4 @@ bool RISCVRegisterInfo::getRegAllocationHints(
-   // returns true. Immediate range was already checked in isCompressible.
-   // For registers, it checks if the register is a GPRC register. reg-reg
-   // instructions that require GPRC need all register operands to be GPRC.
--  auto isCompressibleOpnd = [&](const MachineOperand &MO) {
--    if (!MO.isReg())
--      return true;
--    Register Reg = MO.getReg();
--    Register PhysReg = Reg.isPhysical() ? Reg : Register(VRM->getPhys(Reg));
--    return PhysReg && RISCV::GPRCRegClass.contains(PhysReg);
--  };
--
--  for (auto &MO : MRI->reg_nodbg_operands(VirtReg)) {
--    const MachineInstr &MI = *MO.getParent();
--    unsigned OpIdx = MI.getOperandNo(&MO);
--    bool NeedGPRC;
--    if (isCompressible(MI, NeedGPRC)) {
--      if (OpIdx == 0 && MI.getOperand(1).isReg()) {
--        if (!NeedGPRC || isCompressibleOpnd(MI.getOperand(2)))
--          tryAddHint(MO, MI.getOperand(1), NeedGPRC);
--        if (MI.isCommutable() && MI.getOperand(2).isReg() &&
--            (!NeedGPRC || isCompressibleOpnd(MI.getOperand(1))))
--          tryAddHint(MO, MI.getOperand(2), NeedGPRC);
--      } else if (OpIdx == 1 &&
--                 (!NeedGPRC || isCompressibleOpnd(MI.getOperand(2)))) {
--        tryAddHint(MO, MI.getOperand(0), NeedGPRC);
--      } else if (MI.isCommutable() && OpIdx == 2 &&
--                 (!NeedGPRC || isCompressibleOpnd(MI.getOperand(1)))) {
--        tryAddHint(MO, MI.getOperand(0), NeedGPRC);
--      }
--    }
--  }
--
--  for (MCPhysReg OrderReg : Order)
--    if (TwoAddrHints.count(OrderReg))
--      Hints.push_back(OrderReg);
--
--  return BaseImplRetVal;
--}
-+  auto isCompressibleOpnd = [&](const 
-\ No newline at end of file
 diff --git a/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp b/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
-index cc8814066..b129e48cf 100644
+index cc881406666c..b129e48cffe3 100644
 --- a/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
 +++ b/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
 @@ -336,6 +336,11 @@ void RISCVPassConfig::addPreEmitPass2() {
