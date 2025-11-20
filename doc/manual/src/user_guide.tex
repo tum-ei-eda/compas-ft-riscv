@@ -36,15 +36,28 @@ options is provided in Table~\ref{tab:sihft-options}.
   \hline
   \textbf{Option} & \textbf{Description}                                     \\
   \hline
-  -NZDC=foo,bar   & apply NZDC transformation on \textit{foo,bar} functions  \\
-  -NZDC+NEMSIS=foo,bar   & apply NZDC and NEMESIS transformation on \textit{foo,bar} functions  \\
-  -NZDC+NEMSEC=foo,bar   & apply NZDC and NEMESEC (NEMESIS w/ store fallbacks) transformation on \textit{foo,bar} functions  \\
-  -SWIFT=foo,bar  & apply SWIFT transformation on \textit{foo,bar} functions \\
-  -RASM=foo,bar   & apply RASM transformation on \textit{foo,bar} functions  \\
-  -RACFED=foo,bar & apply RACFED transformation on \textit{foo,bar} functions  \\
-  -CFCSS=foo,bar  & apply CFCSS transformation on \textit{foo,bar} functions \\
+  -NZDC=foo,bar   & NZDC transformation on \textit{foo,bar} functions  \\
+ 
+  -NZDC+NEMSIS=foo,bar   & NZDC and NEMESIS transformation \\
+  & on \textit{foo,bar} functions  \\
+  
+  -NZDC+NEMSEC=foo,bar   & NZDC and NEMESEC (NEMESIS w/\\ 
+   & store fallbacks) transformation on \\
+   &\textit{foo,bar} functions  \\
+ 
+  -SWIFT=foo,bar  & SWIFT transformation 
+  on \textit{foo,bar}\\ & functions  \\
+  
+  -RASM=foo,bar   & RASM transformation 
+  on \textit{foo,bar}\\ & functions  \\
+  
+  -RACFED=foo,bar & RACFED transformation
+   on \textit{foo,bar}\\ & functions  \\
+  
+  -CFCSS=foo,bar  & CFCSS transformation on \textit{foo,bar} functions \\
+  
   -FGS            & use fine-grain scheduling for NZDC code                  \\
-  -REPAIR         & use REPAIR transformation on NZDC code                   \\
+  -REPAIR         & REPAIR transformation on NZDC code                   \\
   \hline
  \end{tabular}
 \end{table}
@@ -82,11 +95,15 @@ $ <clang> -emit-llvm -O2 -S --target=riscv64
     -isystem <riscv64-gcc>/riscv64-unknown-elf/
     crc.c -o crc.ll
 
+$ dmr_funcs="main,crcSlow,crcFast"
+$ cfcss_funcs="main"
+$ rasm_funcs="crcSlow,crcFast"
+
 $ <llc> -O2 -march=riscv64 -mattr=+m,+a,+d,+c
-    -NZDC=main -CFCSS=main
+    -NZDC=${dmr_funcs} -CFCSS=${cfcss_funcs}
     main.ll -o main_hardened.s
 $ <llc> -O2 -march=riscv64 -mattr=+m,+a,+d,+c
-    -NZDC=crcSlow -RASM=crcSlow,crcFast
+    -NZDC=${dmr_funcs} -RASM=${rasm_funcs}
     crc.ll -o crc_hardened.s
 
 $ <riscv64-gcc>/bin/riscv64-unknown-elf-gcc -O2
