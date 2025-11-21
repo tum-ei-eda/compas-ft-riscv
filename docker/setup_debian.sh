@@ -8,7 +8,10 @@ get_apt_deps() {
 }
 setup_env() {
   apt update
-  apt install --no-install-recommends -y "$(get_apt_deps)"
+  for pkg in "$(get_apt_deps)"
+  do
+    apt install --no-install-recommends -y ${pkg}
+  done
 }
 ########################################################################################################################
 # LLVM
