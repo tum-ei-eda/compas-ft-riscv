@@ -45,7 +45,7 @@ RUN \
   . "${workspace_dir}/docker/setup_debian.sh" && \
   build_llvm ${llvm_srcdir} ${llvm_builddir} ${llvm_destdir} ${llvm_version}
 ###################################################################################################
-FROM compas-deps AS compas-dev
+FROM compas-ft-riscv-deps AS compas-ft-riscv-dev
 ARG workspace_dir
 ARG ENV_LLVM_FROM_SOURCE
 ARG ENV_LLVM_VERSION
@@ -88,7 +88,7 @@ RUN \
   . "${workspace_dir}/docker/setup_debian.sh" && \
   install_llvm ${llvm_src_dir} ${llvm_builddir} ${llvm_destdir} ${llvm_version} ${llvm_patches_dir}
 ###################################################################################################
-FROM compas-dev AS compas-base
+FROM compas-ft-riscv-dev AS compas-ft-riscv-base
 ##################
 # Compas (clean) #
 ##################
