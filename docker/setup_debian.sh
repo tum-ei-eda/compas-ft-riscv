@@ -3,7 +3,7 @@
 # Package dependencies
 get_apt_deps() {
   compas_apt_dep="build-essential cmake git"
-  echo "${compas_apt_dep} ${vrtlmod_apt_dep}"
+  echo "${compas_apt_dep}"
 }
 setup_env() {
   apt update

@@ -22,9 +22,14 @@ ENV ENV_BUILD_CXX_STANDARD=${ENV_BUILD_CXX_STANDARD}
 RUN \
   --mount=type=bind,source=".",target=${workspace_dir} \
   . "${workspace_dir}/docker/setup_debian.sh" && \
-  setup_env \
-    && \
+  setup_env && \
     rm -rf /var/lib/apt/lists/*
+#####################
+# Docker CA Certif. #
+#####################
+RUN apt-get update && \
+    apt-get install -y ca-certificates && \
+    update-ca-certificates
 #####################
 # LLVM (base build) #
 #####################
