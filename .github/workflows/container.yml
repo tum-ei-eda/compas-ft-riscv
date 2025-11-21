@@ -140,6 +140,11 @@ jobs:
           target: compas-ft-riscv-dev
           build-args: |
             BASE_IMAGE=${{ github.event.inputs.base-image }}
+            workspace_dir=${{ env.workspace_dir }}
+            ENV_LLVM_FROM_SOURCE=${{ env.ENV_LLVM_FROM_SOURCE }}
+            ENV_LLVM_VERSION=${{ env.ENV_LLVM_VERSION }}
+            ENV_BUILD_CONFIG=${{ env.ENV_BUILD_CONFIG }}
+            ENV_BUILD_CXX_STANDARD=${{ env.ENV_BUILD_CXX_STANDARD }}
           cache-from: |
             type=registry,ref=${{ secrets.DOCKER_REGISTRY }}/${{ secrets.DOCKER_NAMESPACE }}/compas-ft-riscv-deps:${{ steps.timestamp.outputs.builddate }}-${{ github.event.inputs.compas-ft-riscv-deps }}-${{ steps.os.outputs.os }}
           cache-to: type=inline
