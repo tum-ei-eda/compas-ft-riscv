@@ -20,6 +20,7 @@
 #include "common.h"
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/LivePhysRegs.h"
 
 #define N_MIN_INTRA_INSTRUCTION_COUNT 3
 

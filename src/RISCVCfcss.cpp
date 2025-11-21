@@ -19,6 +19,7 @@
 #include "RISCVSubtarget.h"
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/LivePhysRegs.h"
 
 llvm::FunctionPass *llvm::createRISCVCfcss() { return new RISCVCfcss(); }
 
