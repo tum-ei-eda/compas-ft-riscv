@@ -2,8 +2,9 @@
 ########################################################################################################################
 # Package dependencies
 get_apt_deps() {
+  llvm_apt_dep="build-essential cmake git python3 libz-dev libxml2-dev ninja-build"
   compas_apt_dep="build-essential cmake git"
-  echo "${compas_apt_dep} ${vrtlmod_apt_dep}"
+  echo "${compas_apt_dep} ${llvm_apt_dep}"
 }
 setup_env() {
   apt update
@@ -20,12 +21,10 @@ fetch_llvm() {
   build_dir="${2}"
   install_dir="${3}"
   version="${4}"
-  llvm_patches_dir="${5}"
 
   llvm_prefix="llvm-project"
   llvm_tag="llvmorg-${version}"
   llvm_url="https://github.com/llvm/llvm-project"
-  llvm_patch_file="llvm${version}_src.patch"
 
   echo "[fetch] llvm"
   git clone --depth 1 --branch "${llvm_tag}" ${llvm_url}.git ${src_dir}
@@ -38,6 +37,7 @@ configure_llvm() {
 
   echo "[configure] llvm"
   cmake \
+    -G "Ninja" \
     -S "${src_dir}/llvm" \
     -B "${build_dir}" \
     -D "CMAKE_BUILD_TYPE=${ENV_BUILD_CONFIG}" \
