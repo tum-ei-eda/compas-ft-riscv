@@ -1,0 +1,104 @@
+ARG BASE_IMAGE=debian:stable
+ARG workspace_dir
+ARG ENV_LLVM_FROM_SOURCE
+ARG ENV_LLVM_VERSION
+ARG ENV_BUILD_CONFIG
+ARG ENV_BUILD_CXX_STANDARD
+###################################################################################################
+FROM ${BASE_IMAGE} AS compas-deps
+ARG workspace_dir
+ARG ENV_LLVM_FROM_SOURCE
+ARG ENV_LLVM_VERSION
+ARG ENV_BUILD_CONFIG
+ARG ENV_BUILD_CXX_STANDARD
+# Overall build config for cmake dependencies
+ENV ENV_LLVM_FROM_SOURCE=${ENV_LLVM_FROM_SOURCE}
+ENV ENV_LLVM_VERSION=${ENV_LLVM_VERSION}
+ENV ENV_BUILD_CONFIG=${ENV_BUILD_CONFIG}
+ENV ENV_BUILD_CXX_STANDARD=${ENV_BUILD_CXX_STANDARD}
+#########################
+# Prerequisite packages #
+#########################
+RUN \
+  --mount=type=bind,source=".",target=${workspace_dir} \
+  . "${workspace_dir}/docker/setup_debian.sh" && \
+  setup_env \
+    && \
+    rm -rf /var/lib/apt/lists/*
+#####################
+# LLVM (base build) #
+#####################
+ARG llvm_srcdir="/llvm-project"
+ARG llvm_builddir="/llvm-build"
+ARG llvm_destdir="/llvm-install"
+ARG llvm_version="${ENV_LLVM_VERSION}"
+RUN \
+  --mount=type=bind,source=".",target=${workspace_dir} \
+  . "${workspace_dir}/docker/setup_debian.sh" && \
+  fetch_llvm ${llvm_srcdir} ${llvm_builddir} ${llvm_destdir} ${llvm_version}
+RUN \
+  --mount=type=bind,source=".",target=${workspace_dir} \
+  . "${workspace_dir}/docker/setup_debian.sh" && \
+  configure_llvm ${llvm_srcdir} ${llvm_builddir} ${llvm_destdir} ${llvm_version}
+RUN \
+  --mount=type=bind,source=".",target=${workspace_dir} \
+  . "${workspace_dir}/docker/setup_debian.sh" && \
+  build_llvm ${llvm_srcdir} ${llvm_builddir} ${llvm_destdir} ${llvm_version}
+###################################################################################################
+FROM compas-deps AS compas-dev
+ARG workspace_dir
+ARG ENV_LLVM_FROM_SOURCE
+ARG ENV_LLVM_VERSION
+ARG ENV_BUILD_CONFIG
+ARG ENV_BUILD_CXX_STANDARD
+# Overall build config for cmake dependencies
+ENV ENV_LLVM_FROM_SOURCE=${ENV_LLVM_FROM_SOURCE}
+ENV ENV_LLVM_VERSION=${ENV_LLVM_VERSION}
+ENV ENV_BUILD_CONFIG=${ENV_BUILD_CONFIG}
+ENV ENV_BUILD_CXX_STANDARD=${ENV_BUILD_CXX_STANDARD}
+########################
+# Compas (setup build) #
+########################
+ARG compas_src_dir="${workspace_dir}"
+ARG llvm_src_dir="/llvm-project"
+ARG llvm_builddir="/llvm-build"
+ARG llvm_destdir="/llvm-install"
+ARG llvm_version="${ENV_LLVM_VERSION}"
+ARG llvm_patch_dir="${compas_src_dir}/patches/"
+RUN \
+  --mount=type=bind,source=".",target=${workspace_dir} \
+  . "${workspace_dir}/docker/setup_debian.sh" && \
+  patch_llvm ${llvm_src_dir} ${llvm_builddir} ${llvm_destdir} ${llvm_version} ${llvm_patches_dir}
+RUN \
+  --mount=type=bind,source=".",target=${workspace_dir} \
+  . "${workspace_dir}/docker/setup_debian.sh" && \
+  setup_compas ${compas_src_dir} ${llvm_src_dir}
+##################
+# Compas (build) #
+##################
+RUN \
+  --mount=type=bind,source=".",target=${workspace_dir} \
+  . "${workspace_dir}/docker/setup_debian.sh" && \
+  build_llvm ${llvm_src_dir} ${llvm_builddir} ${llvm_destdir} ${llvm_version} ${llvm_patches_dir}
+####################
+# Compas (install) #
+####################
+RUN \
+  --mount=type=bind,source=".",target=${workspace_dir} \
+  . "${workspace_dir}/docker/setup_debian.sh" && \
+  install_llvm ${llvm_src_dir} ${llvm_builddir} ${llvm_destdir} ${llvm_version} ${llvm_patches_dir}
+###################################################################################################
+FROM compas-dev AS compas-base
+##################
+# Compas (clean) #
+##################
+ARG llvm_src_dir="/llvm-project"
+ARG llvm_builddir="/llvm-build"
+ARG llvm_destdir="/llvm-install"
+ARG llvm_version="${ENV_LLVM_VERSION}"
+ARG llvm_patch_dir="${compas_src_dir}/patches/"
+RUN \
+  --mount=type=bind,source=".",target=${workspace_dir} \
+  . "${workspace_dir}/docker/setup_debian.sh" && \
+  cleanup_llvm ${llvm_src_dir} ${llvm_builddir} ${llvm_destdir} ${llvm_version} ${llvm_patches_dir}
+###################################################################################################
