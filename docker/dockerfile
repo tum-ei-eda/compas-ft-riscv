@@ -5,7 +5,7 @@ ARG ENV_LLVM_VERSION
 ARG ENV_BUILD_CONFIG
 ARG ENV_BUILD_CXX_STANDARD
 ###################################################################################################
-FROM ${BASE_IMAGE} AS compas-deps
+FROM ${BASE_IMAGE} AS compas-ft-riscv-deps
 ARG workspace_dir
 ARG ENV_LLVM_FROM_SOURCE
 ARG ENV_LLVM_VERSION
