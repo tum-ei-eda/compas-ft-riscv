@@ -25,7 +25,9 @@ jobs:
     strategy:
       matrix:
         config:
-          - { os: ubuntu-22.04, compas_version: "1.1.0", cmakegen: "Release"}
+          - { compas_version: "1.1.0"}
+        os:
+          - { name: "ubuntu", version: "latest" }
         llvm:
           #- { src: 'true', tag: '13.0.1' } # <-- the original config
           #- { src: 'true', tag: '14.0.6' } # <-- save CI time
@@ -34,10 +36,15 @@ jobs:
         llvm_base:
           - { url: "https://github.com/llvm/llvm-project.git", prefix: "llvm-project" }
 
-    runs-on: ${{ matrix.config.os }}
-    name: build_${{ matrix.config.os }}_compas${{ matrix.config.compas_version }}_llvm${{ matrix.llvm.tag }}
+    runs-on: ${{ matrix.os.name }}-${{ matrix.os.version }}
+    container: ${{ matrix.os.name }}:${{ matrix.os.version }}
+    name: build_${{ matrix.os.name }}-${{ matrix.os.version }}_compas${{ matrix.config.compas_version }}_llvm${{ matrix.llvm.tag }}
 
     steps:
+    - name: Install git on container
+      run: |
+        apt update
+        apt install -y git
     - name: Clone COMPAS
       uses: actions/checkout@v4
       with:
@@ -113,5 +120,5 @@ jobs:
     - name: Upload pre-built LLVM w/ Compas Patch
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.config.os }}_compas${{ matrix.config.compas_version }}_llvm${{ matrix.llvm.tag }}_prebuilt
+        name: prebuilt_${{ matrix.os.name }}-${{ matrix.os.version }}_compas${{ matrix.config.compas_version }}_llvm${{ matrix.llvm.tag }}
         path: ${{runner.workspace}}/llvm_install
