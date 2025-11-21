@@ -156,7 +156,7 @@ jobs:
   image-base:
     name: Build compas-ft-riscv-base image for users
     runs-on: ubuntu-latest
-    needs: image-deps
+    needs: image-dev
     steps:
       - name: Set current date as env variable
         run: |
