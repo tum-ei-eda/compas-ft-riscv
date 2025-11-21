@@ -23,7 +23,8 @@ jobs:
           #- { src: 'true', tag: '14.0.6' } # <-- save CI time
           #- { src: 'true', tag: '15.0.7' } # <-- save CI time
           - { src: 'true', tag: '16.0.6' } # <-- latest (supported) llvm
-      llvm_base: { url: "https://github.com/llvm/llvm-project.git", prefix: "llvm-project" }
+        llvm_base:
+          - { url: "https://github.com/llvm/llvm-project.git", prefix: "llvm-project" }
 
     runs-on: ${{ matrix.config.os }}
     name: build_${{ matrix.config.os }}_compas${{ matrix.config.compas_version }}_llvm${{ matrix.llvm.tag }}
@@ -37,8 +38,8 @@ jobs:
     - name: Requirements (LLVM base build)
       working-directory: ${{runner.workspace}}
       run: |
-        git clone --recurse-submodules ${{ llvm_base.url }} ${{ llvm_base.prefix }}_src
-        cd ${{ llvm_base.prefix }}_src
+        git clone --recurse-submodules ${{ matrix.llvm_base.url }} ${{ matrix.llvm_base.prefix }}_src
+        cd ${{ matrix.llvm_base.prefix }}_src
         git checkout llvmorg-${{ matrix.llvm.tag }}
         cmake -S llvm -B build -DCMAKE_BUILD_TYPE=${{ matrix.config.cmakegen }} \
           -DCMAKE_INSTALL_PREFIX=${{runner.workspace}}/llvm_install \
@@ -56,17 +57,17 @@ jobs:
 
     - name: Patch (LLVM base build)
       run: |
-        ln -s ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src ${{runner.workspace}}/${{ llvm_base.prefix }}_src/llvm/lib/Target/RISCV/compas-ft-riscv
-        cd ${{runner.workspace}}/${{ llvm_base.prefix }}_src
+        ln -s ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src ${{runner.workspace}}/${{ matrix.llvm_base.prefix }}_src/llvm/lib/Target/RISCV/compas-ft-riscv
+        cd ${{runner.workspace}}/${{ matrix.llvm_base.prefix }}_src
         git apply llvm/lib/Target/RISCV/compas-ft-riscv/patches/llvm${{ matrix.llvm.tag }}_src.patch
 
     - name: Re-Compile LLVM with COMPAS
-      working-directory: ${{runner.workspace}}/${{ llvm_base.prefix }}_src
+      working-directory: ${{runner.workspace}}/${{ matrix.llvm_base.prefix }}_src
       run: |
         cmake --build build --parallel $(nproc)
 
     - name: Install LLVM
-      working-directory: ${{runner.workspace}}/${{ llvm_base.prefix }}_src
+      working-directory: ${{runner.workspace}}/${{ matrix.llvm_base.prefix }}_src
       run: |
         cmake --build build --parallel $(nproc) --target install
 
