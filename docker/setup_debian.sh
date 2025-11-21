@@ -2,15 +2,13 @@
 ########################################################################################################################
 # Package dependencies
 get_apt_deps() {
+  llvm_apt_dep="build-essential cmake git python3 libz-dev libxml2-dev ninja-build"
   compas_apt_dep="build-essential cmake git"
-  echo "${compas_apt_dep}"
+  echo "${compas_apt_dep} ${llvm_apt_dep}"
 }
 setup_env() {
   apt update
-  for pkg in "$(get_apt_deps)"
-  do
-    apt install --no-install-recommends -y ${pkg}
-  done
+  apt install --no-install-recommends -y "$(get_apt_deps)"
 }
 ########################################################################################################################
 # LLVM
@@ -38,6 +36,7 @@ configure_llvm() {
 
   echo "[configure] llvm"
   cmake \
+    -G "Ninja" \
     -S "${src_dir}/llvm" \
     -B "${build_dir}" \
     -D "CMAKE_BUILD_TYPE=${ENV_BUILD_CONFIG}" \
