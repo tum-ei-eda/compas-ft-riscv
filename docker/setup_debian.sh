@@ -21,12 +21,10 @@ fetch_llvm() {
   build_dir="${2}"
   install_dir="${3}"
   version="${4}"
-  llvm_patches_dir="${5}"
 
   llvm_prefix="llvm-project"
   llvm_tag="llvmorg-${version}"
   llvm_url="https://github.com/llvm/llvm-project"
-  llvm_patch_file="llvm${version}_src.patch"
 
   echo "[fetch] llvm"
   git clone --depth 1 --branch "${llvm_tag}" ${llvm_url}.git ${src_dir}

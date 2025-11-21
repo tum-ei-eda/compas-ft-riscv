@@ -25,7 +25,7 @@ jobs:
     strategy:
       matrix:
         config:
-          - { os: ubuntu-22.04, compas_version: "1.1.0", cmakegen: "Release", packages: "build-essential cmake git" }
+          - { os: ubuntu-22.04, compas_version: "1.1.0", cmakegen: "Release"}
         llvm:
           #- { src: 'true', tag: '13.0.1' } # <-- the original config
           #- { src: 'true', tag: '14.0.6' } # <-- save CI time
@@ -38,55 +38,79 @@ jobs:
     name: build_${{ matrix.config.os }}_compas${{ matrix.config.compas_version }}_llvm${{ matrix.llvm.tag }}
 
     steps:
-    - name: Install build dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y ${{ matrix.config.packages }}
-
-    - name: Clone LLVM
-      working-directory: ${{runner.workspace}}
-      run: |
-        git clone --depth 1 ${{ matrix.llvm_base.url }} ${{ matrix.llvm_base.prefix }}_src --branch llvmorg-${{ matrix.llvm.tag }}
-
-    - name: Configure LLVM (base build)
-      working-directory: ${{runner.workspace}}/${{ matrix.llvm_base.prefix }}_src
-      run: |
-        cmake -S llvm -B build -DCMAKE_BUILD_TYPE=${{ matrix.config.cmakegen }} \
-          -DCMAKE_INSTALL_PREFIX=${{runner.workspace}}/llvm_install \
-          -DCMAKE_CXX_STANDARD=17 \
-          -DLLVM_ENABLE_PROJECTS=clang \
-          -DLLVM_TARGETS_TO_BUILD=RISCV \
-          -DLLVM_ENABLE_ASSERTIONS=ON
-
-    - name: Compile LLVM (base build)
-      working-directory: ${{runner.workspace}}/${{ matrix.llvm_base.prefix }}_src
-      run: |
-        cmake --build build --parallel $(nproc)
-
     - name: Clone COMPAS
       uses: actions/checkout@v4
       with:
         path: compas-ft-riscv_src
         submodules: recursive
-
+    - name: Load env vars from docker/.env
+      run: |
+        while IFS='=' read -r key value || [ -n "$key" ]; do
+          [[ -z "$key" || "$key" == \#* ]] && continue
+          key="$(echo "$key" | xargs)"
+          value="$(echo "$value" | xargs)"
+          value="${value%\"}"
+          value="${value#\"}"
+          echo "$key=$value" >> $GITHUB_ENV
+        done < docker/.env
+    - name: Requirements (Linux)
+      if: runner.os == 'Linux'
+      continue-on-error: false
+      shell: bash
+      run: |
+        . ./compas-ft-riscv/compas-ft-riscv_src/docker/setup_debian.sh
+        setup_env
+    - name: Clone LLVM
+      working-directory: ${{runner.workspace}}
+      run: |
+        . ./compas-ft-riscv/compas-ft-riscv_src/docker/setup_debian.sh
+        fetch_llvm "${{runner.workspace}}/llvm_src" \
+                   "${{runner.workspace}}/llvm_build" \
+                   "${{runner.workspace}}/llvm_install" \
+                   "${{ env.ENV_LLVM_VERSION }}"
+    - name: Configure LLVM (base build)
+      working-directory: ${{runner.workspace}}
+      run: |
+        . ./compas-ft-riscv/compas-ft-riscv_src/docker/setup_debian.sh
+        configure_llvm "${{runner.workspace}}/llvm_src" \
+                   "${{runner.workspace}}/llvm_build" \
+                   "${{runner.workspace}}/llvm_install" \
+                   "${{ env.ENV_LLVM_VERSION }}"
+    - name: Compile LLVM (base build)
+      working-directory: ${{runner.workspace}}
+      run: |
+        . ./compas-ft-riscv/compas-ft-riscv_src/docker/setup_debian.sh
+        build_llvm "${{runner.workspace}}/llvm_src" \
+                   "${{runner.workspace}}/llvm_build" \
+                   "${{runner.workspace}}/llvm_install" \
+                   "${{ env.ENV_LLVM_VERSION }}"
     - name: Patch (LLVM base build)
+      working-directory: ${{runner.workspace}}
       run: |
-        ln -s ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src ${{runner.workspace}}/${{ matrix.llvm_base.prefix }}_src/llvm/lib/Target/RISCV/compas-ft-riscv
-        cd ${{runner.workspace}}/${{ matrix.llvm_base.prefix }}_src
-        git apply llvm/lib/Target/RISCV/compas-ft-riscv/patches/llvm${{ matrix.llvm.tag }}_src.patch
-
+        . ./compas-ft-riscv/compas-ft-riscv_src/docker/setup_debian.sh
+        patch_llvm "${{runner.workspace}}/llvm_src" \
+                   "${{runner.workspace}}/llvm_build" \
+                   "${{runner.workspace}}/llvm_install" \
+                   "${{ env.ENV_LLVM_VERSION }}" \
+                   "${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src/patches/"
     - name: Re-Compile LLVM with COMPAS
-      working-directory: ${{runner.workspace}}/${{ matrix.llvm_base.prefix }}_src
+      working-directory: ${{runner.workspace}}
       run: |
-        cmake --build build --parallel $(nproc)
-
+        . ./compas-ft-riscv/compas-ft-riscv_src/docker/setup_debian.sh
+        build_llvm "${{runner.workspace}}/llvm_src" \
+                   "${{runner.workspace}}/llvm_build" \
+                   "${{runner.workspace}}/llvm_install" \
+                   "${{ env.ENV_LLVM_VERSION }}"
     - name: Install LLVM
-      working-directory: ${{runner.workspace}}/${{ matrix.llvm_base.prefix }}_src
+      working-directory: ${{runner.workspace}}
       run: |
-        cmake --build build --parallel $(nproc) --target install
-
+        . ./compas-ft-riscv/compas-ft-riscv_src/docker/setup_debian.sh
+        install_llvm "${{runner.workspace}}/llvm_src" \
+                   "${{runner.workspace}}/llvm_build" \
+                   "${{runner.workspace}}/llvm_install" \
+                   "${{ env.ENV_LLVM_VERSION }}"
     - name: Upload pre-built LLVM w/ Compas Patch
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.config.name }}_compas${{ matrix.config.compas_version }}_llvm${{ matrix.llvm.tag }}_prebuilt
+        name: ${{ matrix.config.os }}_compas${{ matrix.config.compas_version }}_llvm${{ matrix.llvm.tag }}_prebuilt
         path: ${{runner.workspace}}/llvm_install
