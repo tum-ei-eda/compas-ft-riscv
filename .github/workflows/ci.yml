@@ -4,9 +4,17 @@ on:
   push:
     paths-ignore:
     - doc/
+    - README*
+    branches:
+      - main
+    tags:
+      - v*
   pull_request:
     paths-ignore:
     - doc/
+    - README*
+    branches:
+      - main
   workflow_dispatch: {}
 
 env:
@@ -19,7 +27,7 @@ jobs:
         config:
           - { os: ubuntu-22.04, compas_version: "1.1.0", cmakegen: "Release", packages: "build-essential cmake git" }
         llvm:
-          - { src: 'true', tag: '13.0.1' } # <-- the original config
+          #- { src: 'true', tag: '13.0.1' } # <-- the original config
           #- { src: 'true', tag: '14.0.6' } # <-- save CI time
           #- { src: 'true', tag: '15.0.7' } # <-- save CI time
           - { src: 'true', tag: '16.0.6' } # <-- latest (supported) llvm
