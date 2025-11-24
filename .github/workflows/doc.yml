@@ -36,7 +36,7 @@ jobs:
           value="${value#\"}"
           echo "$key=$value" >> $GITHUB_ENV
         done < compas-ft-riscv_src/docker/.env
-    - name: Prepare .Tex files:
+    - name: Prepare .Tex files
       working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src/doc/src
       run: |
         sed -i "s/@VERSION@/${ENV_COMPAS_VERSION}/g" main.tex   
