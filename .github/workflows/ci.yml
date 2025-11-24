@@ -115,7 +115,7 @@ jobs:
                    "/llvm_install" \
                    "${{ env.ENV_LLVM_VERSION }}"
     - name: Upload pre-built LLVM w/ Compas Patch
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: prebuilt_${{ matrix.os.name }}-${{ matrix.os.version }}_compas_llvm${{ matrix.llvm.tag }}
         path: /llvm_install
@@ -172,6 +172,8 @@ jobs:
       matrix:
         os:
           - { name: "ubuntu", version: "latest" }
+        llvm:
+          - { src: 'true', tag: '16.0.6' } # <-- latest (supported) llvm
         rvgnu:
           - { base: "riscv-none-elf"}
         suts:
