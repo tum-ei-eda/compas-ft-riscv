@@ -1,0 +1,96 @@
+= compas-ft-riscv
+
+COMPAS: Compiler-assisted Software-implemented Hardware Fault Tolerance implemented in LLVM passes for the RISC-V backend
+
+[![pypi package](https://badge.fury.io/py/seal5.svg)](https://pypi.org/project/seal5)
+[![readthedocs](https://readthedocs.org/projects/seal5/badge/?version=latest)](https://seal5.readthedocs.io/en/latest/?version=latest)
+[![GitHub license](https://img.shields.io/github/license/tum-ei-eda/compas-ft-riscv.svg)](https://github.com/tum-ei-eda/compas-ft-riscv/blob/main/LICENSE)
+
+[![CI](https://github.com/tum-ei-eda/compas-ft-riscv/actions/workflows/ci.yml/badge.svg)](https://github.com/tum-ei-eda/compas-ft-riscv/actions/workflows/ci.yml)
+[![DOC](https://github.com/tum-ei-eda/compas-ft-riscv/actions/workflows/doc.yml/badge.svg)](https://github.com/tum-ei-eda/compas-ft-riscv/actions/workflows/doc.yml)
+
+* CI workflow: image:https://github.com/tum-ei-eda/compas-ft-riscv/actions/workflows/ci.yml/badge.svg["tumeda/compas-ft-riscv-ci", link="https://github.com/tum-ei-eda/compas-ft-riscv/actions/workflows/ci.yml"]
+* Docker workflow: image:https://github.com/tum-ei-eda/compas-ft-riscv/actions/workflows/container.yml/badge.svg["tumeda/compas-ft-riscv-ci", link="https://github.com/tum-ei-eda/compas-ft-riscv/actions/workflows/container.yml"]
+image:https://img.shields.io/docker/v/tumeda/compas-ft-riscv-base/latest-default-debian-stable["tumeda/compas-ft-riscv-base", link="https://img.shields.io/docker/v/tumeda/compas-ft-riscv-base/latest-default-debian-stable"]
+* Doc: image:https://github.com/tum-ei-eda/compas-ft-riscv/actions/workflows/doc.yml/badge.svg["tumeda/compas-ft-riscv-doc", link="https://github.com/tum-ei-eda/compas-ft-riscv/actions/workflows/doc.yml"]
+
+== Brief
+
+Repo to house SIHFT passes for LLVM to create COMPAS, a compiler that adds fault tolerance on instruction level for RISCV 32/64 targets.
+COMPAS is implemented such that it can be used as patch for the RISC-V LLVM toolchain.
+
+== Publications
+
+If you want to cite this work, please use the following papers.
+
+.Cite us? COMPAS Publications
+[example%collapsible]
+====
+```
+@inproceedings{compas2022,
+  author={Sharif, Uzair and Mueller-Gritschneder, Daniel and Schlichtmann, Ulf},
+  booktitle={2022 11th Mediterranean Conference on Embedded Computing (MECO)}, 
+  title={COMPAS: Compiler-assisted Software-implemented Hardware Fault Tolerance for RISC-V}, 
+  year={2022},
+  volume={},
+  number={},
+  pages={1-4},
+  doi={10.1109/MECO55406.2022.9797144}}
+
+@inproceedings{compasec2023,
+  author = {Geier, Johannes and Auer, Lukas and Mueller-Gritschneder, Daniel and Sharif, Uzair and Schlichtmann, Ulf},
+  title = {CompaSeC: A Compiler-Assisted Security Countermeasure to Address Instruction Skip Fault Attacks on RISC-V},
+  year = {2023},
+  isbn = {9781450397834},
+  publisher = {Association for Computing Machinery},
+  address = {New York, NY, USA},
+  url = {https://doi.org/10.1145/3566097.3567925},
+  doi = {10.1145/3566097.3567925},
+  booktitle = {Proceedings of the 28th Asia and South Pacific Design Automation Conference},
+  pages = {676–682},
+  numpages = {7},
+  keywords = {RISC-V, compiler, fault injection attack, redundancy},
+  location = {Tokyo, Japan},
+  series = {ASPDAC '23}
+}
+```
+====
+
+== User Guide
+
+Detailed instructions on compiler installation and usage can be found in `doc/manual`. We provide the manual as pdf.
+
+The manual provides details on how to install LLVM compiler with our SIHFT passes. Further, the manual provides usage instructions on how to harden a given C/C++ project using SIHFT transformations.
+
+.Docs outdated? Rebuild them like so...
+[example%collapsible]
+====
+After cloning the repo, generate the user manual in `doc/manual` using a LaTeX compiler. For example, we used [`latexmk`](https://mg.readthedocs.io/latexmk.html) utitlity to generate the manual pdf in some build location using::
+[,bash]
+----
+latexmk -pdf doc/manual/main.tex -outdir=build/
+----
+====
+
+== Version History
+
+=== Version 1.1.x 
+
+The supported SIHFT passes are:
+
+Data flow protection::
+* [x] https://ieeexplore.ieee.org/document/994913[EDDI]
+* [x] https://ieeexplore.ieee.org/document/1402092[SWIFT]
+* [x] https://ieeexplore.ieee.org/document/7544291[NZDC]
+* [x] https://ieeexplore.ieee.org/document/8203792[NEMESIS]
+* [x] NEMESEC (https://doi.org/10.1145/3566097.3567925[CompaSeC] extension on NEMESIS)
+* [x] https://dl.acm.org/doi/abs/10.1145/3477001[REPAIR]
+
+Control flow protection::
+* [x] https://ieeexplore.ieee.org/document/994926[CFCSS]
+* [x] https://ieeexplore.ieee.org/document/8067656[RASM]
+* [x] https://doi.org/10.1007/978-3-319-99130-6_15[RACFED]
+
+== Licensing and Copyright
+
+See the separate LICENSE file to determine your rights and responsibilities for using these code modules
