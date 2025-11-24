@@ -1,5 +1,7 @@
 = compas-ft-riscv
 
+image:doc/manual//src/figs/compas.svg[100,100]
+
 COMPAS: Compiler-assisted Software-implemented Hardware Fault Tolerance implemented in LLVM passes for the RISC-V backend
 
 [![pypi package](https://badge.fury.io/py/seal5.svg)](https://pypi.org/project/seal5)
