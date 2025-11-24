@@ -127,10 +127,10 @@ fetch_rvgnu() {
   target_name="$3"
 
   echo "[fetch] risc-v gnu tools"
-  wget "${url}" --output-document="${target_name}-linux-x64.tar.gz"
+  wget "${url}" -q --output-document="${target_name}-linux-x64.tar.gz"
   tar xf "${target_name}-linux-x64.tar.gz"
   mv "${target_name}" "${rvgnu_dir}"
-  rm "${target_name}.tar.gz"
+  rm "${target_name}-linux-x64.tar.gz"
 
   spike_ref="v1.1.0"
   spike_url="https://github.com/riscv-software-src/riscv-isa-sim"
