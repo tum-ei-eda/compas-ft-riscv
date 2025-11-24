@@ -21,7 +21,7 @@ env:
   BUILD_TYPE: Release
 
 jobs:
-  build:
+  build_llvm_compas:
     strategy:
       matrix:
         os:
@@ -59,7 +59,6 @@ jobs:
           echo "$key=$value" >> $GITHUB_ENV
         done < compas-ft-riscv_src/docker/.env
     - name: Requirements (Linux)
-      if: runner.os == 'Linux'
       working-directory: ${{runner.workspace}}
       continue-on-error: false
       shell: bash
@@ -72,7 +71,7 @@ jobs:
         . ./compas-ft-riscv/compas-ft-riscv_src/docker/setup_debian.sh
         fetch_llvm "${{runner.workspace}}/llvm_src" \
                    "${{runner.workspace}}/llvm_build" \
-                   "${{runner.workspace}}/llvm_install" \
+                   "/llvm_install" \
                    "${{ env.ENV_LLVM_VERSION }}"
     - name: Configure LLVM (base build)
       working-directory: ${{runner.workspace}}
@@ -80,7 +79,7 @@ jobs:
         . ./compas-ft-riscv/compas-ft-riscv_src/docker/setup_debian.sh
         configure_llvm "${{runner.workspace}}/llvm_src" \
                    "${{runner.workspace}}/llvm_build" \
-                   "${{runner.workspace}}/llvm_install" \
+                   "/llvm_install" \
                    "${{ env.ENV_LLVM_VERSION }}"
     - name: Compile LLVM (base build)
       working-directory: ${{runner.workspace}}
@@ -88,7 +87,7 @@ jobs:
         . ./compas-ft-riscv/compas-ft-riscv_src/docker/setup_debian.sh
         build_llvm "${{runner.workspace}}/llvm_src" \
                    "${{runner.workspace}}/llvm_build" \
-                   "${{runner.workspace}}/llvm_install" \
+                   "/llvm_install" \
                    "${{ env.ENV_LLVM_VERSION }}"
     - name: Patch (LLVM base build)
       working-directory: ${{runner.workspace}}
@@ -96,7 +95,7 @@ jobs:
         . ./compas-ft-riscv/compas-ft-riscv_src/docker/setup_debian.sh
         patch_llvm "${{runner.workspace}}/llvm_src" \
                    "${{runner.workspace}}/llvm_build" \
-                   "${{runner.workspace}}/llvm_install" \
+                   "/llvm_install" \
                    "${{ env.ENV_LLVM_VERSION }}" \
                    "${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src/patches/"
     - name: Re-Compile LLVM with COMPAS
@@ -105,7 +104,7 @@ jobs:
         . ./compas-ft-riscv/compas-ft-riscv_src/docker/setup_debian.sh
         build_llvm "${{runner.workspace}}/llvm_src" \
                    "${{runner.workspace}}/llvm_build" \
-                   "${{runner.workspace}}/llvm_install" \
+                   "/llvm_install" \
                    "${{ env.ENV_LLVM_VERSION }}"
     - name: Install LLVM
       working-directory: ${{runner.workspace}}
@@ -113,10 +112,122 @@ jobs:
         . ./compas-ft-riscv/compas-ft-riscv_src/docker/setup_debian.sh
         install_llvm "${{runner.workspace}}/llvm_src" \
                    "${{runner.workspace}}/llvm_build" \
-                   "${{runner.workspace}}/llvm_install" \
+                   "/llvm_install" \
                    "${{ env.ENV_LLVM_VERSION }}"
     - name: Upload pre-built LLVM w/ Compas Patch
       uses: actions/upload-artifact@v4
       with:
         name: prebuilt_${{ matrix.os.name }}-${{ matrix.os.version }}_compas_llvm${{ matrix.llvm.tag }}
-        path: ${{runner.workspace}}/llvm_install
+        path: /llvm_install
+
+  prepare_testenv:
+    strategy:
+      matrix:
+        os:
+          - { name: "ubuntu", version: "latest" }
+        rvgnu:
+          - { url: "https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/v13.2.0-2/xpack-riscv-none-elf-gcc-13.2.0-2-linux-x64.tar.gz", prefix: "xpack-riscv-none-elf-gcc-13.2.0-2-linux-x64" }
+
+    runs-on: ${{ matrix.os.name }}-${{ matrix.os.version }}
+    container: ${{ matrix.os.name }}:${{ matrix.os.version }}
+    name: prepare_testenv_${{ matrix.os.name }}-${{ matrix.os.version }}_rvgnu
+
+    steps:
+    - name: Install git on container
+      run: |
+        apt update
+        apt install -y git
+    - name: Clone COMPAS
+      uses: actions/checkout@v4
+      with:
+        path: compas-ft-riscv_src
+    - name: Requirements (Linux)
+      working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
+      continue-on-error: false
+      shell: bash
+      run: |
+        . docker/setup_debian.sh
+        setup_test_env
+    - name: RISCV GNU Tools
+      id: cache-rvgnu
+      uses: actions/cache@v4
+      with:
+        path: /rvgnu_install
+        key: ${{ matrix.os.name }}-${{ matrix.os.version }}_${{ matrix.rvgnu.prefix }}
+        restore-keys: ${{ matrix.os.name }}-${{ matrix.os.version }}_${{ matrix.rvgnu.prefix }}
+    - if: ${{ steps.cache-rvgnu.outputs.cache-hit != 'true' }}
+      name: Requirements RVGNU
+      working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src/
+      shell: bash
+      run: |
+        . docker/setup_debian.sh
+        fetch_rvgnu "/rvgnu_install" "${{ matrix.rvgnu.url }}" "${{ matrix.rvgnu.prefix }}"
+        configure_rvgnu "/rvgnu_install"
+        build_rvgnu
+        install_rvgnu
+        cleanup_rvgnu
+
+  test_compas:
+    strategy:
+      matrix:
+        os:
+          - { name: "ubuntu", version: "latest" }
+        rvgnu:
+          - { base: "riscv-none-elf"}
+        suts:
+          - { name: "crc", elf: "crc" }
+
+    runs-on: ${{ matrix.os.name }}-${{ matrix.os.version }}
+    container: ${{ matrix.os.name }}:${{ matrix.os.version }}
+    name: test_compas_${{ matrix.os.name }}-${{ matrix.os.version }}
+    needs: [build_llvm_compas, prepare_testenv]
+ 
+    steps:
+    - name: Install git on container
+      run: |
+        apt update
+        apt install -y git
+    - name: Clone COMPAS
+      uses: actions/checkout@v4
+      with:
+        path: compas-ft-riscv_src
+    - name: Requirements (Linux)
+      working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
+      continue-on-error: false
+      shell: bash
+      run: |
+        . docker/setup_debian.sh
+        setup_test_env
+    - name: Fetch Compiled LLVM+Compas
+      uses: actions/download-artifact@v5
+      with:
+        name: prebuilt_${{ matrix.os.name }}-${{ matrix.os.version }}_compas_llvm${{ matrix.llvm.tag }} 
+        path: /llvm_install
+    - name: RISCV GNU Tools
+      id: cache-rvgnu
+      uses: actions/cache@v4
+      with:
+        path: /rvgnu_install
+        key: ${{ matrix.os.name }}-${{ matrix.os.version }}_${{ matrix.rvgnu.prefix }}
+        restore-keys: ${{ matrix.os.name }}-${{ matrix.os.version }}_${{ matrix.rvgnu.prefix }}
+    - name: Configure Test
+      working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
+      continue-on-error: false
+      shell: bash
+      run: |
+        cmake -S tests/${{ matrix.suts.name }} -B /build -D COMPAS_LLVM_ROOT="/llvm_install" -D RISCV_TOOLCHAIN_BASENAME=${{ matrix.rvgnu.base}} -D RISCV_TOOLCHAIN_PREFIX="/rvgnu_install"
+    - name: Compile Test
+      working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
+      continue-on-error: false
+      shell: bash
+      run: |
+        cmake --build /${{ matrix.suts.name }}-build
+    - name: Run Test
+      working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
+      continue-on-error: false
+      shell: bash
+      run: |
+        /rvgnu_install/bin/spike /rvgnu_install/${{ matrix.rvgnu.base}}/bin/ok ${{ matrix.suts.name }}-build/${{ matrix.suts.name }}
+
+
+
