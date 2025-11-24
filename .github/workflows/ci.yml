@@ -126,7 +126,7 @@ jobs:
         os:
           - { name: "ubuntu", version: "latest" }
         rvgnu:
-          - { url: "https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/v13.2.0-2/xpack-riscv-none-elf-gcc-13.2.0-2-linux-x64.tar.gz", prefix: "xpack-riscv-none-elf-gcc-13.2.0-2-linux-x64" }
+          - { url: "https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/v13.2.0-2/xpack-riscv-none-elf-gcc-13.2.0-2-linux-x64.tar.gz", prefix: "xpack-riscv-none-elf-gcc-13.2.0-2" }
 
     runs-on: ${{ matrix.os.name }}-${{ matrix.os.version }}
     container: ${{ matrix.os.name }}:${{ matrix.os.version }}

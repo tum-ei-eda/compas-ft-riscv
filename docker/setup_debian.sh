@@ -127,8 +127,8 @@ fetch_rvgnu() {
   target_name="$3"
 
   echo "[fetch] risc-v gnu tools"
-  wget "${url}" --output-document="${target_name}.tar.gz"
-  tar xf "${target_name}.tar.gz"
+  wget "${url}" --output-document="${target_name}-linux-x64.tar.gz"
+  tar xf "${target_name}-linux-x64.tar.gz"
   mv "${target_name}" "${rvgnu_dir}"
   rm "${target_name}.tar.gz"
 
