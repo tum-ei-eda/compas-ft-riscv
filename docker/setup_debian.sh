@@ -132,11 +132,11 @@ fetch_rvgnu() {
   mv "${target_name}" "${rvgnu_dir}"
   rm "${target_name}-linux-x64.tar.gz"
 
-  spike_ref="v1.1.0"
+  spike_ref="88edb8b81383bf282949be30476c9e4d5459cec4"
   spike_url="https://github.com/riscv-software-src/riscv-isa-sim"
   git clone --depth 1 --branch "${spike_ref}" ${spike_url}.git /spike-src
 
-  pk_ref="v1.0.0"
+  pk_ref="9c61d29846d8521d9487a57739330f9682d5b542"
   pk_url="https://github.com/riscv-software-src/riscv-pk"
   git clone --depth 1 --branch "${pk_ref}" ${pk_url}.git /pk-src  
 }
