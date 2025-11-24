@@ -122,6 +122,7 @@ setup_compas() {
 ########################################################################################################################
 # RISC-V GNU Toolchain
 fetch_rvgnu() {
+  _home_=${PWD}
   rvgnu_dir="$1"
   url="$2"
   target_name="$3"
@@ -134,11 +135,19 @@ fetch_rvgnu() {
 
   spike_ref="88edb8b81383bf282949be30476c9e4d5459cec4"
   spike_url="https://github.com/riscv-software-src/riscv-isa-sim"
-  git clone --depth 1 --branch "${spike_ref}" ${spike_url}.git /spike-src
+  git clone ${spike_url}.git /spike-src
+  cd /spike-src
+  git checkout ${spike_ref}
+  cd ${_home_}
 
   pk_ref="9c61d29846d8521d9487a57739330f9682d5b542"
   pk_url="https://github.com/riscv-software-src/riscv-pk"
-  git clone --depth 1 --branch "${pk_ref}" ${pk_url}.git /pk-src  
+  git clone ${pk_url}.git /pk-src
+  cd /pk-src
+  git checkout ${pk_ref}
+
+  cd ${_home_}
+
 }
 configure_rvgnu() {
   _home_=${PWD}
