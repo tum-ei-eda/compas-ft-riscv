@@ -1,0 +1,52 @@
+name: Build LLVM and patch LLVM with COMPAS
+
+on:
+  push:
+    tags:
+      - v*
+  workflow_dispatch: {}
+
+jobs:
+  tex:
+    strategy:
+      matrix:
+        os:
+          - { name: "texlive", version: "latest" }
+
+    runs-on: ubuntu-latest
+    container: ${{ matrix.os.name }}:${{ matrix.os.version }}
+    name: tex_${{ matrix.os.name }}-${{ matrix.os.version }}_compas_llvm${{ matrix.llvm.tag }}
+
+    steps:
+    - name: Install git on container
+      run: |
+        apt update
+        apt install -y git
+    - name: Clone COMPAS
+      uses: actions/checkout@v4
+      with:
+        path: compas-ft-riscv_src
+    - name: Load env vars from docker/.env
+      run: |
+        while IFS='=' read -r key value || [ -n "$key" ]; do
+          [[ -z "$key" || "$key" == \#* ]] && continue
+          key="$(echo "$key" | xargs)"
+          value="$(echo "$value" | xargs)"
+          value="${value%\"}"
+          value="${value#\"}"
+          echo "$key=$value" >> $GITHUB_ENV
+        done < compas-ft-riscv_src/docker/.env
+    - name: Compile TeX Installation and User Guides
+      working-directory: ${{runner.workspace}}
+      run: |
+        mkdir -p /builddoc/
+        cd  ./compas-ft-riscv/compas-ft-riscv_src/doc/src
+        sed -i "s/@VERSION@/${ENV_COMPAS_VERSION}/g" main.tex
+        pdflatex main.tex -output-directory=/builddoc
+    - name: Upload artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: /builddoc/main.pdf
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4
