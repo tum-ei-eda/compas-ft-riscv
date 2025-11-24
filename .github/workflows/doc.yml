@@ -1,5 +1,4 @@
-name: Build COMPAS Manual
-
+name: Build COMPAS Manual and GitHub Pages
 on:
   push:
     tags:
@@ -7,13 +6,13 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  tex:
+  build_manual:
     strategy:
       matrix:
         os:
-          - { name: "texlive", version: "latest" }
+          - { name: "ubuntu", version: "latest" }
 
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os.name }}-${{ matrix.os.version }}
     container: ${{ matrix.os.name }}:${{ matrix.os.version }}
     name: tex_${{ matrix.os.name }}-${{ matrix.os.version }}_compas_llvm${{ matrix.llvm.tag }}
 
