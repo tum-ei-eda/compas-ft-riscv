@@ -175,7 +175,19 @@ jobs:
         rvgnu:
           - { base: "riscv-none-elf"}
         suts:
-          - { name: "crc", elf: "crc" }
+          - { name: "crc", elf: "crc", funcs: "main,crcSlow,crcFast"}
+        isa:
+          - { name: "rv64gc"}      
+        dmr:
+          - { trafo: ""}
+          - { trafo: "NZDC" }
+          - { trafo: "NZDC+NEMESIS" }
+          - { trafo: "NZDC+NEMESEC" }
+        cfp:
+          - { trafo: "" }
+          - { trafo: "CFCSS" }
+          - { trafo: "RASM" }
+          - { trafo: "RACFED" }
 
     runs-on: ${{ matrix.os.name }}-${{ matrix.os.version }}
     container: ${{ matrix.os.name }}:${{ matrix.os.version }}
@@ -215,7 +227,11 @@ jobs:
       continue-on-error: false
       shell: bash
       run: |
-        cmake -S tests/${{ matrix.suts.name }} -B /build -D COMPAS_LLVM_ROOT="/llvm_install" -D RISCV_TOOLCHAIN_BASENAME=${{ matrix.rvgnu.base}} -D RISCV_TOOLCHAIN_PREFIX="/rvgnu_install"
+        cmake -S tests/${{ matrix.suts.name }} -B /build -D COMPAS_LLVM_ROOT="/llvm_install" \
+              -D RISCV_TOOLCHAIN_BASENAME="${{ matrix.rvgnu.base}}" -D RISCV_TOOLCHAIN_PREFIX="/rvgnu_install" \
+              -D RISCV_ISA="${{ matrix.isa.name }}" \
+              -D DMR_MOD="${{ matrix.dmr.trafo }}" -D DMR_FUNCTIONS="${{ matrix.suts.funcs }}" \
+              -D CFP_MOD="${{ matrix.cfp.trafo }}" -D CFP_FUNCTIONS="${{ matrix.suts.funcs }}"
     - name: Compile Test
       working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
       continue-on-error: false
