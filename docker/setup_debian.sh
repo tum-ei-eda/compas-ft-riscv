@@ -23,11 +23,11 @@ fetch_llvm() {
   version="${4}"
 
   llvm_prefix="llvm-project"
-  llvm_tag="llvmorg-${version}"
+  llvm_ref="${version}"
   llvm_url="https://github.com/llvm/llvm-project"
 
   echo "[fetch] llvm"
-  git clone --depth 1 --branch "${llvm_tag}" ${llvm_url}.git ${src_dir}
+  git clone --depth 1 --branch "${llvm_ref}" ${llvm_url}.git ${src_dir}
 }
 configure_llvm() {
   src_dir="$1"

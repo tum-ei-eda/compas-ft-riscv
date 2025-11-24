@@ -24,8 +24,6 @@ jobs:
   build:
     strategy:
       matrix:
-        config:
-          - { compas_version: "1.1.0"}
         os:
           - { name: "ubuntu", version: "latest" }
         llvm:
@@ -38,7 +36,7 @@ jobs:
 
     runs-on: ${{ matrix.os.name }}-${{ matrix.os.version }}
     container: ${{ matrix.os.name }}:${{ matrix.os.version }}
-    name: build_${{ matrix.os.name }}-${{ matrix.os.version }}_compas${{ matrix.config.compas_version }}_llvm${{ matrix.llvm.tag }}
+    name: build_${{ matrix.os.name }}-${{ matrix.os.version }}_compas_llvm${{ matrix.llvm.tag }}
 
     steps:
     - name: Install git on container
@@ -120,5 +118,5 @@ jobs:
     - name: Upload pre-built LLVM w/ Compas Patch
       uses: actions/upload-artifact@v4
       with:
-        name: prebuilt_${{ matrix.os.name }}-${{ matrix.os.version }}_compas${{ matrix.config.compas_version }}_llvm${{ matrix.llvm.tag }}
+        name: prebuilt_${{ matrix.os.name }}-${{ matrix.os.version }}_compas_llvm${{ matrix.llvm.tag }}
         path: ${{runner.workspace}}/llvm_install
