@@ -147,7 +147,7 @@ jobs:
       shell: bash
       run: |
         . docker/setup_debian.sh
-        setup_test_env
+        setup_testenv
     - name: RISCV GNU Tools
       id: cache-rvgnu
       uses: actions/cache@v4
@@ -209,7 +209,7 @@ jobs:
       shell: bash
       run: |
         . docker/setup_debian.sh
-        setup_test_env
+        setup_testenv
     - name: Fetch Compiled LLVM+Compas
       uses: actions/download-artifact@v5
       with:
