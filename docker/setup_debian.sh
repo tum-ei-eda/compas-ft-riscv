@@ -14,7 +14,7 @@ setup_env() {
   done
 }
 get_testenv_apt_deps() {
-  spike_apt_dep="device-tree-compiler libboost-regex-dev libboost-system-dev"
+  spike_apt_dep="wget tar device-tree-compiler libboost-regex-dev libboost-system-dev"
   base_apt_dep="$(get_apt_deps)"
   echo "${base_apt_dep} ${spike_apt_dep}"
 }
