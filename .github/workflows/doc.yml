@@ -1,4 +1,4 @@
-name: Build LLVM and patch LLVM with COMPAS
+name: Build COMPAS Manual
 
 on:
   push:
@@ -21,7 +21,7 @@ jobs:
     - name: Install git on container
       run: |
         apt update
-        apt install -y git
+        apt install -y git pandoc
     - name: Clone COMPAS
       uses: actions/checkout@v4
       with:
@@ -36,17 +36,25 @@ jobs:
           value="${value#\"}"
           echo "$key=$value" >> $GITHUB_ENV
         done < compas-ft-riscv_src/docker/.env
-    - name: Compile TeX Installation and User Guides
-      working-directory: ${{runner.workspace}}
+    - name: Prepare .Tex files:
+      working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src/doc/src
+      run: |
+        sed -i "s/@VERSION@/${ENV_COMPAS_VERSION}/g" main.tex   
+    - name: Compile TeX Installation and User Guides to PDF
+      working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src/doc/src
       run: |
         mkdir -p /builddoc/
-        cd  ./compas-ft-riscv/compas-ft-riscv_src/doc/src
-        sed -i "s/@VERSION@/${ENV_COMPAS_VERSION}/g" main.tex
         pdflatex main.tex -output-directory=/builddoc
+        mv /builddoc/main.pdf /builddoc/compas-ft-riscv${ENV_COMPAS_VERSION}-manual.pdf
+    - name: Compile TeX Installation and User Guides to HTML
+      working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src/doc/src
+      run: |
+        pandoc main.tex -o /builddoc/compas-ft-riscv${ENV_COMPAS_VERSION}-manual.html --from=latex --to=html5 --standalone --mathjax
+        mv /builddoc/main.pdf /builddoc/compas-ft-riscv${ENV_COMPAS_VERSION}-manual.pdf
     - name: Upload artifact
       uses: actions/upload-pages-artifact@v3
       with:
-        path: /builddoc/main.pdf
+        path: /builddoc/compas-ft-riscv${ENV_COMPAS_VERSION}-manual.html
     - name: Deploy to GitHub Pages
       id: deployment
       uses: actions/deploy-pages@v4
