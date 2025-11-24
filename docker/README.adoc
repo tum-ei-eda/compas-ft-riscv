@@ -92,9 +92,9 @@ docker buildx build . -f docker/Dockerfile \
 
 Build times (excluding pulling of base image) on 18-core workstation::
 
-- `compas-ft-riscv-deps`: 56s
-- `compas-ft-riscv-dev`: 71s full, 25s incremental
-- `compas-ft-riscv-base`: 1054s full, 984s incremental
+- `compas-ft-riscv-deps`: `t.b.d.`
+- `compas-ft-riscv-dev`: `t.b.d.`
+- `compas-ft-riscv-base`: `t.b.d.`
 
 Image sizes::
 
@@ -116,3 +116,20 @@ If you want to use the actions on a fork, they will fail due to missing docker c
 - `DOCKER_USERNAME` (e.g., `tumeda`)
 - `DOCKER_REGISTRY` (e.g., `docker.io`, `ghcr.io`)
 - `DOCKER_NAMESPACE` (e.g., `tumeda`, `path/to/container`)
+
+=== Running the Images in Docker Containers
+
+To use the previously built or pulled images, run the following commands::
+
+[,bash]
+----
+# pull a latest image:
+docker pull tumeda/compas-ft-riscv-dev:latest-default-debian-stable
+
+# run the pulled container and mount the host's compas-ft-riscv repo:
+cd path/to/compas-ft-riscv/clone
+docker run -it --rm -v $(pwd):$(pwd) -v .:/compas-ft-riscv tumeda/compas-ft-riscv-dev:latest-default-debian-stable
+
+# in the container:
+/llvm-install/bin/llc --version # <-- is the compas-ft-riscv patched llc
+----
