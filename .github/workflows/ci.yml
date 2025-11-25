@@ -224,6 +224,11 @@ jobs:
         path: /rvgnu_install
         key: ${{ matrix.os.name }}-${{ matrix.os.version }}_${{ matrix.rvgnu.prefix }}
         restore-keys: ${{ matrix.os.name }}-${{ matrix.os.version }}_${{ matrix.rvgnu.prefix }}
+    - name: Prepare tools
+      shell: bash
+      run: |
+        chmod -R +x "/rvgnu_install/bin"
+        chmod -R +x "/llvm_install/bin"
     - name: Configure Test
       working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
       continue-on-error: false
