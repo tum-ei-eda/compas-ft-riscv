@@ -110,7 +110,6 @@ patch_llvm() {
   fi
   return 0
 }
-
 setup_compas() {
   compas_src_dir="${1}"
   llvm_src_dir="${2}"
@@ -119,6 +118,7 @@ setup_compas() {
   echo "[setup] compas ... "
   cd "${llvm_src_dir}/llvm/lib/Target/RISCV"
   ln -s "${compas_src_dir}" "compas-ft-riscv"
+  ls -la .
   cd "${_home_}"
 }
 ########################################################################################################################

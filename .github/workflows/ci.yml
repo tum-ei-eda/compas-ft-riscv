@@ -73,22 +73,6 @@ jobs:
                    "${{runner.workspace}}/llvm_build" \
                    "/llvm_install" \
                    "${{ env.ENV_LLVM_VERSION }}"
-    - name: Configure LLVM (base build)
-      working-directory: ${{runner.workspace}}
-      run: |
-        . ./compas-ft-riscv/compas-ft-riscv_src/docker/setup_debian.sh
-        configure_llvm "${{runner.workspace}}/llvm_src" \
-                   "${{runner.workspace}}/llvm_build" \
-                   "/llvm_install" \
-                   "${{ env.ENV_LLVM_VERSION }}"
-    - name: Compile LLVM (base build)
-      working-directory: ${{runner.workspace}}
-      run: |
-        . ./compas-ft-riscv/compas-ft-riscv_src/docker/setup_debian.sh
-        build_llvm "${{runner.workspace}}/llvm_src" \
-                   "${{runner.workspace}}/llvm_build" \
-                   "/llvm_install" \
-                   "${{ env.ENV_LLVM_VERSION }}"
     - name: Patch (LLVM base build)
       working-directory: ${{runner.workspace}}
       run: |
@@ -100,7 +84,15 @@ jobs:
                    "${GITHUB_WORKSPACE}/compas-ft-riscv_src/patches/"
         setup_compas "${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src" \
                      "${{runner.workspace}}/llvm_src"
-    - name: Re-Compile LLVM with COMPAS
+    - name: Configure LLVM (base build)
+      working-directory: ${{runner.workspace}}
+      run: |
+        . ./compas-ft-riscv/compas-ft-riscv_src/docker/setup_debian.sh
+        configure_llvm "${{runner.workspace}}/llvm_src" \
+                   "${{runner.workspace}}/llvm_build" \
+                   "/llvm_install" \
+                   "${{ env.ENV_LLVM_VERSION }}"
+    - name: Compile LLVM with COMPAS
       working-directory: ${{runner.workspace}}
       run: |
         . ./compas-ft-riscv/compas-ft-riscv_src/docker/setup_debian.sh
