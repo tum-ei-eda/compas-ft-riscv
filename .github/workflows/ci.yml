@@ -82,7 +82,7 @@ jobs:
                    "/llvm_install" \
                    "${{ env.ENV_LLVM_VERSION }}" \
                    "${GITHUB_WORKSPACE}/compas-ft-riscv_src/patches/"
-        setup_compas "${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src" \
+        setup_compas "${GITHUB_WORKSPACE}/compas-ft-riscv_src" \
                      "${{runner.workspace}}/llvm_src"
     - name: Configure LLVM (base build)
       working-directory: ${{runner.workspace}}
