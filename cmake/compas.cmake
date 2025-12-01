@@ -7,13 +7,16 @@ if (NOT COMPAS_LLVM_ROOT)
 endif()
 
 message(STATUS "LLVM_DIR: ${COMPAS_LLVM_ROOT}")
-find_package(LLVM REQUIRED CONFIG
+find_package(LLVM CONFIG
     NO_DEFAULT_PATH
     NO_SYSTEM_ENVIRONMENT_PATH
     PATHS ${COMPAS_LLVM_ROOT}/lib/cmake/llvm
 )
-message(STATUS "LLVM_DIR: ${LLVM_DIR}")
-set(CLANG_INCLUDE_DIRS ${COMPAS_LLVM_ROOT}/lib/clang/${LLVM_VERSION}/include)
+if(LLVM_FOUND)
+    message(STATUS "LLVM_DIR: ${LLVM_DIR}")
+    set(CLANG_INCLUDE_DIRS ${COMPAS_LLVM_ROOT}/lib/clang/${LLVM_VERSION}/include)
+endif()
+
 if(NOT CMAKE_SYSTEM_PROCESSOR)
     message(WARNING "CMAKE_SYSTEM_PROCESSOR not specified. Default to ${CMAKE_SYSTEM_PROCESSOR}.")
     set(CMAKE_SYSTEM_PROCESSOR riscv64)

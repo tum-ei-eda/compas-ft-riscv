@@ -66,8 +66,10 @@ build_llvm() {
   version="${4}"
 
   echo "[build] llvm"
-  cmake --build "${build_dir}" --parallel "$(nproc)"
+  cmake --build "${build_dir}" --parallel "$(nproc)" --target clang
   "${build_dir}/bin/clang" --version
+  cmake --build "${build_dir}" --parallel "$(nproc)" --target llc
+  "${build_dir}/bin/llc" --version
 }
 install_llvm() {
   src_dir="$1"
@@ -76,8 +78,10 @@ install_llvm() {
   version="${4}"
 
   echo "[install] llvm"
-  cmake --build "${build_dir}" --parallel "$(nproc)" --target install
+  cmake --install "${build_dir}" --component clang
   "${install_dir}/bin/clang" --version
+  cmake --install "${build_dir}" --component llc
+  "${install_dir}/bin/llc" --version
 }
 cleanup_llvm() {
   src_dir="$1"
