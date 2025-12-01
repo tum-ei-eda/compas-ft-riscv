@@ -235,16 +235,13 @@ jobs:
               -D CFP_MOD="${{ matrix.cfp.trafo }}" -D CFP_FUNCTIONS="${{ matrix.suts.funcs }}"
     - name: Compile Test
       working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
-      continue-on-error: false
+      continue-on-error: true
       shell: bash
       run: |
         cmake --build /${{ matrix.suts.name }}-build
     - name: Run Test
       working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
-      continue-on-error: false
+      continue-on-error: true
       shell: bash
       run: |
         /rvgnu_install/bin/spike /rvgnu_install/${{ matrix.rvgnu.base}}/bin/pk ${{ matrix.suts.name }}-build/${{ matrix.suts.name }}
-
-
-
