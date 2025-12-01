@@ -98,6 +98,8 @@ jobs:
                    "/llvm_install" \
                    "${{ env.ENV_LLVM_VERSION }}" \
                    "${GITHUB_WORKSPACE}/compas-ft-riscv_src/patches/"
+        setup_compas "${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src" \
+                     "${{runner.workspace}}/llvm_src"
     - name: Re-Compile LLVM with COMPAS
       working-directory: ${{runner.workspace}}
       run: |
