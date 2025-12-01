@@ -171,7 +171,15 @@ jobs:
         rvgnu:
           - { base: "riscv-none-elf"}
         suts:
+          - { name: "crc", elf: "crc", funcs: ""}
+          - { name: "crc", elf: "crc", funcs: "main"}
+          - { name: "crc", elf: "crc", funcs: "crcSlow"}
+          - { name: "crc", elf: "crc", funcs: "crcFast"}
+          - { name: "crc", elf: "crc", funcs: "main,crcSlow"}
           - { name: "crc", elf: "crc", funcs: "main,crcSlow,crcFast"}
+          - { name: "crc", elf: "crc", funcs: "main,crcFast"}
+          - { name: "crc", elf: "crc", funcs: "main,crcSlow"}
+          - { name: "crc", elf: "crc", funcs: "crcSlow,crcFast"}
         isa:
           - { name: "rv64gc"}      
         dmr:
@@ -187,7 +195,7 @@ jobs:
 
     runs-on: ${{ matrix.os.name }}-${{ matrix.os.version }}
     container: ${{ matrix.os.name }}:${{ matrix.os.version }}
-    name: test_compas_${{ matrix.os.name }}-${{ matrix.os.version }}
+    name: test_${{ suts.name }}-${{ dmr.trafo }}${{ cfp.trafo }}${{ suts.funcs }}
     needs: [build_llvm_compas, prepare_testenv]
  
     steps:
