@@ -163,6 +163,7 @@ jobs:
 
   test_compas:
     strategy:
+      fail-fast: false
       matrix:
         os:
           - { name: "ubuntu", version: "latest" }
@@ -195,7 +196,7 @@ jobs:
 
     runs-on: ${{ matrix.os.name }}-${{ matrix.os.version }}
     container: ${{ matrix.os.name }}:${{ matrix.os.version }}
-    name: test_${{ suts.name }}-${{ dmr.trafo }}${{ cfp.trafo }}${{ suts.funcs }}
+    name: test_${{ matrix.suts.name }}-${{ matrix.dmr.trafo }}${{ matrix.cfp.trafo }}${{ matrix.suts.funcs }}
     needs: [build_llvm_compas, prepare_testenv]
  
     steps:
@@ -209,7 +210,6 @@ jobs:
         path: compas-ft-riscv_src
     - name: Requirements (Linux)
       working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
-      continue-on-error: false
       shell: bash
       run: |
         . docker/setup_debian.sh
@@ -243,13 +243,11 @@ jobs:
               -D CFP_MOD="${{ matrix.cfp.trafo }}" -D CFP_FUNCTIONS="${{ matrix.suts.funcs }}"
     - name: Compile Test
       working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
-      continue-on-error: true
       shell: bash
       run: |
         cmake --build /${{ matrix.suts.name }}-build
     - name: Run Test
       working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
-      continue-on-error: true
       shell: bash
       run: |
         /rvgnu_install/bin/spike /rvgnu_install/${{ matrix.rvgnu.base}}/bin/pk ${{ matrix.suts.name }}-build/${{ matrix.suts.name }}
