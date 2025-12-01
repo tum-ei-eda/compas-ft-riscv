@@ -93,9 +93,9 @@ patch_llvm() {
   src_dir="${1}"
   build_dir="${2}"
   install_dir="${3}"
-  version="${4}"
+  version="${4#*-}"
   llvm_patches_dir="${5}"
-
+  llvm_patch_file="llvm${version}_src.patch"
   _home_=${PWD}
 
   echo "[patch?] llvm ... "
@@ -106,7 +106,9 @@ patch_llvm() {
     cd ${_home_}
   else
     echo "no. Directory ${llvm_patches_dir} does not contain an matching patch file ${llvm_patch_file}. ls <dir>: $(ls "${llvm_patches_dir}")"
+    return 1
   fi
+  return 0
 }
 
 setup_compas() {
