@@ -244,7 +244,7 @@ jobs:
       continue-on-error: false
       shell: bash
       run: |
-        /rvgnu_install/bin/spike /rvgnu_install/${{ matrix.rvgnu.base}}/bin/ok ${{ matrix.suts.name }}-build/${{ matrix.suts.name }}
+        /rvgnu_install/bin/spike /rvgnu_install/${{ matrix.rvgnu.base}}/bin/pk ${{ matrix.suts.name }}-build/${{ matrix.suts.name }}
 
 
 
