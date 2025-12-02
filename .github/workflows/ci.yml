@@ -236,7 +236,7 @@ jobs:
       continue-on-error: false
       shell: bash
       run: |
-        cmake -S tests/${{ matrix.suts.name }} -B /${{ matrix.suts.name }}-build -D COMPAS_LLVM_ROOT="/llvm_install" \
+        cmake -S "tests/${{ matrix.suts.name }}" -B "/${{ matrix.suts.name }}-build" -D COMPAS_LLVM_ROOT="/llvm_install" \
               -D RISCV_TOOLCHAIN_BASENAME="${{ matrix.rvgnu.base}}" -D RISCV_TOOLCHAIN_PREFIX="/rvgnu_install" \
               -D RISCV_ISA="${{ matrix.isa.name }}" \
               -D DMR_MOD="${{ matrix.dmr.trafo }}" -D DMR_FUNCTIONS="${{ matrix.suts.funcs }}" \
@@ -245,9 +245,9 @@ jobs:
       working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
       shell: bash
       run: |
-        cmake --build /${{ matrix.suts.name }}-build
+        cmake --build "/${{ matrix.suts.name }}-build"
     - name: Run Test
       working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
       shell: bash
       run: |
-        /rvgnu_install/bin/spike /rvgnu_install/${{ matrix.rvgnu.base}}/bin/pk ${{ matrix.suts.name }}-build/${{ matrix.suts.name }}
+        /rvgnu_install/bin/spike /rvgnu_install/${{ matrix.rvgnu.base}}/bin/pk "/${{ matrix.suts.name }}-build/${{ matrix.suts.name }}"
