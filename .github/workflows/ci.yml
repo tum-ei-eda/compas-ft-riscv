@@ -27,7 +27,7 @@ jobs:
         os:
           - { name: "ubuntu", version: "latest" }
         llvm:
-          #- { src: 'true', tag: '13.0.1' } # <-- the original config
+          - { src: 'true', tag: '13.0.1' } # <-- the original config
           #- { src: 'true', tag: '14.0.6' } # <-- save CI time
           #- { src: 'true', tag: '15.0.7' } # <-- save CI time
           - { src: 'true', tag: '16.0.6' } # <-- latest (supported) llvm
@@ -58,6 +58,7 @@ jobs:
           value="${value#\"}"
           echo "$key=$value" >> $GITHUB_ENV
         done < compas-ft-riscv_src/docker/.env
+        echo "ENV_LLVM_VERSION=llvmorg-${{ matrix.llvm.tag }}" >> $GITHUB_ENV
     - name: Requirements (Linux)
       working-directory: ${{runner.workspace}}
       continue-on-error: false
@@ -168,6 +169,9 @@ jobs:
         os:
           - { name: "ubuntu", version: "latest" }
         llvm:
+          - { src: 'true', tag: '13.0.1' } # <-- the original config
+          #- { src: 'true', tag: '14.0.6' } # <-- save CI time
+          #- { src: 'true', tag: '15.0.7' } # <-- save CI time
           - { src: 'true', tag: '16.0.6' } # <-- latest (supported) llvm
         rvgnu:
           - { base: "riscv-none-elf"}
