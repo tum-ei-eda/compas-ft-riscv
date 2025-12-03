@@ -200,7 +200,7 @@ jobs:
 
     runs-on: ${{ matrix.os.name }}-${{ matrix.os.version }}
     container: ${{ matrix.os.name }}:${{ matrix.os.version }}
-    name: test_${{ matrix.suts.name }}-${{ matrix.dmr.trafo }}${{ matrix.cfp.trafo }}${{ matrix.suts.funcs }}
+    name: test_${{ matrix.suts.name }}_${{ matrix.dmr.trafo }}-${{ matrix.cfp.trafo }}-${{ matrix.suts.funcs }}
     needs: [build_llvm_compas, prepare_testenv]
  
     steps:
