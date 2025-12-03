@@ -114,8 +114,8 @@ patch_llvm() {
     echo "no. Directory ${llvm_patches_dir} does not contain an matching patch file ${llvm_patch_file}. ls <dir>: $(ls "${llvm_patches_dir}")"
     return 1
   fi
-
-  llvm_patch_file="gccLT13.llvmorg-${version}.patch"
+  echo "[patch?] llvm for gcc>=13... "
+  llvm_patch_file="gccGTE13.llvmorg-${version}.patch"
   if [ -f "${llvm_patches_dir}/${llvm_patch_file}" ]; then
     echo "yes. Applying patch: ${llvm_patch_file} from [${llvm_patches_dir}]."
     cd ${src_dir}
@@ -123,8 +123,8 @@ patch_llvm() {
     cd ${_home_}
   else
     echo "no. Directory ${llvm_patches_dir} does not contain an matching patch file ${llvm_patch_file}. ls <dir>: $(ls "${llvm_patches_dir}")"
-    return 1
   fi
+
   return 0
 }
 setup_compas() {
