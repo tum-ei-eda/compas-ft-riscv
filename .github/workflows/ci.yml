@@ -183,7 +183,6 @@ jobs:
           - { name: "crc", elf: "crc", funcs: "main,crcSlow"}
           - { name: "crc", elf: "crc", funcs: "main,crcSlow,crcFast"}
           - { name: "crc", elf: "crc", funcs: "main,crcFast"}
-          - { name: "crc", elf: "crc", funcs: "main,crcSlow"}
           - { name: "crc", elf: "crc", funcs: "crcSlow,crcFast"}
         isa:
           - { name: "rv64gc"}      
