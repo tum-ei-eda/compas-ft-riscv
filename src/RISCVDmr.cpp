@@ -26,6 +26,7 @@
 #include "llvm/ADT/SmallVector.h"
 
 #include "RISCVRasm.h"
+#include "MCTargetDesc/RISCVBaseInfo.h"
 
 #define SWITCH_VOLATILE
 // #define DBG
@@ -689,7 +690,49 @@ void RISCVDmr::protectLoads() {
   if (config_.psl == ProtectStrategyLoad::L0) {
     return;
   } else if (config_.psl == ProtectStrategyLoad::L1) {
+    auto isRelocatedLoadImmRISCV = [](const llvm::MachineInstr &MI) -> bool {
+      auto isRISCVRelocatedOffsetMO =
+          [](const llvm::MachineOperand &MO) -> bool {
+        if (!(MO.isGlobal() || MO.isSymbol() || MO.isCPI() ||
+              MO.isBlockAddress() || MO.isJTI()))
+          return false;
+
+        unsigned TF = MO.getTargetFlags();
+
+        // %lo(sym)(base)
+        if (TF == llvm::RISCVII::MO_LO)
+          return true;
+
+        // Other common RISC-V relocations: %pcrel_hi(sym), %pcrel_lo(label)
+        if (TF == llvm::RISCVII::MO_PCREL_HI ||
+            TF == llvm::RISCVII::MO_PCREL_LO)
+          return true;
+
+        return false;
+      };
+      // For real loads/stores, op2 is the offset. (Pseudo-instructions may
+      // differ.)
+      if (MI.getNumOperands() < 3)
+        return false;
+
+      const llvm::MachineOperand &Off = MI.getOperand(2);
+      return isRISCVRelocatedOffsetMO(Off);
+    };
+
     for (const auto &MI : loads_) {
+      if (isRelocatedLoadImmRISCV(*MI)) {
+        for (const auto &op : MI->operands()) {
+          if (op.isReg() && op.isDef()) {
+            // trivial. Duplicating loads is better, but duplicated relocate
+            // automatically regresses to same GP reg instead of shadow(GP)...
+            moveIntoShadow(MI->getParent(), std::next(MI->getIterator()),
+                           op.getReg(), P2S_.at(op.getReg()));
+            // MI->getParent()->insertAfter(MI, genShadowFromPrimary(MI));
+            break;
+          }
+        }
+        continue;
+      }
       for (const auto &op : MI->operands()) {
         if (op.isReg()) {
           if (op.isUse()) {
