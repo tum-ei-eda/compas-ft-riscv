@@ -1356,10 +1356,9 @@ void RISCVDmr::protectCalls() {
     }
   } else if (config_.psuc == ProtectStrategyUserCall::UC1) {
 
-    auto isStackAddressValue =
-        [findPrevPhysRegDef](llvm::Register R, llvm::MachineInstr &CallMI,
-                             llvm::MachineRegisterInfo &MRI,
-                             const llvm::TargetRegisterInfo &TRI) -> bool {
+    auto isStackAddressValue = [](llvm::Register R, llvm::MachineInstr &CallMI,
+                                  llvm::MachineRegisterInfo &MRI,
+                                  const llvm::TargetRegisterInfo &TRI) -> bool {
       auto findPrevPhysRegDef =
           [](llvm::Register PhysR, llvm::MachineInstr &At,
              const llvm::TargetRegisterInfo &TRI) -> llvm::MachineInstr * {
