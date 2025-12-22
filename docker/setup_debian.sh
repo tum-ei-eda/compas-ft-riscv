@@ -154,15 +154,15 @@ fetch_rvgnu() {
 
   spike_ref="88edb8b81383bf282949be30476c9e4d5459cec4"
   spike_url="https://github.com/riscv-software-src/riscv-isa-sim"
-  git clone ${spike_url}.git /spike-src
-  cd /spike-src
+  git clone ${spike_url}.git /tmp/spike-src
+  cd /tmp/spike-src
   git checkout ${spike_ref}
   cd ${_home_}
 
   pk_ref="9c61d29846d8521d9487a57739330f9682d5b542"
   pk_url="https://github.com/riscv-software-src/riscv-pk"
-  git clone ${pk_url}.git /pk-src
-  cd /pk-src
+  git clone ${pk_url}.git /tmp/pk-src
+  cd /tmp/pk-src
   git checkout ${pk_ref}
 
   cd ${_home_}
@@ -176,10 +176,10 @@ configure_rvgnu() {
   export RISCV="${rvgnu_dir}"
   export PATH="${RISCV}/bin:${PATH}"
 
-  mkdir -p /spike-src/build && cd /spike-src/build
+  mkdir -p /tmp/spike-src/build && cd /tmp/spike-src/build
   ../configure --prefix=${RISCV}
 
-  mkdir -p /pk-src/build && cd /pk-src/build
+  mkdir -p /tmp/pk-src/build && cd /tmp/pk-src/build
   ../configure --prefix=$RISCV --host=riscv-none-elf --with-arch=rv64imafdc_zicsr_zifencei
   make -j $(nproc)
   make install
@@ -188,15 +188,15 @@ configure_rvgnu() {
 }
 build_rvgnu() {
   echo "[build] risc-v gnu tools"
-  make -C /pk-src/build -j $(nproc)
-  make -C /spike-src/build -j $(nproc)
+  make -C /tmp/pk-src/build -j $(nproc)
+  make -C /tmp/spike-src/build -j $(nproc)
 }
 install_rvgnu() {
   echo "[install] risc-v gnu tools"
-  make -C /pk-src/build  install
-  make -C /spike-src/build  install
+  make -C /tmp/pk-src/build  install
+  make -C /tmp/spike-src/build  install
 }
 cleanup_rvgnu() {
   echo "[clean-up] risc-v gnu tools"
-  rm -rf "/spike-src/" "/pk-src/"
+  rm -rf "/tmp/spike-src/" "/tmp/pk-src/"
 }
