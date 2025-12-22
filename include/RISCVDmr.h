@@ -43,10 +43,12 @@ protected:
   bool calls_dmr_user_func_{false};
   bool calls_nondmr_user_func_{false};
 
-  // SH2: Infectous selective hardening (a DMR'ed function passes DMR onto its
-  // callees) // TBI SH1: Contained selective hardening and function call
+  // SH2: To be implemented... Infectous selective hardening (a DMR'ed function passes DMR onto its
+  // callees)
+  // SH1: DEFAULT Contained selective hardening and function call
   // boundaries (a DMR'ed function does not pass DMR onto callees, non-DMR'ed
-  // callers prepare for DMR-callee) SH0: don't care
+  // callers prepare for DMR-callee) 
+  // SH0: don't care
   enum class SelectiveHardening { SH0, SH1, SH2 };
   // SCC0: non-DMR calling non-DMR function -> standard
   // SCC1: non-DMR calling DMR
@@ -65,7 +67,7 @@ protected:
   // L2: the duplicated load uses shadow memory space (aka EDDI load)
   // L0: dont protect
   enum class ProtectStrategyLoad { L0, L1, L2 };
-  // UCI: check args before func call and check return values before return (aka
+  // UC1: check args before func call and check return values before return (aka
   //      EDDI/SWIFT func-call check)
   // UC2: deprecated - DON'T USE!!
   // UC3: check complete primary and shadow reg-files with each other at
