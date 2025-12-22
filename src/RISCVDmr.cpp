@@ -1528,6 +1528,23 @@ void RISCVDmr::protectBranches() {
         auto taken_BB{MI->getOperand(2).getMBB()};
 
         auto nottaken_BB{MBB->getFallThrough()};
+        if (nottaken_BB == nullptr) {
+          // no fallthrough found. Most likely we have a
+          // "b<cond> <>, taken \\ j nottaken" situation here, where the
+          // unconditional is part of the MBB, i.e. LLVM IR did not terminate BB
+          // with conditional branch. Solution: splice BB here at conditional!
+          llvm::outs() << "No fallthrough successor found for MBB[" << MBB
+                       << "]: " << *MBB << "\n";
+          MBB->splitAt(*MI); // we split the the MBB at the conditional branch,
+                             // because we need real CFG conform basic block
+                             // traversal for hardening
+          nottaken_BB = MBB->getFallThrough(); // now MBB has the correct
+                                               // implicit fallthrough on not
+                                               // taking the conditional branch
+          MBB->addSuccessor(
+              taken_BB); // due to split the conditional branch is still active
+                         // but the taken not a registered successor
+        }
         assert(nottaken_BB && "this branch has no fallthrough!");
 
         llvm::BuildMI(*MBB, MBB->end(), MI->getDebugLoc(),
