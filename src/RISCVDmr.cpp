@@ -23,6 +23,7 @@
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
+#include "llvm/ADT/SmallVector.h"
 
 #include "RISCVRasm.h"
 
@@ -216,7 +217,7 @@ void RISCVDmr::init() {
     llvm::outs() << "COMPAS: Running SWIFT pass with " << schedule_string
                  << " on " << fname_ << "\n";
   } else if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_)) {
-    // setting edd configs
+    // setting eddi configs
     config_.pss = ProtectStrategyStore::S2;
     config_.psl = ProtectStrategyLoad::L2;
     config_.psuc = ProtectStrategyUserCall::UC1;
@@ -1354,9 +1355,141 @@ void RISCVDmr::protectCalls() {
       // }
     }
   } else if (config_.psuc == ProtectStrategyUserCall::UC1) {
+
+    auto isStackAddressValue =
+        [findPrevPhysRegDef](llvm::Register R, llvm::MachineInstr &CallMI,
+                             llvm::MachineRegisterInfo &MRI,
+                             const llvm::TargetRegisterInfo &TRI) -> bool {
+      auto findPrevPhysRegDef =
+          [](llvm::Register PhysR, llvm::MachineInstr &At,
+             const llvm::TargetRegisterInfo &TRI) -> llvm::MachineInstr * {
+        llvm::MachineBasicBlock &MBB = *At.getParent();
+
+        for (auto I = At.getIterator(); I != MBB.begin();) {
+          --I;
+          llvm::MachineInstr &MI = *I;
+
+          for (auto &MO : MI.operands()) {
+            if (!MO.isReg() || !MO.isDef())
+              continue;
+            llvm::Register DefR = MO.getReg();
+            if (!DefR)
+              continue;
+
+            if (DefR == PhysR || TRI.regsOverlap(DefR, PhysR))
+              return &MI;
+          }
+        }
+        return nullptr;
+      };
+
+      auto isTransparentAddrOpRISCV = [](const llvm::MachineInstr &MI) -> bool {
+        const unsigned Opc = MI.getOpcode();
+
+        // GlobalISel address-ish ops (if we are in GISel at this point)
+        if (Opc == llvm::TargetOpcode::COPY ||
+            Opc == llvm::TargetOpcode::G_BITCAST ||
+            Opc == llvm::TargetOpcode::G_PTR_ADD ||
+            Opc == llvm::TargetOpcode::G_ADD)
+          return true;
+
+        // RISC-V target ops commonly used in address calculation
+        switch (Opc) {
+        case llvm::RISCV::ADDI:
+        case llvm::RISCV::ADD:
+        case llvm::RISCV::SLLI:
+        case llvm::RISCV::SRLI:
+        case llvm::RISCV::SRAI:
+        case llvm::RISCV::XOR:
+        case llvm::RISCV::OR:
+        case llvm::RISCV::AND:
+        case llvm::RISCV::ADDIW: // RV64
+        case llvm::RISCV::LUI:
+        case llvm::RISCV::AUIPC:
+          return true;
+
+        // If we see these in your pipeline for address materialization, include:
+        default:
+          return false;
+        }
+      };
+
+      auto pushAllRegUses = [](const llvm::MachineInstr &Def,
+                               llvm::SmallVectorImpl<llvm::Register> &WL) {
+        for (const llvm::MachineOperand &MO : Def.operands())
+          if (MO.isReg() && MO.isUse() && MO.getReg())
+            WL.push_back(MO.getReg());
+      };
+
+      llvm::SmallVector<llvm::Register, 8> Worklist;
+      llvm::SmallDenseSet<llvm::Register, 32> Visited;
+
+      Worklist.push_back(R);
+
+      while (!Worklist.empty()) {
+        llvm::outs() << "... not empty\n";
+        llvm::Register Cur = Worklist.pop_back_val();
+        if (!Cur || !Visited.insert(Cur).second)
+          continue;
+
+        llvm::MachineInstr *Def = nullptr;
+
+        if (Cur.isVirtual()) {
+          Def = MRI.getVRegDef(Cur);
+          if (!Def)
+            continue;
+        } else {
+          // Physical reg: find the last def before the call in the same block.
+          Def = findPrevPhysRegDef(Cur, CallMI, TRI);
+          if (!Def)
+            continue;
+        }
+
+        llvm::outs() << "... looking into Def[" << *Def << "].\n";
+        // 1) Stack pointer operand => stack object address involved.
+        for (const llvm::MachineOperand &MO : Def->operands())
+          if (MO.isReg() &&
+              MO.getReg() == riscv_common::kSP) // is reg and stack pointer
+            return true;
+
+        if (Def->getOpcode() == llvm::TargetOpcode::G_FRAME_INDEX)
+          return true;
+
+        if (Def->isPHI()) {
+          for (unsigned i = 1; i + 1 < Def->getNumOperands(); i += 2) {
+            const llvm::MachineOperand &In = Def->getOperand(i);
+            if (In.isReg() && In.getReg())
+              Worklist.push_back(In.getReg());
+          }
+          continue;
+        }
+        if (isTransparentAddrOpRISCV(*Def)) {
+          pushAllRegUses(*Def, Worklist);
+          continue;
+        }
+      }
+      llvm::outs() << "... not stack-related\n";
+      return false;
+    };
+
     for (const auto &MI : user_calls_) {
       auto arg_regs{getArgRegs(MI)};
-      for (auto &r : arg_regs) {
+
+      llvm::MachineFunction &MF = *MI->getParent()->getParent();
+      llvm::MachineRegisterInfo &MRI = MF.getRegInfo();
+      const llvm::TargetRegisterInfo &TRI =
+          *MF.getSubtarget().getRegisterInfo();
+      for (llvm::Register r : arg_regs) {
+        llvm::outs() << "AR[" << r << "] ...\n";
+        if (isStackAddressValue(r, *MI, MRI, TRI)) {
+          llvm::outs() << "WARNING (experimental): user call[" << *MI
+                       << "] passes to callee function with AR[" << r
+                       << "] contains stack-based address. EDDI duplicate will "
+                          "point to duplicated stack region."
+                          " Parameter-value check not possible with base "
+                          "address. Cannot check parameter by value.\n";
+          continue;
+        }
         llvm::BuildMI(*MI->getParent(), MI->getIterator(), MI->getDebugLoc(),
                       TII_->get(llvm::RISCV::BNE))
             .addReg(r)
