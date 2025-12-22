@@ -1426,7 +1426,7 @@ void RISCVDmr::protectCalls() {
       Worklist.push_back(R);
 
       while (!Worklist.empty()) {
-        llvm::outs() << "... not empty\n";
+        //llvm::outs() << "... not empty\n";
         llvm::Register Cur = Worklist.pop_back_val();
         if (!Cur || !Visited.insert(Cur).second)
           continue;
@@ -1444,7 +1444,7 @@ void RISCVDmr::protectCalls() {
             continue;
         }
 
-        llvm::outs() << "... looking into Def[" << *Def << "].\n";
+        //llvm::outs() << "... looking into Def[" << *Def << "].\n";
         // 1) Stack pointer operand => stack object address involved.
         for (const llvm::MachineOperand &MO : Def->operands())
           if (MO.isReg() &&
@@ -1467,7 +1467,7 @@ void RISCVDmr::protectCalls() {
           continue;
         }
       }
-      llvm::outs() << "... not stack-related\n";
+      //llvm::outs() << "... not stack-related\n";
       return false;
     };
 
