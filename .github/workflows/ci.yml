@@ -198,14 +198,14 @@ jobs:
 
     runs-on: ${{ matrix.os.name }}-${{ matrix.os.version }}
     container: ${{ matrix.os.name }}:${{ matrix.os.version }}
-    name: test_${{ matrix.suts.name }}_${{ matrix.dmr.trafo }}-${{ matrix.cfp.trafo }}-${{ matrix.suts.name }}
+    name: test_${{ matrix.suts.name }}_${{ matrix.dmr.trafo }}-${{ matrix.cfp.trafo }}
     needs: [build_llvm_compas, prepare_testenv]
  
     steps:
     - name: Install git on container
       run: |
         apt update
-        apt install -y git
+        apt install -y git jq
     - name: Clone COMPAS
       uses: actions/checkout@v4
       with:
@@ -238,27 +238,33 @@ jobs:
       continue-on-error: false
       shell: bash
       run: |
-        for funcs in ${{ matrix.suts.funcs }}; do
+        set -euo pipefail
+        FUNCS_JSON='${{ toJson(matrix.suts.funcs) }}'
+        while IFS= read -r funcs; do
           echo "[configure]: /${{ matrix.suts.name }}-${funcs}-build/${{ matrix.suts.name }}"
           cmake -S "tests/${{ matrix.suts.name }}" -B "/${{ matrix.suts.name }}-${funcs}-build" -D COMPAS_LLVM_ROOT="/llvm_install" \
                 -D RISCV_TOOLCHAIN_BASENAME="${{ matrix.rvgnu.base}}" -D RISCV_TOOLCHAIN_PREFIX="/rvgnu_install" \
                 -D RISCV_ISA="${{ matrix.isa.name }}" \
                 -D DMR_MOD="${{ matrix.dmr.trafo }}" -D DMR_FUNCTIONS="${funcs}" \
                 -D CFP_MOD="${{ matrix.cfp.trafo }}" -D CFP_FUNCTIONS="${funcs}"
-        done
+        done < <(jq -r '.[]' <<<"$FUNCS_JSON")
     - name: Compile Tests
       working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
       shell: bash
       run: |
-        for funcs in ${{ matrix.suts.funcs }}; do
+        set -euo pipefail
+        FUNCS_JSON='${{ toJson(matrix.suts.funcs) }}'
+        while IFS= read -r funcs; do
           echo "[compile]: /${{ matrix.suts.name }}-${funcs}-build/${{ matrix.suts.name }}"
           cmake --build "/${{ matrix.suts.name }}-${funcs}-build"
-        done
+        done < <(jq -r '.[]' <<<"$FUNCS_JSON")
     - name: Run Test
       working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
       shell: bash
       run: |
-        for funcs in ${{ matrix.suts.funcs }}; do
+        set -euo pipefail
+        FUNCS_JSON='${{ toJson(matrix.suts.funcs) }}'
+        while IFS= read -r funcs; do
           echo "[run]: /${{ matrix.suts.name }}-${funcs}-build/${{ matrix.suts.name }}"
           /rvgnu_install/bin/spike /rvgnu_install/${{ matrix.rvgnu.base}}/bin/pk "/${{ matrix.suts.name }}-${funcs}-build/${{ matrix.suts.name }}"
-        done
+        done < <(jq -r '.[]' <<<"$FUNCS_JSON")
