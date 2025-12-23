@@ -27,7 +27,7 @@ jobs:
         os:
           - { name: "ubuntu", version: "latest" }
         llvm:
-          - { src: 'true', tag: '13.0.1' } # <-- the original config
+          #- { src: 'true', tag: '13.0.1' } # <-- the original config
           #- { src: 'true', tag: '14.0.6' } # <-- save CI time
           #- { src: 'true', tag: '15.0.7' } # <-- save CI time
           - { src: 'true', tag: '16.0.6' } # <-- latest (supported) llvm
@@ -241,8 +241,9 @@ jobs:
         set -euo pipefail
         FUNCS_JSON='${{ toJson(matrix.suts.funcs) }}'
         while IFS= read -r funcs; do
-          echo "[configure]: /${{ matrix.suts.name }}-${funcs}-build/${{ matrix.suts.name }}"
-          cmake -S "tests/${{ matrix.suts.name }}" -B "/${{ matrix.suts.name }}-${funcs}-build" -D COMPAS_LLVM_ROOT="/llvm_install" \
+          build_dir="/${{ matrix.suts.name }}-${funcs//,/_}-build"
+          echo "[configure]: ${build_dir}/${{ matrix.suts.name }}"
+          cmake -S "tests/${{ matrix.suts.name }}" -B "${build_dir} -D COMPAS_LLVM_ROOT="/llvm_install" \
                 -D RISCV_TOOLCHAIN_BASENAME="${{ matrix.rvgnu.base}}" -D RISCV_TOOLCHAIN_PREFIX="/rvgnu_install" \
                 -D RISCV_ISA="${{ matrix.isa.name }}" \
                 -D DMR_MOD="${{ matrix.dmr.trafo }}" -D DMR_FUNCTIONS="${funcs}" \
@@ -255,8 +256,9 @@ jobs:
         set -euo pipefail
         FUNCS_JSON='${{ toJson(matrix.suts.funcs) }}'
         while IFS= read -r funcs; do
-          echo "[compile]: /${{ matrix.suts.name }}-${funcs}-build/${{ matrix.suts.name }}"
-          cmake --build "/${{ matrix.suts.name }}-${funcs}-build"
+          build_dir="/${{ matrix.suts.name }}-${funcs//,/_}-build"
+          echo "[compile]: ${build_dir}/${{ matrix.suts.name }}"
+          cmake --build "${build_dir}"
         done < <(jq -r '.[]' <<<"$FUNCS_JSON")
     - name: Run Test
       working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
@@ -265,6 +267,7 @@ jobs:
         set -euo pipefail
         FUNCS_JSON='${{ toJson(matrix.suts.funcs) }}'
         while IFS= read -r funcs; do
-          echo "[run]: /${{ matrix.suts.name }}-${funcs}-build/${{ matrix.suts.name }}"
-          /rvgnu_install/bin/spike /rvgnu_install/${{ matrix.rvgnu.base}}/bin/pk "/${{ matrix.suts.name }}-${funcs}-build/${{ matrix.suts.name }}"
+          build_dir="/${{ matrix.suts.name }}-${funcs//,/_}-build"
+          echo "[run]: ${build_dir}/${{ matrix.suts.name }}"
+          /rvgnu_install/bin/spike /rvgnu_install/${{ matrix.rvgnu.base}}/bin/pk "${build_dir}/${{ matrix.suts.name }}"
         done < <(jq -r '.[]' <<<"$FUNCS_JSON")
