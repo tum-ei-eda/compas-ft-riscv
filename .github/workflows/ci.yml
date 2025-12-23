@@ -176,19 +176,17 @@ jobs:
         rvgnu:
           - { base: "riscv-none-elf"}
         suts:
-          - { name: "crc", elf: "crc", funcs: ""}
-          - { name: "crc", elf: "crc", funcs: "main"}
-          - { name: "crc", elf: "crc", funcs: "crcSlow"}
-          - { name: "crc", elf: "crc", funcs: "crcFast"}
-          - { name: "crc", elf: "crc", funcs: "main,crcSlow"}
-          - { name: "crc", elf: "crc", funcs: "main,crcSlow,crcFast"}
-          - { name: "crc", elf: "crc", funcs: "main,crcFast"}
-          - { name: "crc", elf: "crc", funcs: "crcSlow,crcFast"}
+          - { name: "crc", funcs: ["", "main", "crcInit", "crcSlow", "crcFast", 
+                                   "main,crcInit", "main,crcSlow", "main,crcFast", 
+                                   "crcInit,crcSlow", "crcInit,crcFast", "crcSlow,crcFast",
+                                   "crcInit,crcSlow,crcFast", "main,crcSlow,crcFast", 
+                                   "main,crcInit,crcSlow,crcFast"] }
         isa:
           - { name: "rv64gc"}      
         dmr:
           - { trafo: ""}
           - { trafo: "EDDI" }
+          - { trafo: "SWIFT" }
           - { trafo: "NZDC" }
           - { trafo: "NZDC+NEMESIS" }
           - { trafo: "NZDC+NEMESEC" }
@@ -200,7 +198,7 @@ jobs:
 
     runs-on: ${{ matrix.os.name }}-${{ matrix.os.version }}
     container: ${{ matrix.os.name }}:${{ matrix.os.version }}
-    name: test_${{ matrix.suts.name }}_${{ matrix.dmr.trafo }}-${{ matrix.cfp.trafo }}-${{ matrix.suts.funcs }}
+    name: test_${{ matrix.suts.name }}_${{ matrix.dmr.trafo }}-${{ matrix.cfp.trafo }}-${{ matrix.suts.name }}
     needs: [build_llvm_compas, prepare_testenv]
  
     steps:
@@ -235,23 +233,32 @@ jobs:
       run: |
         chmod -R +x "/rvgnu_install/bin"
         chmod -R +x "/llvm_install/bin"
-    - name: Configure Test
+    - name: Configure Tests
       working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
       continue-on-error: false
       shell: bash
       run: |
-        cmake -S "tests/${{ matrix.suts.name }}" -B "/${{ matrix.suts.name }}-build" -D COMPAS_LLVM_ROOT="/llvm_install" \
-              -D RISCV_TOOLCHAIN_BASENAME="${{ matrix.rvgnu.base}}" -D RISCV_TOOLCHAIN_PREFIX="/rvgnu_install" \
-              -D RISCV_ISA="${{ matrix.isa.name }}" \
-              -D DMR_MOD="${{ matrix.dmr.trafo }}" -D DMR_FUNCTIONS="${{ matrix.suts.funcs }}" \
-              -D CFP_MOD="${{ matrix.cfp.trafo }}" -D CFP_FUNCTIONS="${{ matrix.suts.funcs }}"
-    - name: Compile Test
+        for funcs in ${{ matrix.suts.funcs }}; do
+          echo "[configure]: /${{ matrix.suts.name }}-${funcs}-build/${{ matrix.suts.name }}"
+          cmake -S "tests/${{ matrix.suts.name }}" -B "/${{ matrix.suts.name }}-${funcs}-build" -D COMPAS_LLVM_ROOT="/llvm_install" \
+                -D RISCV_TOOLCHAIN_BASENAME="${{ matrix.rvgnu.base}}" -D RISCV_TOOLCHAIN_PREFIX="/rvgnu_install" \
+                -D RISCV_ISA="${{ matrix.isa.name }}" \
+                -D DMR_MOD="${{ matrix.dmr.trafo }}" -D DMR_FUNCTIONS="${funcs}" \
+                -D CFP_MOD="${{ matrix.cfp.trafo }}" -D CFP_FUNCTIONS="${funcs}"
+        done
+    - name: Compile Tests
       working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
       shell: bash
       run: |
-        cmake --build "/${{ matrix.suts.name }}-build"
+        for funcs in ${{ matrix.suts.funcs }}; do
+          echo "[compile]: /${{ matrix.suts.name }}-${funcs}-build/${{ matrix.suts.name }}"
+          cmake --build "/${{ matrix.suts.name }}-${funcs}-build"
+        done
     - name: Run Test
       working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
       shell: bash
       run: |
-        /rvgnu_install/bin/spike /rvgnu_install/${{ matrix.rvgnu.base}}/bin/pk "/${{ matrix.suts.name }}-build/${{ matrix.suts.name }}"
+        for funcs in ${{ matrix.suts.funcs }}; do
+          echo "[run]: /${{ matrix.suts.name }}-${funcs}-build/${{ matrix.suts.name }}"
+          /rvgnu_install/bin/spike /rvgnu_install/${{ matrix.rvgnu.base}}/bin/pk "/${{ matrix.suts.name }}-${funcs}-build/${{ matrix.suts.name }}"
+        done
