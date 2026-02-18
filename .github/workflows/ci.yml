@@ -243,7 +243,7 @@ jobs:
         while IFS= read -r funcs; do
           build_dir="/${{ matrix.suts.name }}-${funcs//,/_}-build"
           echo "[configure]: ${build_dir}/${{ matrix.suts.name }}"
-          cmake -S "tests/${{ matrix.suts.name }}" -B "${build_dir} -D COMPAS_LLVM_ROOT="/llvm_install" \
+          cmake -S "tests/${{ matrix.suts.name }}" -B "${build_dir}" -D COMPAS_LLVM_ROOT="/llvm_install" \
                 -D RISCV_TOOLCHAIN_BASENAME="${{ matrix.rvgnu.base}}" -D RISCV_TOOLCHAIN_PREFIX="/rvgnu_install" \
                 -D RISCV_ISA="${{ matrix.isa.name }}" \
                 -D DMR_MOD="${{ matrix.dmr.trafo }}" -D DMR_FUNCTIONS="${funcs}" \
