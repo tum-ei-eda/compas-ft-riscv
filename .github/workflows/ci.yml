@@ -248,7 +248,7 @@ jobs:
                 -D RISCV_ISA="${{ matrix.isa.name }}" \
                 -D DMR_MOD="${{ matrix.dmr.trafo }}" -D DMR_FUNCTIONS="${funcs}" \
                 -D CFP_MOD="${{ matrix.cfp.trafo }}" -D CFP_FUNCTIONS="${funcs}"
-        done < <(jq -r '.[]' <<<"$FUNCS_JSON")
+        done < <(jq -r '.[]' <<<"$FUNCS_JSON" | tr -d '\r')
     - name: Compile Tests
       working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
       shell: bash
@@ -259,7 +259,7 @@ jobs:
           build_dir="/${{ matrix.suts.name }}-${funcs//,/_}-build"
           echo "[compile]: ${build_dir}/${{ matrix.suts.name }}"
           cmake --build "${build_dir}"
-        done < <(jq -r '.[]' <<<"$FUNCS_JSON")
+        done < <(jq -r '.[]' <<<"$FUNCS_JSON" | tr -d '\r')
     - name: Run Test
       working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
       shell: bash
@@ -270,4 +270,4 @@ jobs:
           build_dir="/${{ matrix.suts.name }}-${funcs//,/_}-build"
           echo "[run]: ${build_dir}/${{ matrix.suts.name }}"
           /rvgnu_install/bin/spike /rvgnu_install/${{ matrix.rvgnu.base}}/bin/pk "${build_dir}/${{ matrix.suts.name }}"
-        done < <(jq -r '.[]' <<<"$FUNCS_JSON")
+        done < <(jq -r '.[]' <<<"$FUNCS_JSON" | tr -d '\r')
