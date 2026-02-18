@@ -240,7 +240,8 @@ jobs:
       run: |
         set -euo pipefail
         FUNCS_JSON='${{ toJson(matrix.suts.funcs) }}'
-        while IFS= read -r funcs; do
+        mapfile -t FUNCS < <(jq -r '.[]' <<<"$FUNCS_JSON" | tr -d '\r')
+        for funcs in "${FUNCS[@]}"; do
           build_dir="/${{ matrix.suts.name }}-${funcs//,/_}-build"
           echo "[configure]: ${build_dir}/${{ matrix.suts.name }}"
           cmake -S "tests/${{ matrix.suts.name }}" -B "${build_dir}" -D COMPAS_LLVM_ROOT="/llvm_install" \
@@ -248,26 +249,28 @@ jobs:
                 -D RISCV_ISA="${{ matrix.isa.name }}" \
                 -D DMR_MOD="${{ matrix.dmr.trafo }}" -D DMR_FUNCTIONS="${funcs}" \
                 -D CFP_MOD="${{ matrix.cfp.trafo }}" -D CFP_FUNCTIONS="${funcs}"
-        done < <(jq -r '.[]' <<<"$FUNCS_JSON" | tr -d '\r')
+        done
     - name: Compile Tests
       working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
       shell: bash
       run: |
         set -euo pipefail
         FUNCS_JSON='${{ toJson(matrix.suts.funcs) }}'
-        while IFS= read -r funcs; do
+        mapfile -t FUNCS < <(jq -r '.[]' <<<"$FUNCS_JSON" | tr -d '\r')
+        for funcs in "${FUNCS[@]}"; do
           build_dir="/${{ matrix.suts.name }}-${funcs//,/_}-build"
           echo "[compile]: ${build_dir}/${{ matrix.suts.name }}"
           cmake --build "${build_dir}"
-        done < <(jq -r '.[]' <<<"$FUNCS_JSON" | tr -d '\r')
+        done
     - name: Run Test
       working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src
       shell: bash
       run: |
         set -euo pipefail
         FUNCS_JSON='${{ toJson(matrix.suts.funcs) }}'
-        while IFS= read -r funcs; do
+        mapfile -t FUNCS < <(jq -r '.[]' <<<"$FUNCS_JSON" | tr -d '\r')
+        for funcs in "${FUNCS[@]}"; do
           build_dir="/${{ matrix.suts.name }}-${funcs//,/_}-build"
           echo "[run]: ${build_dir}/${{ matrix.suts.name }}"
-          /rvgnu_install/bin/spike /rvgnu_install/${{ matrix.rvgnu.base}}/bin/pk "${build_dir}/${{ matrix.suts.name }}"
-        done < <(jq -r '.[]' <<<"$FUNCS_JSON" | tr -d '\r')
+          /rvgnu_install/bin/spike /rvgnu_install/${{ matrix.rvgnu.base}}/bin/pk "${build_dir}/${{ matrix.suts.name }}" </dev/null
+        done
