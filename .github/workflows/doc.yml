@@ -1,0 +1,59 @@
+name: Build COMPAS Manual and GitHub Pages
+on:
+  push:
+    tags:
+      - v*
+  workflow_dispatch: {}
+
+jobs:
+  build_manual:
+    strategy:
+      matrix:
+        os:
+          - { name: "ubuntu", version: "latest" }
+
+    runs-on: ${{ matrix.os.name }}-${{ matrix.os.version }}
+    container: ${{ matrix.os.name }}:${{ matrix.os.version }}
+    name: tex_${{ matrix.os.name }}-${{ matrix.os.version }}_compas_llvm${{ matrix.llvm.tag }}
+
+    steps:
+    - name: Install git on container
+      run: |
+        apt update
+        apt install -y git pandoc
+    - name: Clone COMPAS
+      uses: actions/checkout@v4
+      with:
+        path: compas-ft-riscv_src
+    - name: Load env vars from docker/.env
+      run: |
+        while IFS='=' read -r key value || [ -n "$key" ]; do
+          [[ -z "$key" || "$key" == \#* ]] && continue
+          key="$(echo "$key" | xargs)"
+          value="$(echo "$value" | xargs)"
+          value="${value%\"}"
+          value="${value#\"}"
+          echo "$key=$value" >> $GITHUB_ENV
+        done < compas-ft-riscv_src/docker/.env
+    - name: Prepare .Tex files
+      working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src/doc/src
+      run: |
+        sed -i "s/@VERSION@/${ENV_COMPAS_VERSION}/g" main.tex   
+    - name: Compile TeX Installation and User Guides to PDF
+      working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src/doc/src
+      run: |
+        mkdir -p /builddoc/
+        pdflatex main.tex -output-directory=/builddoc
+        mv /builddoc/main.pdf /builddoc/compas-ft-riscv${ENV_COMPAS_VERSION}-manual.pdf
+    - name: Compile TeX Installation and User Guides to HTML
+      working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src/doc/src
+      run: |
+        pandoc main.tex -o /builddoc/compas-ft-riscv${ENV_COMPAS_VERSION}-manual.html --from=latex --to=html5 --standalone --mathjax
+        mv /builddoc/main.pdf /builddoc/compas-ft-riscv${ENV_COMPAS_VERSION}-manual.pdf
+    - name: Upload artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: /builddoc/compas-ft-riscv${ENV_COMPAS_VERSION}-manual.html
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4

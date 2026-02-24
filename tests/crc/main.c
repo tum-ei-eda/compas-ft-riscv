@@ -22,29 +22,31 @@
 int
 main(void)
 {
-	unsigned char  test[] = "123456789";
+  unsigned char  test[] = "123456789";
     
-    unsigned long crc=0;
+  unsigned long crc=0;
 
-	/*
-	 * Print the check value for the selected CRC algorithm.
-	 */
-	printf("The check value for the %s standard is 0x%X\n", CRC_NAME, CHECK_VALUE);
+  /*
+   * Print the check value for the selected CRC algorithm.
+   */
+  printf("The check value for the %s standard is 0x%X\n", CRC_NAME, CHECK_VALUE);
+
+  /*
+   * Compute the CRC of the test message, slowly.
+   */
+  int lenSlow = strlen(test);
+  printf("The crcSlow() of \"123456789\" is 0x%X\n", crcSlow(test, lenSlow));
+  crc = crcSlow(test,9);
 	
-	/*
-	 * Compute the CRC of the test message, slowly.
-	 */
-	printf("The crcSlow() of \"123456789\" is 0x%X\n", crcSlow(test, strlen(test)));
-    crc = crcSlow(test,9);
-	
-	/*
-	 * Compute the CRC of the test message, more efficiently.
-	 */
-	crcInit();
-	printf("The crcFast() of \"123456789\" is 0x%X\n", crcFast(test, strlen(test)));
-    crc = crcFast(test,9);
+  /*
+   * Compute the CRC of the test message, more efficiently.
+   */
+  crcInit();
+  int lenFast = strlen(test);
+  printf("The crcFast() of \"123456789\" is 0x%X\n", crcFast(test, lenFast));
+  crc = crcFast(test,9);
 
-    printf("finished with 0x%lX\n", crc);
+  printf("finished with 0x%lX\n", crc);
 
-    return 0;
+  return 0;
 }   /* main() */

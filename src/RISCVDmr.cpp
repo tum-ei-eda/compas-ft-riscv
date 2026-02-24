@@ -23,8 +23,10 @@
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
+#include "llvm/ADT/SmallVector.h"
 
 #include "RISCVRasm.h"
+#include "MCTargetDesc/RISCVBaseInfo.h"
 
 #define SWITCH_VOLATILE
 // #define DBG
@@ -216,7 +218,7 @@ void RISCVDmr::init() {
     llvm::outs() << "COMPAS: Running SWIFT pass with " << schedule_string
                  << " on " << fname_ << "\n";
   } else if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_)) {
-    // setting edd configs
+    // setting eddi configs
     config_.pss = ProtectStrategyStore::S2;
     config_.psl = ProtectStrategyLoad::L2;
     config_.psuc = ProtectStrategyUserCall::UC1;
@@ -688,7 +690,49 @@ void RISCVDmr::protectLoads() {
   if (config_.psl == ProtectStrategyLoad::L0) {
     return;
   } else if (config_.psl == ProtectStrategyLoad::L1) {
+    auto isRelocatedLoadImmRISCV = [](const llvm::MachineInstr &MI) -> bool {
+      auto isRISCVRelocatedOffsetMO =
+          [](const llvm::MachineOperand &MO) -> bool {
+        if (!(MO.isGlobal() || MO.isSymbol() || MO.isCPI() ||
+              MO.isBlockAddress() || MO.isJTI()))
+          return false;
+
+        unsigned TF = MO.getTargetFlags();
+
+        // %lo(sym)(base)
+        if (TF == llvm::RISCVII::MO_LO)
+          return true;
+
+        // Other common RISC-V relocations: %pcrel_hi(sym), %pcrel_lo(label)
+        if (TF == llvm::RISCVII::MO_PCREL_HI ||
+            TF == llvm::RISCVII::MO_PCREL_LO)
+          return true;
+
+        return false;
+      };
+      // For real loads/stores, op2 is the offset. (Pseudo-instructions may
+      // differ.)
+      if (MI.getNumOperands() < 3)
+        return false;
+
+      const llvm::MachineOperand &Off = MI.getOperand(2);
+      return isRISCVRelocatedOffsetMO(Off);
+    };
+
     for (const auto &MI : loads_) {
+      if (isRelocatedLoadImmRISCV(*MI)) {
+        for (const auto &op : MI->operands()) {
+          if (op.isReg() && op.isDef()) {
+            // trivial. Duplicating loads is better, but duplicated relocate
+            // automatically regresses to same GP reg instead of shadow(GP)...
+            moveIntoShadow(MI->getParent(), std::next(MI->getIterator()),
+                           op.getReg(), P2S_.at(op.getReg()));
+            // MI->getParent()->insertAfter(MI, genShadowFromPrimary(MI));
+            break;
+          }
+        }
+        continue;
+      }
       for (const auto &op : MI->operands()) {
         if (op.isReg()) {
           if (op.isUse()) {
@@ -1354,9 +1398,140 @@ void RISCVDmr::protectCalls() {
       // }
     }
   } else if (config_.psuc == ProtectStrategyUserCall::UC1) {
+
+    auto isStackAddressValue = [](llvm::Register R, llvm::MachineInstr &CallMI,
+                                  llvm::MachineRegisterInfo &MRI,
+                                  const llvm::TargetRegisterInfo &TRI) -> bool {
+      auto findPrevPhysRegDef =
+          [](llvm::Register PhysR, llvm::MachineInstr &At,
+             const llvm::TargetRegisterInfo &TRI) -> llvm::MachineInstr * {
+        llvm::MachineBasicBlock &MBB = *At.getParent();
+
+        for (auto I = At.getIterator(); I != MBB.begin();) {
+          --I;
+          llvm::MachineInstr &MI = *I;
+
+          for (auto &MO : MI.operands()) {
+            if (!MO.isReg() || !MO.isDef())
+              continue;
+            llvm::Register DefR = MO.getReg();
+            if (!DefR)
+              continue;
+
+            if (DefR == PhysR || TRI.regsOverlap(DefR, PhysR))
+              return &MI;
+          }
+        }
+        return nullptr;
+      };
+
+      auto isTransparentAddrOpRISCV = [](const llvm::MachineInstr &MI) -> bool {
+        const unsigned Opc = MI.getOpcode();
+
+        // GlobalISel address-ish ops (if we are in GISel at this point)
+        if (Opc == llvm::TargetOpcode::COPY ||
+            Opc == llvm::TargetOpcode::G_BITCAST ||
+            Opc == llvm::TargetOpcode::G_PTR_ADD ||
+            Opc == llvm::TargetOpcode::G_ADD)
+          return true;
+
+        // RISC-V target ops commonly used in address calculation
+        switch (Opc) {
+        case llvm::RISCV::ADDI:
+        case llvm::RISCV::ADD:
+        case llvm::RISCV::SLLI:
+        case llvm::RISCV::SRLI:
+        case llvm::RISCV::SRAI:
+        case llvm::RISCV::XOR:
+        case llvm::RISCV::OR:
+        case llvm::RISCV::AND:
+        case llvm::RISCV::ADDIW: // RV64
+        case llvm::RISCV::LUI:
+        case llvm::RISCV::AUIPC:
+          return true;
+
+        // If we see these in your pipeline for address materialization, include:
+        default:
+          return false;
+        }
+      };
+
+      auto pushAllRegUses = [](const llvm::MachineInstr &Def,
+                               llvm::SmallVectorImpl<llvm::Register> &WL) {
+        for (const llvm::MachineOperand &MO : Def.operands())
+          if (MO.isReg() && MO.isUse() && MO.getReg())
+            WL.push_back(MO.getReg());
+      };
+
+      llvm::SmallVector<llvm::Register, 8> Worklist;
+      llvm::SmallDenseSet<llvm::Register, 32> Visited;
+
+      Worklist.push_back(R);
+
+      while (!Worklist.empty()) {
+        //llvm::outs() << "... not empty\n";
+        llvm::Register Cur = Worklist.pop_back_val();
+        if (!Cur || !Visited.insert(Cur).second)
+          continue;
+
+        llvm::MachineInstr *Def = nullptr;
+
+        if (Cur.isVirtual()) {
+          Def = MRI.getVRegDef(Cur);
+          if (!Def)
+            continue;
+        } else {
+          // Physical reg: find the last def before the call in the same block.
+          Def = findPrevPhysRegDef(Cur, CallMI, TRI);
+          if (!Def)
+            continue;
+        }
+
+        //llvm::outs() << "... looking into Def[" << *Def << "].\n";
+        // 1) Stack pointer operand => stack object address involved.
+        for (const llvm::MachineOperand &MO : Def->operands())
+          if (MO.isReg() &&
+              MO.getReg() == riscv_common::kSP) // is reg and stack pointer
+            return true;
+
+        if (Def->getOpcode() == llvm::TargetOpcode::G_FRAME_INDEX)
+          return true;
+
+        if (Def->isPHI()) {
+          for (unsigned i = 1; i + 1 < Def->getNumOperands(); i += 2) {
+            const llvm::MachineOperand &In = Def->getOperand(i);
+            if (In.isReg() && In.getReg())
+              Worklist.push_back(In.getReg());
+          }
+          continue;
+        }
+        if (isTransparentAddrOpRISCV(*Def)) {
+          pushAllRegUses(*Def, Worklist);
+          continue;
+        }
+      }
+      //llvm::outs() << "... not stack-related\n";
+      return false;
+    };
+
     for (const auto &MI : user_calls_) {
       auto arg_regs{getArgRegs(MI)};
-      for (auto &r : arg_regs) {
+
+      llvm::MachineFunction &MF = *MI->getParent()->getParent();
+      llvm::MachineRegisterInfo &MRI = MF.getRegInfo();
+      const llvm::TargetRegisterInfo &TRI =
+          *MF.getSubtarget().getRegisterInfo();
+      for (llvm::Register r : arg_regs) {
+        llvm::outs() << "AR[" << r << "] ...\n";
+        if (isStackAddressValue(r, *MI, MRI, TRI)) {
+          llvm::outs() << "WARNING (experimental): user call[" << *MI
+                       << "] passes to callee function with AR[" << r
+                       << "] contains stack-based address. EDDI duplicate will "
+                          "point to duplicated stack region."
+                          " Parameter-value check not possible with base "
+                          "address. Cannot check parameter by value.\n";
+          continue;
+        }
         llvm::BuildMI(*MI->getParent(), MI->getIterator(), MI->getDebugLoc(),
                       TII_->get(llvm::RISCV::BNE))
             .addReg(r)
@@ -1528,6 +1703,23 @@ void RISCVDmr::protectBranches() {
         auto taken_BB{MI->getOperand(2).getMBB()};
 
         auto nottaken_BB{MBB->getFallThrough()};
+        if (nottaken_BB == nullptr) {
+          // no fallthrough found. Most likely we have a
+          // "b<cond> <>, taken \\ j nottaken" situation here, where the
+          // unconditional is part of the MBB, i.e. LLVM IR did not terminate BB
+          // with conditional branch. Solution: splice BB here at conditional!
+          llvm::outs() << "No fallthrough successor found for MBB[" << MBB
+                       << "]: " << *MBB << "\n";
+          MBB->splitAt(*MI); // we split the the MBB at the conditional branch,
+                             // because we need real CFG conform basic block
+                             // traversal for hardening
+          nottaken_BB = MBB->getFallThrough(); // now MBB has the correct
+                                               // implicit fallthrough on not
+                                               // taking the conditional branch
+          MBB->addSuccessor(
+              taken_BB); // due to split the conditional branch is still active
+                         // but the taken not a registered successor
+        }
         assert(nottaken_BB && "this branch has no fallthrough!");
 
         llvm::BuildMI(*MBB, MBB->end(), MI->getDebugLoc(),
