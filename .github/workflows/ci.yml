@@ -119,7 +119,7 @@ jobs:
     strategy:
       matrix:
         os:
-          - { name: "ubuntu", version: "latest" }
+          - { name: "ubuntu", version: "24.04" }
         rvgnu:
           - { url: "https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/v13.2.0-2/xpack-riscv-none-elf-gcc-13.2.0-2-linux-x64.tar.gz", prefix: "xpack-riscv-none-elf-gcc-13.2.0-2" }
 
@@ -167,7 +167,7 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - { name: "ubuntu", version: "latest" }
+          - { name: "ubuntu", version: "24.04" }
         llvm:
           #- { src: 'true', tag: '13.0.1' } # <-- the original config
           #- { src: 'true', tag: '14.0.6' } # <-- save CI time
