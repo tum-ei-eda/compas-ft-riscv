@@ -388,11 +388,10 @@ void RISCVRasm::insertErrorBB() {
     cf_err_bb_->addSuccessor(cf_err_bb_);
 
     // keep on repeating this errBB as we dont want to execute code now
-    // J cf_err_bb_ = JALR X0, cf_err_bb_ because J is a pseudo-jump instr in
-    // RISCV
+    // Use the branch pseudo so LLVM sees a terminator, rather than a call
+    // with its destination register set to zero.
     llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
-                  TII_->get(llvm::RISCV::JAL))
-        .addReg(riscv_common::k0, llvm::RegState::Define)
+                  TII_->get(llvm::RISCV::PseudoBR))
         .addMBB(cf_err_bb_);
   } else {
     // quit early using ebreak
