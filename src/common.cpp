@@ -150,12 +150,12 @@ void riscv_common::saveRegs(std::vector<llvm::Register> regs,
   // allocating space on stack
   if (sp != kSP) {
     llvm::BuildMI(*MBB, mbb_it, DLL, TII->get(llvm::RISCV::ADDI))
-        .addReg(sp)
+        .addReg(sp, llvm::RegState::Define)
         .addReg(sp)
         .addImm(-static_cast<int64_t>(frame.size));
   }
   llvm::BuildMI(*MBB, mbb_it, DLL, TII->get(llvm::RISCV::ADDI))
-      .addReg(kSP)
+      .addReg(kSP, llvm::RegState::Define)
       .addReg(kSP)
       .addImm(-static_cast<int64_t>(frame.size));
 
@@ -183,7 +183,7 @@ void riscv_common::loadRegs(std::vector<llvm::Register> regs,
   // loading from stack one by one
   for (const auto &slot : frame.slots) {
     llvm::BuildMI(*MBB, mbb_it, DLL, TII->get(slot.load_opcode))
-        .addReg(slot.reg)
+        .addReg(slot.reg, llvm::RegState::Define)
         .addReg(sp)
         .addImm(slot.offset);
   }
@@ -191,12 +191,12 @@ void riscv_common::loadRegs(std::vector<llvm::Register> regs,
   // now deallocating space on stack
   if (sp != kSP) {
     llvm::BuildMI(*MBB, mbb_it, DLL, TII->get(llvm::RISCV::ADDI))
-        .addReg(sp)
+        .addReg(sp, llvm::RegState::Define)
         .addReg(sp)
         .addImm(frame.size);
   }
   llvm::BuildMI(*MBB, mbb_it, DLL, TII->get(llvm::RISCV::ADDI))
-      .addReg(kSP)
+      .addReg(kSP, llvm::RegState::Define)
       .addReg(kSP)
       .addImm(frame.size);
 }

@@ -339,12 +339,12 @@ void RISCVRasm::insertErrorBB() {
     // lui t1, 16 -> makes t1 = 0x10000
     llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
                   TII_->get(llvm::RISCV::LUI))
-        .addReg(llvm::RISCV::X6)
+        .addReg(llvm::RISCV::X6, llvm::RegState::Define)
         .addImm(16);
     // addi t2, zero, 1 -> makes t2 = 1
     llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
                   TII_->get(llvm::RISCV::ADDI))
-        .addReg(llvm::RISCV::X7)
+        .addReg(llvm::RISCV::X7, llvm::RegState::Define)
         .addReg(riscv_common::k0)
         .addImm(1);
     // sw t2, -8(t1) -> stores t2 to (t1 - 8) i.e. store 1 to 0xfff8
@@ -358,14 +358,14 @@ void RISCVRasm::insertErrorBB() {
     // storing '93' to a7, aka SYS_exit code ECALL code:
     llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
                   TII_->get(llvm::RISCV::ADDI))
-        .addReg(llvm::RISCV::X17) // a7
+        .addReg(llvm::RISCV::X17, llvm::RegState::Define) // a7
         .addReg(llvm::RISCV::X0)  // zero
         .addImm(93);
     // storing '-512' to a0, aka exit return value when ecall forces newlib sys
     // exit:
     llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
                   TII_->get(llvm::RISCV::ADDI))
-        .addReg(llvm::RISCV::X10) // a7
+        .addReg(llvm::RISCV::X10, llvm::RegState::Define) // a7
         .addReg(llvm::RISCV::X0)  // zero
         .addImm(-256);
     // invoke 'ecall'
@@ -385,7 +385,7 @@ void RISCVRasm::insertErrorBB() {
     // RISCV
     llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
                   TII_->get(llvm::RISCV::JAL))
-        .addReg(riscv_common::k0)
+        .addReg(riscv_common::k0, llvm::RegState::Define)
         .addMBB(cf_err_bb_);
   } else {
     // quit early using ebreak
@@ -461,7 +461,7 @@ void RISCVRasm::generate_signature_checks() {
       llvm::BuildMI(MF_->front(), std::begin(MF_->front()),
                     std::begin(MF_->front())->getDebugLoc(),
                     TII_->get(llvm::RISCV::ADDI))
-          .addReg(kRTS)
+          .addReg(kRTS, llvm::RegState::Define)
           .addReg(riscv_common::k0)
           .addImm(mbb_sigs_.at(&MF_->front()).first);
     } else {
@@ -469,7 +469,7 @@ void RISCVRasm::generate_signature_checks() {
       // updating RTS
       llvm::BuildMI(MBB, insert, insert->getDebugLoc(),
                     TII_->get(llvm::RISCV::ADDI))
-          .addReg(kRTS)
+          .addReg(kRTS, llvm::RegState::Define)
           .addReg(kRTS)
           .addImm(-mbb_sigs_.at(&MBB).second);
       mbb_signature_arbr_instrs_[&MBB] = &(*(std::prev(insert)));
@@ -477,7 +477,7 @@ void RISCVRasm::generate_signature_checks() {
       // comparing the RTS with compile-time sig
       llvm::BuildMI(MBB, insert, insert->getDebugLoc(),
                     TII_->get(llvm::RISCV::ADDI))
-          .addReg(kC)
+          .addReg(kC, llvm::RegState::Define)
           .addReg(riscv_common::k0)
           .addImm(mbb_sigs_.at(&MBB).first);
 
@@ -514,7 +514,7 @@ void RISCVRasm::save_restore_runtime_signature(llvm::MachineInstr *call_instr) {
   // for G, we simply move the expected value back into G
   llvm::BuildMI(*(call_instr->getParent()), insert, call_instr->getDebugLoc(),
                 TII_->get(llvm::RISCV::ADDI))
-      .addReg(kRTS)
+      .addReg(kRTS, llvm::RegState::Define)
       .addReg(riscv_common::k0)
       .addImm(mbb_sigs_.at(call_instr->getParent()).first);
 }
@@ -617,7 +617,7 @@ void RISCVRasm::generate_traversal_adjustments() {
         assert_imm(adjustment);
         llvm::BuildMI(MBB, MI->getIterator(), MI->getDebugLoc(),
                       TII_->get(llvm::RISCV::ADDI))
-            .addReg(kRTS)
+            .addReg(kRTS, llvm::RegState::Define)
             .addReg(kRTS)
             .addImm(adjustment);
         carried_adjustment = target_adjustment;
@@ -634,7 +634,7 @@ void RISCVRasm::generate_traversal_adjustments() {
           assert_imm(adjustment);
           llvm::BuildMI(MBB, MI->getIterator(), MI->getDebugLoc(),
                         TII_->get(llvm::RISCV::ADDI))
-              .addReg(kRTS)
+              .addReg(kRTS, llvm::RegState::Define)
               .addReg(kRTS)
               .addImm(adjustment);
         }
@@ -657,12 +657,12 @@ void RISCVRasm::generate_traversal_adjustments() {
 
         llvm::BuildMI(MBB, MI->getIterator(), MI->getDebugLoc(),
                       TII_->get(llvm::RISCV::ADDI))
-            .addReg(kRTS)
+            .addReg(kRTS, llvm::RegState::Define)
             .addReg(kRTS)
             .addImm(adjust_value);
         llvm::BuildMI(MBB, MI->getIterator(), MI->getDebugLoc(),
                       TII_->get(llvm::RISCV::ADDI))
-            .addReg(kC)
+            .addReg(kC, llvm::RegState::Define)
             .addReg(riscv_common::k0)
             .addImm(rand);
         llvm::BuildMI(MBB, MI->getIterator(), MI->getDebugLoc(),
@@ -694,7 +694,7 @@ void RISCVRasm::generate_traversal_adjustments() {
     } else {
       llvm::BuildMI(MBB, MBB.end(), MBB.back().getDebugLoc(),
                     TII_->get(llvm::RISCV::ADDI))
-          .addReg(kRTS)
+          .addReg(kRTS, llvm::RegState::Define)
           .addReg(kRTS)
           .addImm(adjustment);
     }
@@ -830,7 +830,7 @@ void RISCVRacfed::generate_intrablock_signature_updates() {
 
         llvm::BuildMI(MBB, insert, mi->getDebugLoc(),
                       TII_->get(llvm::RISCV::ADDI))
-            .addReg(kRTS)
+            .addReg(kRTS, llvm::RegState::Define)
             .addReg(kRTS)
             .addImm(rv);
       }
