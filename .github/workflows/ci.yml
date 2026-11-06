@@ -25,7 +25,7 @@ jobs:
     strategy:
       matrix:
         os:
-          - { name: "ubuntu", version: "latest" }
+          - { name: "ubuntu", version: "24.04" }
         llvm:
           #- { src: 'true', tag: '13.0.1' } # <-- the original config
           #- { src: 'true', tag: '14.0.6' } # <-- save CI time

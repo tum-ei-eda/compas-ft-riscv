@@ -10,7 +10,7 @@ jobs:
     strategy:
       matrix:
         os:
-          - { name: "ubuntu", version: "latest" }
+          - { name: "ubuntu", version: "24.04" }
 
     runs-on: ${{ matrix.os.name }}-${{ matrix.os.version }}
     container: ${{ matrix.os.name }}:${{ matrix.os.version }}
