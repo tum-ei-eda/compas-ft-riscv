@@ -235,12 +235,14 @@ year = {2002}
  year = {2017}
 }
 
-% @phdthesis{nzdcthesis,
-%   author = {Moslem Didehban},
-%   title = {Software Techniques for Dependable Execution},
-%   school = {Arizona State University},
-%   year = 2018,
-% }
+@Comment{
+@phdthesis{nzdcthesis,
+  author = {Moslem Didehban},
+  title = {Software Techniques for Dependable Execution},
+  school = {Arizona State University},
+  year = 2018,
+}
+}
 
 @article{eddi,
 abstract = {This paper proposes a pure software technique "Error Detection by Duplicated Instructions" (EDDI), for detecting errors during usual system operation. Compared to other error-detection techniques that use hardware redundancy, EDDI does not require any hardware modifications to add error detection capability to the original system. EDDI duplicates instructions during compilation and uses different registers and variables for the new instructions. Especially for the fault in the code segment of memory, formulas are derived to estimate the error-detection coverage of EDDI using probabilistic methods. These formulas use statistics of the program, which are collected during compilation. EDDI was applied to eight benchmark programs and the error-detection coverage was estimated. Then, the estimates were verified by simulation, in which a fault injector forced a bit-flip in the code segment of executable machine codes. The simulation results validated the estimated fault coverage and show that approximately 1.5% of injected faults produced incorrect results in eight benchmark programs with EDDI, while on average, 20% of injected faults produced undetected incorrect results in the programs without EDDI. Based on the theoretical estimates and actual fault-injection experiments, EDDI can provide over 98% fault-coverage without any extra hardware for error detection. This pure software technique is especially useful when designers cannot change the hardware, but they need dependability in the computer system. To reduce the performance overhead, EDDI schedules the instructions that are added for detecting errors such that "Instruction-Level Parallelism" (ILP) is maximized. Performance overhead can be reduced by increasing ILP within a single super-scalar processor. The execution time overhead in a 4-way super-scalar processor is less than the execution time overhead in the processors that can issue two instructions in one cycle.},
@@ -470,26 +472,6 @@ year = {2007}
 }
 
 @INPROCEEDINGS{Slayman2011,  author={Charles {Slayman}},  booktitle={2011 Proceedings - Annual Reliability and Maintainability Symposium},   title={Soft error trends and mitigation techniques in memory devices},   year={2011},  volume={},  number={},  pages={1-5},  doi={10.1109/RAMS.2011.5754515}}
-
-@InProceedings{racfed,
-author="Vankeirsbilck, Jens
-and Penneman, Niels
-and Hallez, Hans
-and Boydens, Jeroen",
-editor="Gallina, Barbara
-and Skavhaug, Amund
-and Bitsch, Friedemann",
-title="Random Additive Control Flow Error Detection",
-booktitle="Computer Safety, Reliability, and Security",
-year="2018",
-publisher="Springer International Publishing",
-address="Cham",
-pages="220--234",
-abstract="Today, embedded systems are being used in many (safety-critical) applications. However, due to their decreasing feature size and supply voltage, such systems are more susceptible to external disturbances such as electromagnetic interference. These external disturbances are able to introduce bit-flips inside the microcontroller's hardware. In turn, these bit-flips may also corrupt the software. A possible software corruption is a control flow error. This paper proposes a new software-implemented control flow error detection technique. The advantage of our technique, called Random Additive Control Flow Error Detection, is a high detection ratio with a low execution time overhead. Most control flow errors are detected, while having a lower execution time overhead than the considered existing techniques.",
-isbn="978-3-319-99130-6"
-}
-
-
 
 @inproceedings{compasec,
   author = {Geier, Johannes and Auer, Lukas and Mueller-Gritschneder, Daniel and Sharif, Uzair and Schlichtmann, Ulf},

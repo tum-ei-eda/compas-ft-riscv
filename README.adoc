@@ -1,6 +1,6 @@
 = compas-ft-riscv
 
-image:doc/manual//src/figs/compas.svg[155,155,align="center",float="right"]
+image:docs/manual/src/figs/compas.svg[155,155,align="center",float="right"]
 
 COMPAS: Compiler-assisted Software-implemented Hardware Fault Tolerance implemented in LLVM passes for the RISC-V backend
 
@@ -57,19 +57,23 @@ If you want to cite this work, please use the following papers.
 
 == User Guide
 
-Detailed instructions on compiler installation and usage can be found in `doc/manual`. We provide the manual as pdf.
+Detailed instructions on compiler installation and usage can be found in link:docs/manual/[`docs/manual`]. We provide the manual as PDF.
 
 The manual provides details on how to install LLVM compiler with our SIHFT passes. Further, the manual provides usage instructions on how to harden a given C/C++ project using SIHFT transformations.
 
 .Docs outdated? Rebuild them like so...
 [example%collapsible]
 ====
-After cloning the repo, generate the user manual in `doc/manual` using a LaTeX compiler. For example, we used [`latexmk`](https://mg.readthedocs.io/latexmk.html) utitlity to generate the manual pdf in some build location using::
+After cloning the repo, run the following command from the repository root to generate the user manual with `latexmk`. The `-cd` option resolves inputs and figures relative to `docs/manual/src`; the generated PDF is written to `build/manual/main.pdf`.
 [,bash]
 ----
-latexmk -pdf doc/manual/main.tex -outdir=build/
+latexmk -cd -pdf -outdir="$(pwd)/build/manual" docs/manual/src/main.tex
 ----
 ====
+
+== Contributing
+
+See link:docs/CONTRIBUTING.md[CONTRIBUTING.md] for development, validation and contribution guidelines.
 
 == Version History
 

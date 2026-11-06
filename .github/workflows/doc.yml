@@ -36,17 +36,17 @@ jobs:
           echo "$key=$value" >> $GITHUB_ENV
         done < compas-ft-riscv_src/docker/.env
     - name: Prepare .Tex files
-      working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src/doc/src
+      working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src/docs/manual/src
       run: |
         sed -i "s/@VERSION@/${ENV_COMPAS_VERSION}/g" main.tex   
     - name: Compile TeX Installation and User Guides to PDF
-      working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src/doc/src
+      working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src/docs/manual/src
       run: |
         mkdir -p /builddoc/
         pdflatex main.tex -output-directory=/builddoc
         mv /builddoc/main.pdf /builddoc/compas-ft-riscv${ENV_COMPAS_VERSION}-manual.pdf
     - name: Compile TeX Installation and User Guides to HTML
-      working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src/doc/src
+      working-directory: ${{runner.workspace}}/compas-ft-riscv/compas-ft-riscv_src/docs/manual/src
       run: |
         pandoc main.tex -o /builddoc/compas-ft-riscv${ENV_COMPAS_VERSION}-manual.html --from=latex --to=html5 --standalone --mathjax
         mv /builddoc/main.pdf /builddoc/compas-ft-riscv${ENV_COMPAS_VERSION}-manual.pdf
