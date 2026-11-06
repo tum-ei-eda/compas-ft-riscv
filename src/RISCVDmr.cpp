@@ -24,6 +24,8 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/MC/MCContext.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #include "RISCVRasm.h"
 #include "MCTargetDesc/RISCVBaseInfo.h"
@@ -160,6 +162,7 @@ void RISCVDmr::init() {
   TII_ = MF_->getSubtarget().getInstrInfo();
   MRI_ = &MF_->getRegInfo();
   TRI_ = MRI_->getTargetRegisterInfo();
+  isa_config_ = riscv_common::ISAConfig(*MF_);
   config_.eds = riscv_common::ErrorDetectionStrategy::ED3; // TODO: should be
                                                            // exposed to CLI
   for (auto &s : llvm::codegen::getMAttrs()) {
@@ -241,6 +244,7 @@ void RISCVDmr::init() {
   indirect_calls_.clear();
   loads_.clear();
   shadow_loads_.clear();
+  shadow_pcrel_symbols_.clear();
   frame_size_ = 0;
 
 #ifdef DBG
@@ -340,17 +344,134 @@ void RISCVDmr::calc_framesize() {
 llvm::MachineInstr *
 RISCVDmr::genShadowFromPrimary(const llvm::MachineInstr *MI) const {
   auto si{MF_->CloneMachineInstr(MI)};
+  auto symbol = shadow_pcrel_symbols_.find(MI->getPreInstrSymbol());
+  if (symbol != shadow_pcrel_symbols_.end())
+    si->setPreInstrSymbol(*MF_, symbol->second);
   for (auto &o : si->operands()) {
     if (o.isReg()) {
       assert((riscv_common::setmapContains(P2S_, o.getReg())) &&
              "reg not found in P2S_");
       o.setReg(P2S_.at(o.getReg()));
+    } else if (o.isMCSymbol() &&
+               o.getTargetFlags() == llvm::RISCVII::MO_PCREL_LO) {
+      auto shadow = shadow_pcrel_symbols_.find(o.getMCSymbol());
+      if (shadow != shadow_pcrel_symbols_.end()) {
+        auto offset = o.getOffset();
+        o.ChangeToMCSymbol(shadow->second, o.getTargetFlags());
+        o.setOffset(offset);
+      }
     }
   }
   return si;
 }
 
+void RISCVDmr::preparePCRelativeAddresses() {
+  std::map<llvm::MCSymbol *, llvm::MachineInstr *> highs;
+  std::map<llvm::MCSymbol *, std::vector<llvm::MachineInstr *>> lows;
+  for (auto &MBB : *MF_) {
+    for (auto &MI : MBB) {
+      if (MI.getOpcode() == llvm::RISCV::AUIPC && MI.getPreInstrSymbol())
+        highs.emplace(MI.getPreInstrSymbol(), &MI);
+      for (auto &MO : MI.operands()) {
+        if (!MO.isMCSymbol() ||
+            MO.getTargetFlags() != llvm::RISCVII::MO_PCREL_LO)
+          continue;
+        // The low symbol identifies an AUIPC, not a target-address addend.
+        // LLVM folds generated global+offset addends into the high operand.
+        if (MI.getNumOperands() < 3 || &MO != &MI.getOperand(2) ||
+            MO.getOffset() != 0 ||
+            !(MI.getOpcode() == llvm::RISCV::ADDI || MI.mayLoad() ||
+              MI.mayStore()))
+          llvm::report_fatal_error("COMPAS: unsupported PC-relative low operand");
+        lows[MO.getMCSymbol()].push_back(&MI);
+      }
+    }
+  }
+
+  for (const auto &pair : lows) {
+    auto high = highs.find(pair.first);
+    if (high == highs.end())
+      llvm::report_fatal_error("COMPAS: PC-relative low has no AUIPC anchor");
+    auto *HI = high->second;
+    auto flags = HI->getOperand(1).getTargetFlags();
+    // Address, GOT-slot, and TLS-slot formation all use an AUIPC/low pair.
+    // Call relocations have different semantics and are not admitted here.
+    if (flags != llvm::RISCVII::MO_PCREL_HI &&
+        flags != llvm::RISCVII::MO_GOT_HI &&
+        flags != llvm::RISCVII::MO_TLS_GOT_HI &&
+        flags != llvm::RISCVII::MO_TLS_GD_HI)
+      llvm::report_fatal_error("COMPAS: unsupported PC-relative high operand");
+    auto reg = HI->getOperand(0).getReg();
+    if (reg == llvm::RISCV::X0)
+      llvm::report_fatal_error("COMPAS: PC-relative AUIPC defines zero");
+
+    // Normalizing the high register is safe only while its value is used as
+    // the base of this pair's lows. Check all paths up to its next definition;
+    // this also handles a high shared by consumers in different blocks.
+    std::set<llvm::MachineBasicBlock *> visited;
+    std::set<llvm::MachineInstr *> reached_lows;
+    using Position = std::pair<llvm::MachineBasicBlock *,
+                               llvm::MachineBasicBlock::iterator>;
+    std::vector<Position> pending{{HI->getParent(),
+                                   std::next(HI->getIterator())}};
+    while (!pending.empty()) {
+      auto position = pending.back();
+      pending.pop_back();
+      bool clobbered = false;
+      for (auto it = position.second; it != position.first->end(); ++it) {
+        if (it->isDebugInstr())
+          continue;
+        if (it->readsRegister(reg, TRI_)) {
+          bool paired = it->getNumOperands() >= 3 &&
+                        it->getOperand(1).isReg() &&
+                        it->getOperand(1).getReg() == reg &&
+                        it->getOperand(2).isMCSymbol() &&
+                        it->getOperand(2).getTargetFlags() ==
+                            llvm::RISCVII::MO_PCREL_LO &&
+                        it->getOperand(2).getMCSymbol() == pair.first;
+          for (unsigned n = 0; n != it->getNumOperands(); ++n) {
+            const auto &MO = it->getOperand(n);
+            if (MO.isReg() && MO.isUse() && MO.getReg() == reg && n != 1)
+              paired = false;
+          }
+          if (!paired)
+            llvm::report_fatal_error(
+                "COMPAS: unsupported use of PC-relative AUIPC base");
+          reached_lows.insert(&*it);
+        }
+        if (it->modifiesRegister(reg, TRI_)) {
+          clobbered = true;
+          break;
+        }
+      }
+      if (!clobbered) {
+        for (auto *successor : position.first->successors())
+          if (visited.insert(successor).second)
+            pending.emplace_back(successor, successor->begin());
+      }
+    }
+    for (auto *LO : pair.second)
+      if (!reached_lows.count(LO))
+        llvm::report_fatal_error(
+            "COMPAS: unsupported PC-relative base register transfer");
+
+    // Raw AUIPC values differ between primary and shadow instruction PCs.
+    // Materialize the full address before any existing register comparisons,
+    // leaving ordinary zero-offset loads/stores/ADDI consumers. Each shadow
+    // materialization is relocated against its own fresh AUIPC label.
+    llvm::BuildMI(*HI->getParent(), std::next(HI->getIterator()),
+                  HI->getDebugLoc(), TII_->get(llvm::RISCV::ADDI), reg)
+        .addReg(reg)
+        .addSym(pair.first, llvm::RISCVII::MO_PCREL_LO);
+    for (auto *LO : pair.second)
+      LO->getOperand(2).ChangeToImmediate(0);
+    shadow_pcrel_symbols_.emplace(
+        pair.first, MF_->getContext().createTempSymbol("compas_pcrel_hi"));
+  }
+}
+
 void RISCVDmr::duplicateInstructions() {
+  preparePCRelativeAddresses();
   if (config_.is == InstructionSchedule::CGS) {
     for (auto &MBB : *MF_) {
       if (err_bb_ == &MBB) {

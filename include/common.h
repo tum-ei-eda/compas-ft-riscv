@@ -27,7 +27,8 @@ struct ISAConfig {
   unsigned store_opcode{llvm::RISCV::SW};
   unsigned load_opcode{llvm::RISCV::LW};
 
-  ISAConfig();
+  ISAConfig() = default;
+  explicit ISAConfig(const llvm::MachineFunction &MF);
 };
 // Reg Types
 enum class RegType { I, FS, FD, FH };

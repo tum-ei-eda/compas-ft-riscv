@@ -284,6 +284,7 @@ protected:
   std::set<llvm::MachineInstr *> branches_{};
   std::set<llvm::MachineInstr *> loads_{};
   std::set<llvm::MachineInstr *> shadow_loads_{};
+  std::map<llvm::MCSymbol *, llvm::MCSymbol *> shadow_pcrel_symbols_{};
   std::set<llvm::MachineBasicBlock *> exit_bbs_{};
   llvm::MachineBasicBlock *entry_bb_{nullptr};
   bool uses_FPregfile_{false};
@@ -301,6 +302,7 @@ protected:
   void calc_framesize();
   void updateSelectiveCalls();
   void duplicateInstructions();
+  void preparePCRelativeAddresses();
   void protectStores();
   void protectLoads();
   void protectCalls();

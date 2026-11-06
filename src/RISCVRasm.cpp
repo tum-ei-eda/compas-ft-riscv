@@ -24,6 +24,33 @@
 
 #define N_MIN_INTRA_INSTRUCTION_COUNT 3
 
+namespace {
+
+// LLVM describes JAL as a call even when COMPAS uses rd=x0 to transfer to a
+// local block. Treat these transfers like ordinary direct branches in both
+// the inter-block and intra-block signature calculations.
+llvm::MachineBasicBlock *direct_branch_target(const llvm::MachineInstr &MI) {
+  const bool local_jal =
+      MI.getOpcode() == llvm::RISCV::JAL && MI.getNumOperands() >= 2 &&
+      MI.getOperand(0).isReg() &&
+      MI.getOperand(0).getReg() == llvm::RISCV::X0 &&
+      MI.getOperand(1).isMBB();
+  if (!MI.isConditionalBranch() && !MI.isUnconditionalBranch() && !local_jal)
+    return nullptr;
+
+  for (const auto &MO : MI.operands()) {
+    if (MO.isMBB())
+      return MO.getMBB();
+  }
+  return nullptr;
+}
+
+bool is_local_unconditional_jump(const llvm::MachineInstr &MI) {
+  return !MI.isConditionalBranch() && direct_branch_target(MI) != nullptr;
+}
+
+} // namespace
+
 llvm::FunctionPass *llvm::createRISCVRasm() { return new RISCVRasm(); }
 
 llvm::FunctionPass *llvm::createRISCVRacfed() { return new RISCVRacfed(); }
@@ -368,16 +395,9 @@ void RISCVRasm::insertErrorBB() {
 }
 
 bool RISCVRasm::branches_to_errbbs(const llvm::MachineInstr *mi) {
-  assert(mi->isConditionalBranch() &&
-         "passed Machine Instruction is not a conditional branch!");
-  assert(mi->getOperand(2).isMBB() && "passed Machine Instruction's branch "
-                                      "target is not a Machine Basic Block!");
-  auto branch_taken_bb{mi->getOperand(2).getMBB()};
-  // filtering error-handler jumps
-  if (err_bbs_.find(branch_taken_bb) != err_bbs_.end()) {
-    return true;
-  }
-  return false;
+  auto *target = direct_branch_target(*mi);
+  assert(target && "passed instruction is not a direct local branch!");
+  return err_bbs_.find(target) != err_bbs_.end();
 }
 
 void RISCVRasm::generate_signatures() {
@@ -555,348 +575,128 @@ void RISCVRasm::generate_traversal_adjustments() {
                   "non-trivial instructions on "
                << MF_->getName() << "\n";
   for (auto &MBB : *MF_) {
-    // there could be err-BBs from other passes
-    // the convention is if a BB keeps jumping to itself then this is also
-    // an error-BB
-    llvm::outs() << "======================================\n"
-                 << "MBB[" << &MBB << "]: " << MBB << ":\n";
-    if (MBB.succ_size() == 1 && &MBB == *MBB.succ_begin()) {
-      llvm::outs() << "> skipping MBB because assumed error handler BB\n";
+    if (err_bbs_.find(&MBB) != err_bbs_.end())
       continue;
-    }
 
-    // special processing for some individual instrs:
-    // we generate new instrs in the following loop which should not be
-    // considered in future iterations. For this we use following flag
-    bool ignore_this_mi{false};
-    // in case we have a conditional and unconditional branch both in MBB then
-    // we dont need to update signature before the final unconditional branch
-    // we use the following flag to keep track of this
-    bool ignore_jump{false};
-    for (auto &MI : MBB) {
-      if (ignore_this_mi) {
-        ignore_this_mi = false;
+    // Visit only instructions present before traversal instrumentation. In
+    // particular, a merged fallthrough adjustment inserts no instruction to
+    // skip, whereas a call may insert several save/restore instructions.
+    std::vector<llvm::MachineInstr *> instructions;
+    for (auto &MI : MBB)
+      instructions.push_back(&MI);
+
+    // A conditional branch's taken adjustment also executes when the branch
+    // is not taken. Carry it forward so the following transfer (or implicit
+    // fallthrough) adjusts from the signature that actually reaches it.
+    short carried_adjustment = 0;
+    bool falls_through = true;
+    for (auto *MI : instructions) {
+      auto *target = direct_branch_target(*MI);
+      if (MI->isCall() && !is_local_unconditional_jump(*MI)) {
+        // Non-local no-link jumps and tail calls do not return to this block.
+        if ((MI->getNumOperands() && MI->getOperand(0).isReg() &&
+             MI->getOperand(0).getReg() == llvm::RISCV::X0) ||
+            TII_->isTailCall(*MI)) {
+          falls_through = false;
+          break;
+        }
+        save_restore_runtime_signature(MI);
         continue;
       }
 
-      // in case we call another function then RTS would be corrupted
-      // as we use t0 RISCV register for RTS, hence
-      // preserving them across function call using the stack
-      if (MI.isCall()) {
-        llvm::outs() << "> call instruction found MI[" << &MI << "]: " << MI
-                     << "\n";
-        // jumps are also considered as calls so filtering them out
-        if (MI.getOperand(0).isReg() &&
-            MI.getOperand(0).getReg() == llvm::RISCV::X0) {
+      if (MI->isConditionalBranch()) {
+        assert(target && "conditional branch has no local target!");
+        // Error checks leave the normal path's signature untouched. Its
+        // adjustment belongs at the eventual normal transfer, including an
+        // implicit fallthrough after a final error check.
+        if (branches_to_errbbs(MI))
           continue;
-        }
-        // filtering out tail calls
-        if (TII_->isTailCall(MI)) {
-          continue;
-        }
 
-        save_restore_runtime_signature(&MI);
-
-        continue;
-      }
-
-      // RASM processing around the branch terminators
-      if (MI.isConditionalBranch()) {
-
-        llvm::outs() << "> conditional branch instruction found MI[" << &MI
-                     << "]: " << MI << "\n";
-
-        assert(MI.getOperand(2).isMBB());
-        auto SBB{MI.getOperand(2).getMBB()};
-        // filtering error-handler jumps
-        // if (err_bbs_.find(SBB) != err_bbs_.end()) {
-        if (branches_to_errbbs(&MI)) {
-          // this could be the loadback check at the last
-          // if thats the case then have to update RASM update
-
-          llvm::outs() << ">> branches to error BB\n";
-          if (SBB != cf_err_bb_ &&
-              &MBB.back() == &MI) { // todo what is happening here?!
-            llvm::outs() << ">>> branches to error BB in last MI\n";
-            for (auto &op : MI.operands()) {
-              if (op.isReg() && P2S_.find(op.getReg()) != P2S_.end()) {
-                assert(MBB.succ_size() == 1);
-                auto SBB{*std::begin(MBB.successors())};
-
-                auto adjust_value = calculate_adjustment(&MBB, SBB);
-
-                llvm::outs()
-                    << "Running RACFED adjust values of " << MF_->getName()
-                    << ":\n"
-                    << "\n  * X_t: " << mbb_sigs_.at(SBB).first
-                    << "\n  * Y_t: " << mbb_sigs_.at(SBB).second
-                    << "\n  * K_t: " << adjust_value
-                    << "\n  * X_BB: " << mbb_sigs_.at(&MBB).first
-                    << "\n  * sumII_n-2: " << mbb_sum_ii_sigs_.at(&MBB) << "\n";
-
-                llvm::BuildMI(MBB, std::end(MBB), MI.getDebugLoc(),
-                              TII_->get(llvm::RISCV::ADDI))
-                    .addReg(kRTS)
-                    .addReg(kRTS)
-                    .addImm(adjust_value);
-                ignore_this_mi = true;
-
-                break;
-              }
-            }
-            if (!ignore_this_mi) { // this might be a duplicated fall through
-                                   // that needs adjustment
-              llvm::MachineBasicBlock *other_SBB{
-                  nullptr}; // aka not-taken, aka fallthrough?
-              for (auto SBBx : MBB.successors()) {
-                if (SBBx != SBB) {
-                  other_SBB = SBBx;
-                  break;
-                }
-              }
-              auto adjust_value = calculate_adjustment(&MBB, other_SBB);
-
-              llvm::outs() << "Running RACFED adjust values of "
-                           << MF_->getName() << ":\n"
-                           << "\n  * X_ft: " << mbb_sigs_.at(other_SBB).first
-                           << "\n  * Y_ft: " << mbb_sigs_.at(other_SBB).second
-                           << "\n  * K_ft: " << adjust_value
-                           << "\n  * X_BB: " << mbb_sigs_.at(&MBB).first
-                           << "\n  * sumII_n-2: " << mbb_sum_ii_sigs_.at(&MBB)
-                           << "\n";
-
-              if ((MBB.getFallThrough() == other_SBB) &&
-                  (other_SBB->pred_size() == 1)) {
-                llvm::outs()
-                    << "other_SBB[" << other_SBB
-                    << "] pred_size:" << other_SBB->pred_size() << "\n";
-                llvm::outs()
-                    << "MBB.getFallThrough[" << MBB.getFallThrough() << "]\n";
-                // there is only one legal entry into other_SBB which is from
-                // not-taken conditional of the predecessor, aka the
-                // fallthrough. Now we can merge the adjustment update into
-                // the arbitration with subRanPrevVal of other_SBB and save
-                // one instruction
-                auto merge_nottaken_adjust =
-                    adjust_value - mbb_sigs_.at(other_SBB).second;
-                // other_SBB->begin()->getOperand(2).setImm(merge_nottaken_adjust);
-                mbb_signature_arbr_instrs_.at(other_SBB)->getOperand(2).setImm(
-                    merge_nottaken_adjust);
-                //}
-              } else {
-                // there are multiple legal entries into other_SBB, such that
-                // the fallthrough adjustment has to be performed in the scope
-                // of the predecessor basic block
-                llvm::BuildMI(MBB, std::next(MI.getIterator()),
-                              MI.getDebugLoc(), TII_->get(llvm::RISCV::ADDI))
-                    .addReg(kRTS)
-                    .addReg(kRTS)
-                    .addImm(adjust_value);
-              }
-              break;
-            }
-          }
-          continue;
-        }
-
-        // we do not have a II update for the branch instruction and its
-        // predecessor instruction yet we encode it into the control flow
-        // adjustment update of RASM like so taken adjust_value: K_t= (X_t
-        // +Y_t)- (X_BB + sum{i=1->N-2}{µ_i}) , where X_t: compile time
-        // signature of branch taken successor BB Y_t: subRanPrevVal
-        // substraction check value of branch taken successor BB X_BB: compile
-        // time signature of current BB N: Number of original instructions
-        // (including branch instruction) in BB µ_i: random signature update
-        // value of each original instruction
-        llvm::outs() << "taken bb[" << SBB << "]" << *SBB << "\n";
-
-        auto taken_adjust_value = calculate_adjustment(&MBB, SBB);
-
-        llvm::outs() << "Running RACFED adjust values of " << MF_->getName()
-                     << ":\n"
-                     << "\n  * X_t: " << mbb_sigs_.at(SBB).first
-                     << "\n  * Y_t: " << mbb_sigs_.at(SBB).second
-                     << "\n  * K_t: " << taken_adjust_value
-                     << "\n  * X_BB: " << mbb_sigs_.at(&MBB).first
-                     << "\n  * sumII_n-2: " << mbb_sum_ii_sigs_.at(&MBB)
-                     << "\n";
-
-        llvm::BuildMI(MBB, MI.getIterator(), MI.getDebugLoc(),
+        const auto target_adjustment = calculate_adjustment(&MBB, target);
+        const short adjustment = target_adjustment - carried_adjustment;
+        assert_imm(adjustment);
+        llvm::BuildMI(MBB, MI->getIterator(), MI->getDebugLoc(),
                       TII_->get(llvm::RISCV::ADDI))
             .addReg(kRTS)
             .addReg(kRTS)
-            .addImm(taken_adjust_value);
-
-        llvm::MachineBasicBlock *other_SBB{
-            nullptr}; // aka not-taken, aka fallthrough?
-        for (auto SBBx : MBB.successors()) {
-          if (SBBx != SBB) {
-            other_SBB = SBBx;
-            break;
-          }
-        }
-
-        if (other_SBB != nullptr) {
-          // we do not have a II update for the branch instruction and its
-          // predecessor instruction yet we encode it into the control flow
-          // adjustment update of RASM like so: because of RISC-V being
-          // non-predicated we have to add the taken adjustment value into
-          // account since the runtime signature was updated with it before
-          // the branch instruction was executed not taken adjust_value:
-          // * K_nt = (X_nt +Y_nt) - K_t - (X_BB + sum{i=1->N-2}{µ_i}) , where
-          // * X_nt: compile time signature of branch not taken successor BB,
-          // * Y_nt: subRanPrevVal substraction check value of branch not
-          // taken successor BB,
-          // * K_t: taken adjustment value,
-          // * X_BB: compile time signature of current BB,
-          // * N: Number of original instructions (including branch
-          // instruction) in BB,
-          // * µ_i: random signature update value of each original instruction
-          llvm::outs() << "not taken bb[" << other_SBB << "]" << *other_SBB
-                       << "\n";
-          auto nottaken_adjust_value =
-              calculate_adjustment(&MBB, other_SBB) - taken_adjust_value;
-
-          llvm::outs() << "Running RACFED adjust values of " << MF_->getName()
-                       << ":\n"
-                       << "\n  * X_t: " << mbb_sigs_.at(SBB).first
-                       << "\n  * Y_t: " << mbb_sigs_.at(SBB).second
-                       << "\n  * K_t: " << taken_adjust_value
-                       << "\n  * K_nt: " << nottaken_adjust_value
-                       << "\n  * X_nt: " << mbb_sigs_.at(other_SBB).first
-                       << "\n  * Y_nt: " << mbb_sigs_.at(other_SBB).second
-                       << "\n  * X_BB: " << mbb_sigs_.at(&MBB).first
-                       << "\n  * sumII_n-2: " << mbb_sum_ii_sigs_.at(&MBB)
-                       << "\n";
-
-          if ((MBB.getFallThrough() == other_SBB) &&
-              (other_SBB->pred_size() == 1)) {
-            llvm::outs() << "other_SBB[" << other_SBB
-                         << "] pred_size:" << other_SBB->pred_size() << "\n";
-            llvm::outs() << "MBB.getFallThrough[" << MBB.getFallThrough()
-                         << "]\n";
-            // there is only one legal entry into other_SBB which is from
-            // not-taken conditional of the predecessor, aka the fallthrough.
-            // Now we can merge the adjustment update into the arbitration
-            // with subRanPrevVal of other_SBB and save  one instruction
-            auto merge_nottaken_adjust =
-                nottaken_adjust_value - mbb_sigs_.at(other_SBB).second;
-            // other_SBB->begin()->getOperand(2).setImm(merge_nottaken_adjust);
-            mbb_signature_arbr_instrs_.at(other_SBB)->getOperand(2).setImm(
-                merge_nottaken_adjust);
-            //}
-          } else {
-            // there are multiple legal entries into other_SBB, such that the
-            // fallthrough adjustment has to be performed in the scope of the
-            // predecessor basic block
-            llvm::BuildMI(MBB, std::next(MI.getIterator()), MI.getDebugLoc(),
-                          TII_->get(llvm::RISCV::ADDI))
-                .addReg(kRTS)
-                .addReg(kRTS)
-                .addImm(nottaken_adjust_value);
-          }
-        }
-
-        ignore_this_mi = true;
-        if (MBB.back().isUnconditionalBranch()) {
-          ignore_jump = true;
-        } else {
-          if (MBB.back().isCall() && MBB.back().getOperand(1).isMBB() &&
-              err_bbs_.find(MBB.back().getOperand(1).getMBB()) !=
-                  err_bbs_.end()) {
-            ignore_jump = true;
-          }
-        }
+            .addImm(adjustment);
+        carried_adjustment = target_adjustment;
         continue;
       }
 
-      if (MI.isUnconditionalBranch()) {
-        llvm::outs() << "> unconditional branch MI[" << &MI << "]: " << MI
-                     << "\n";
-        if (!ignore_jump) {
-          assert(MI.getOperand(0).isMBB());
-          auto SBB{MI.getOperand(0).getMBB()};
-
-          auto adjust_value = calculate_adjustment(&MBB, SBB);
-
-          llvm::outs() << "Running RACFED adjust values of " << MF_->getName()
-                       << ":\n"
-                       << "\n  * X_u: " << mbb_sigs_.at(SBB).first
-                       << "\n  * Y_u: " << mbb_sigs_.at(SBB).second
-                       << "\n  * K_u: " << adjust_value
-                       << "\n  * X_BB: " << mbb_sigs_.at(&MBB).first
-                       << "\n  * sumII_n-2: " << mbb_sum_ii_sigs_.at(&MBB)
-                       << "\n";
-
-          llvm::BuildMI(MBB, MI.getIterator(), MI.getDebugLoc(),
+      if (is_local_unconditional_jump(*MI)) {
+        // A duplicate jump to an error block has no signature, and any
+        // instructions following an unconditional transfer are unreachable
+        // on the fault-free path.
+        if (!branches_to_errbbs(MI)) {
+          const short adjustment =
+              calculate_adjustment(&MBB, target) - carried_adjustment;
+          assert_imm(adjustment);
+          llvm::BuildMI(MBB, MI->getIterator(), MI->getDebugLoc(),
                         TII_->get(llvm::RISCV::ADDI))
               .addReg(kRTS)
               .addReg(kRTS)
-              .addImm(adjust_value);
+              .addImm(adjustment);
         }
-
-        continue;
+        falls_through = false;
+        break;
       }
 
-      // RASM processing before the return instruction
-      if (MI.isReturn()) {
-
-        llvm::outs() << "> return instruction found MI[" << &MI << "]: " << MI
-                     << "\n";
+      if (MI->isReturn()) {
         short adjust_value = 0, rand = 0;
-
+        const short current_signature = mbb_sigs_.at(&MBB).first +
+                                        mbb_sum_ii_sigs_.at(&MBB) +
+                                        carried_adjustment;
         do {
           std::uniform_int_distribution<short> unif_dist{
-              -1024 - (mbb_sigs_.at(&MBB).first + mbb_sum_ii_sigs_.at(&MBB)),
-              1023 - (mbb_sigs_.at(&MBB).first + mbb_sum_ii_sigs_.at(&MBB))};
+              -1024 - current_signature, 1023 - current_signature};
           rand = unif_dist(gen_);
-          adjust_value =
-              rand - (mbb_sigs_.at(&MBB).first + mbb_sum_ii_sigs_.at(&MBB));
+          adjust_value = rand - current_signature;
         } while (adjust_value < -2048 || adjust_value > 2047);
-
-        llvm::outs() << "Running RACFED adjust values of " << MF_->getName()
-                     << ":\n"
-                     << "\n  * rand: " << rand << "\n  * adj: " << adjust_value
-                     << "\n";
-
         assert_imm(adjust_value);
 
-        llvm::BuildMI(MBB, MI.getIterator(), MI.getDebugLoc(),
+        llvm::BuildMI(MBB, MI->getIterator(), MI->getDebugLoc(),
                       TII_->get(llvm::RISCV::ADDI))
             .addReg(kRTS)
             .addReg(kRTS)
             .addImm(adjust_value);
-        llvm::BuildMI(MBB, MI.getIterator(), MI.getDebugLoc(),
+        llvm::BuildMI(MBB, MI->getIterator(), MI->getDebugLoc(),
                       TII_->get(llvm::RISCV::ADDI))
             .addReg(kC)
             .addReg(riscv_common::k0)
             .addImm(rand);
-        llvm::BuildMI(MBB, MI.getIterator(), MI.getDebugLoc(),
+        llvm::BuildMI(MBB, MI->getIterator(), MI->getDebugLoc(),
                       TII_->get(llvm::RISCV::BNE))
             .addReg(kRTS)
             .addReg(kC)
             .addMBB(cf_err_bb_);
+        falls_through = false;
         break;
       }
+    }
 
-      // in case this MBB has no branch/ret terminator then we have to do RASM
-      // update at end of MBB aka replace immediate value of last incremental
-      // instruction update with arbitration subRanPrevVal
-      if (&MI == &MBB.back() && MBB.succ_size()) {
-        llvm::outs() << "> non return/conditional branch termination found MI["
-                     << &MI << "]: " << MI << "\n";
-        assert(MBB.succ_size() == 1);
-        auto SBB{*std::begin(MBB.successors())};
+    if (!falls_through)
+      continue;
+    auto *target = MBB.getFallThrough();
+    if (!target || err_bbs_.find(target) != err_bbs_.end())
+      continue;
 
-        auto adjust_value = calculate_adjustment(&MBB, SBB);
-
-        llvm::BuildMI(MBB, std::end(MBB), MI.getDebugLoc(),
-                      TII_->get(llvm::RISCV::ADDI))
-            .addReg(kRTS)
-            .addReg(kRTS)
-            .addImm(adjust_value);
-        break;
-      }
+    const short adjustment =
+        calculate_adjustment(&MBB, target) - carried_adjustment;
+    assert_imm(adjustment);
+    // Preserve the existing one-instruction optimization when the layout
+    // successor can only be entered by this fallthrough edge.
+    if (target->pred_size() == 1) {
+      const short merged_adjustment = adjustment - mbb_sigs_.at(target).second;
+      assert_imm(merged_adjustment);
+      mbb_signature_arbr_instrs_.at(target)->getOperand(2).setImm(
+          merged_adjustment);
+    } else {
+      llvm::BuildMI(MBB, MBB.end(), MBB.back().getDebugLoc(),
+                    TII_->get(llvm::RISCV::ADDI))
+          .addReg(kRTS)
+          .addReg(kRTS)
+          .addImm(adjustment);
     }
   }
 }
@@ -968,16 +768,9 @@ void RISCVRacfed::generate_intrablock_signature_updates() {
       if ((MI.getFlag(llvm::MachineInstr::FrameSetup) &&
            MI.isCFIInstruction()) || // ignore virtual frame calc instructions
           (MI.isBranch() && !MI.isConditionalBranch()) ||
+          is_local_unconditional_jump(MI) ||
           (MI.isConditionalBranch() &&
            !branches_to_errbbs(&MI)) || // ignore pre-branch updates
-          (MI.isUnconditionalBranch() &&
-           branches_to_errbbs(
-               &MI)) || // ignore unconditional branch duplicates to error BB
-                        // (pre duplicate will not have an instr increment
-                        // after execution)
-          (MI.isCall() && MI.getOperand(1).isMBB() &&
-           err_bbs_.find(MI.getOperand(1).getMBB()) !=
-               err_bbs_.end()) || // uncond. branch could also be a call
           //((&MI == &(MBB.instr_back()) ) && MI.isConditionalBranch() &&
           // branches_to_errbbs(
           //     &MI)) || // ignore DMR not taken/fallthrough duplicate
