@@ -71,6 +71,8 @@ protected:
   virtual void generate_intrablock_signature_updates();
   void generate_signature_checks();
   void generate_traversal_adjustments();
+  // Split instrumentation checks and restore machine CFG/liveness metadata.
+  void normalize_control_flow();
 
   // map containing the signature check instruction for each MBB
   std::map<const llvm::MachineBasicBlock *, llvm::MachineInstr *>

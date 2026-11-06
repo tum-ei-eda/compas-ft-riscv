@@ -21,6 +21,9 @@
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
+
+#include <algorithm>
 
 #define N_MIN_INTRA_INSTRUCTION_COUNT 3
 
@@ -79,6 +82,9 @@ bool RISCVRasm::runOnMachineFunction(llvm::MachineFunction &MF) {
 
 void RISCVRasm::init() {
   mbb_sigs_.clear();
+  mbb_sum_ii_sigs_.clear();
+  mbb_signature_arbr_instrs_.clear();
+  mbb_signature_check_instrs_.clear();
   cf_err_bb_ = nullptr;
   err_bbs_.clear();
   config_.eds = riscv_common::ErrorDetectionStrategy::ED3; // TODO: should be
@@ -116,6 +122,7 @@ void RISCVRasm::harden() {
   // Step 4: Calculate traversal adjustment values for non-trivial
   // instructions
   generate_traversal_adjustments();
+  normalize_control_flow();
 
   /*
     for (auto &MBB : *MF_) {
@@ -701,6 +708,110 @@ void RISCVRasm::generate_traversal_adjustments() {
   }
 }
 
+void RISCVRasm::normalize_control_flow() {
+  // Signature calculations use the original application blocks. Only split
+  // them after all updates have been emitted: doing this earlier would assign
+  // extra signatures and change the protection scheme. A split adds a label,
+  // without changing the order of the emitted instructions.
+  for (auto &MBB : *MF_) {
+    for (auto &MI : MBB) {
+      if (auto *target = direct_branch_target(MI)) {
+        if (!MBB.isSuccessor(target))
+          MBB.addSuccessor(target);
+      }
+    }
+  }
+
+  for (auto &MBB : *MF_) {
+    for (auto &MI : MBB) {
+      if (!MI.isConditionalBranch() || std::next(MI.getIterator()) == MBB.end())
+        continue;
+
+      auto *target = direct_branch_target(MI);
+      assert(target && "conditional branch has no local target!");
+      auto *continuation = MBB.splitAt(MI, false);
+
+      // splitAt transfers the old successor edges and their PHI operands to
+      // the continuation. The taken edge still belongs to the check block;
+      // retain it on the continuation only if the remaining instructions can
+      // reach it too (for example, when both branch outcomes share a target).
+      bool continuation_reaches_target = false;
+      bool continuation_falls_through = true;
+      for (const auto &tail : *continuation) {
+        if (direct_branch_target(tail) == target)
+          continuation_reaches_target = true;
+        if (is_local_unconditional_jump(tail) || tail.isReturn() ||
+            tail.isIndirectBranch() || TII_->isTailCall(tail)) {
+          continuation_falls_through = false;
+          break;
+        }
+      }
+      if (continuation_falls_through &&
+          continuation->isLayoutSuccessor(target))
+        continuation_reaches_target = true;
+
+      for (auto &PHI : target->phis()) {
+        for (unsigned i = 1, e = PHI.getNumOperands(); i != e; i += 2) {
+          if (PHI.getOperand(i + 1).getMBB() != continuation)
+            continue;
+          if (continuation_reaches_target) {
+            // Preserve the value on both incoming edges when splitting a
+            // block whose continuation still reaches the taken successor.
+            const auto incoming = PHI.getOperand(i);
+            PHI.addOperand(*MF_, incoming);
+            PHI.addOperand(*MF_, llvm::MachineOperand::CreateMBB(&MBB));
+          } else {
+            PHI.getOperand(i + 1).setMBB(&MBB);
+          }
+          break;
+        }
+      }
+      if (!continuation_reaches_target)
+        continuation->removeSuccessor(target);
+      MBB.addSuccessor(target);
+      break;
+    }
+  }
+
+  if (!MF_->getRegInfo().tracksLiveness())
+    return;
+
+  // Recompute from an empty solution so stale live-ins cannot persist around
+  // loops. Keep the function's ABI inputs on the entry block, including inputs
+  // which become unused after instrumentation. Reserved signature registers
+  // are handled by the target's register information, not live-in lists.
+  std::vector<llvm::MachineBasicBlock::RegisterMaskPair> entry_liveins(
+      MF_->front().livein_begin(), MF_->front().livein_end());
+  for (auto &MBB : *MF_)
+    MBB.clearLiveIns();
+  for (const auto &livein : entry_liveins)
+    MF_->front().addLiveIn(livein);
+
+  bool changed;
+  do {
+    changed = false;
+    for (auto I = MF_->rbegin(), E = MF_->rend(); I != E; ++I) {
+      auto &MBB = *I;
+      std::vector<llvm::MachineBasicBlock::RegisterMaskPair> previous(
+          MBB.livein_begin(), MBB.livein_end());
+      llvm::recomputeLiveIns(MBB);
+      if (&MBB == &MF_->front()) {
+        for (const auto &livein : entry_liveins)
+          MBB.addLiveIn(livein);
+      }
+      MBB.sortUniqueLiveIns();
+      changed |= !std::equal(
+          previous.begin(), previous.end(), MBB.livein_begin(),
+          MBB.livein_end(), [](const auto &lhs, const auto &rhs) {
+            return lhs.PhysReg == rhs.PhysReg && lhs.LaneMask == rhs.LaneMask;
+          });
+    }
+  } while (changed);
+
+  for (auto &MBB : *MF_)
+    llvm::recomputeLivenessFlags(MBB);
+}
+
 // ------------------------------------------- RACFED --------------------------
 
 bool RISCVRacfed::runOnMachineFunction(llvm::MachineFunction &MF) {
@@ -728,9 +839,6 @@ void RISCVRacfed::init() {
 
   RISCVRasm::init();
 
-  mbb_sum_ii_sigs_.clear();
-  mbb_signature_arbr_instrs_.clear();
-  mbb_signature_check_instrs_.clear();
   mi_random_value_.clear();
 }
 
@@ -862,4 +970,5 @@ void RISCVRacfed::harden() {
   // Step 4: Calculate traversal adjustment values for non-trivial
   // instructions
   generate_traversal_adjustments();
+  normalize_control_flow();
 }
