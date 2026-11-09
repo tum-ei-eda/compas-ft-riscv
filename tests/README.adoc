@@ -1,0 +1,149 @@
+= Functional regression tests
+
+These tests check that programs retain their behavior when compiled through the COMPAS flow. Each case has an unprotected reference and an independently specified expected result. Protected builds must match both. The suite does not measure fault-detection capability or coverage.
+
+== Layout
+
+* link:regression/[regression] holds focused reproducers and imported benchmarks or test suites used for functional regression checks.
+* link:apps/[apps] holds selected application tests, starting with link:apps/crc/[CRC].
+* link:run.py[run.py] discovers `suite.json` files below both directories and runs the shared build, execution and comparison flow.
+* link:regression/run.py[regression/run.py] and link:apps/run.py[apps/run.py] select their respective groups and accept the same options.
+
+The link:regression/stack_args/[stack argument cases] preserve the current failures associated with https://github.com/tum-ei-eda/compas-ft-riscv/issues/14[issue #14]. `mixed_pointer` is a functional-equivalence case, including the merge between a global pointer and a local stack pointer.
+
+The link:regression/control_flow/README.adoc[control-flow suite] checks branch outcomes, joins, early returns, short-circuit side effects and loop boundaries against constant result tables. It runs on RV32 and RV64 with coarse-grained scheduling, all six DMR selections and all four CFP selections. Its manifest also enables LLVM machine-instruction verification.
+
+The link:regression/call_abi/README.adoc[call ABI suite] checks selective hardening across calls, nested and indirect calls, ten integer arguments, wide live values and stack alignment. It runs on RV32 and RV64 with coarse-grained scheduling, all six DMR selections and all four CFP selections. Its manifest also enables LLVM machine-instruction verification.
+
+The link:regression/pc_relative/README.adoc[PC-relative suite] checks globals, array offsets and addresses retained across calls and branches with both `medlow` and `medany` code models. It disables relaxation to retain address-materialization instructions in the executable and enables the hardening matrix and separate machine verifier.
+
+The link:regression/multi_function/README.adoc[multiple-function suite] compiles differently shaped protected functions and unprotected helpers together in one module. It checks repeated and reordered calls with selective hardening and enables the separate machine verifier.
+
+The link:regression/hard_float/README.adoc[hard-float suite] checks exact FP results and live values with RV32/RV64 F/D ISA and ABI profiles, including XLEN/FLEN mismatches. It enables the hardening matrix and separate machine verifier.
+
+See the link:TODO.md[deferred hardening TODO] for failing compiler configurations, observed results and reproduction commands to investigate later.
+
+[[running-tests]]
+== Running tests
+
+List cases without installing a compiler or simulator:
+
+[,bash]
+----
+python3 tests/run.py --list
+python3 tests/regression/run.py --list
+python3 tests/apps/run.py --list
+----
+
+A normal run requires Python 3, COMPAS-enabled `clang` and `llc`, and a RISC-V GNU toolchain. Freestanding regressions require QEMU user-mode executables for the selected architectures. CMake applications additionally require CMake, Spike and a proxy kernel (`pk`) matching the application ISA and ABI.
+
+For example, configure the tools and run from the repository root:
+
+[,bash]
+----
+export COMPAS_LLVM_ROOT="$PWD/build/llvm-build"
+export RISCV_TOOLCHAIN_PREFIX=/path/to/riscv-toolchain
+export RISCV_TOOLCHAIN_BASENAME=riscv-none-elf
+export RISCV_QEMU='/path/to/qemu-riscv{bits}'
+export RISCV_SPIKE="$RISCV_TOOLCHAIN_PREFIX/bin/spike"
+export RISCV_PK="$RISCV_TOOLCHAIN_PREFIX/$RISCV_TOOLCHAIN_BASENAME/bin/pk"
+
+python3 tests/run.py
+----
+
+`\{bits}` in the QEMU path expands to `32` or `64`. Use separate QEMU installations or limit the architecture when only one is available. Simulator execution is required for a normal run; a missing tool is a failure, including for a case with a known runtime failure.
+
+The default selection uses each manifest's architectures, DMR modes and schedules. Control-flow protection defaults to `none` unless the manifest supplies `cfp_modes`. An unprotected reference is built automatically. Narrow a run or choose a combined protection configuration with:
+
+[,bash]
+----
+python3 tests/regression/run.py \
+  --case 'stack_args/branch' --arch rv32 --mode EDDI --schedule cgs
+python3 tests/apps/run.py \
+  --case 'crc/*' --mode NZDC+NEMESEC --cfp RASM \
+  --functions 'crcSlow;crcFast' --cfp-functions 'crcSlow;crcFast'
+python3 tests/regression/run.py --case 'control_flow/*'
+python3 tests/regression/run.py --case 'call_abi/*'
+python3 tests/regression/run.py --case 'pc_relative/*' --code-model medany
+python3 tests/regression/run.py --case 'multi_function/*'
+python3 tests/regression/run.py --case 'hard_float/*'
+----
+
+`--case` accepts a glob matching `suite/case`; quote it to prevent shell expansion. Repeat `--case`, `--arch`, `--mode`, `--schedule` or `--cfp` to select multiple values. Available DMR modes are `none`, `EDDI`, `SWIFT`, `NZDC`, `NZDC+NEMESIS` and `NZDC+NEMESEC`; schedules are coarse-grained (`cgs`) and fine-grained (`fgs`); control-flow selections are `none`, `CFCSS`, `RASM` and `RACFED`. Use `--mode none --cfp RASM`, for example, to check control-flow protection alone. `--functions` and `--cfp-functions` override manifest function selections with comma- or semicolon-separated lists. An explicit empty string passes an empty selection, allowing the selective-hardening combinations used by CI to be reproduced.
+
+Tool paths can also be supplied directly:
+
+[cols="1,1",options="header"]
+|===
+| Option | Environment variable
+| `--llvm-root` | `COMPAS_LLVM_ROOT`
+| `--clang` | `COMPAS_CLANG`
+| `--llc` | `COMPAS_LLC`
+| `--cc` | `RISCV_CC`
+| `--qemu` | `RISCV_QEMU`
+| `--spike` | `RISCV_SPIKE`
+| `--pk` | `RISCV_PK`
+| `--riscv-prefix` | `RISCV_TOOLCHAIN_PREFIX`
+| `--riscv-basename` | `RISCV_TOOLCHAIN_BASENAME`
+|===
+
+Use `--help` for the full interface. Build artifacts and per-configuration logs go under `build/tests` by default; `--build-dir` changes this root. The runner writes a machine-readable `results.json` there. The default execution timeout is five seconds and the timeout per build command is 180 seconds; adjust them with `--timeout` and `--build-timeout` for larger applications. `--jobs` controls CMake build parallelism and defaults to two.
+
+== Freestanding target profiles
+
+Freestanding cases can declare target settings at suite or case level:
+
+* `isa` selects I/M/A/F/D/C/G extensions, for example `rv32imafd` or `rv64imaf`. Its default is `rv\{bits}im`, where the selected architecture supplies `32` or `64`.
+* `abi` defaults to `ilp32` on RV32 and `lp64` on RV64. Hard-float cases explicitly choose `ilp32f`, `ilp32d`, `lp64f` or `lp64d`, with matching F/D extensions in the ISA.
+* `code_models` lists `medlow`, `medany` or both; the default is `["medlow"]`. Each model is a separate execution profile with its own unprotected reference.
+* `relax` defaults to `true`. Setting it to `false` disables relaxation in code generation and linking to preserve the address sequences being exercised.
+
+`--isa` and `--abi` override the manifest for a selected freestanding run. Repeating `--code-model` selects one or both models. The runner validates architecture/ISA/ABI compatibility and passes matching settings to the frontend, backend and GNU linker. Build directories and JSON results identify each ISA, ABI, code model and relaxation selection. Known-failure signatures also match those settings, so changing a profile cannot reuse an allowance for a different one.
+
+For example, the link:regression/hard_float/suite.json[hard-float manifest] restricts each case to its declared architecture and uses explicit FP ISA/ABI pairs. Listing cases shows these profiles without requiring any tools. CMake applications retain their project's toolchain configuration; these freestanding overrides do not apply to that adapter.
+
+== Results and known failures
+
+Freestanding cases compare the target exit value recorded in QEMU's syscall trace and program stdout. This preserves target error values such as `-512`, which can otherwise wrap to host status zero. CMake applications compare the Spike process status and complete stdout against their reference and independent oracle. CRC requires all four output lines, including both CRC results and the final completion line, so a truncated execution cannot pass just by returning host status zero.
+
+Known failures are declared explicitly in a manifest with the affected case, architecture, mode and schedule, an issue link, a reason and the observed target exit value. Only that matching runtime failure is `XFAIL`. A missing tool, a build failure, an invalid reference result or a different runtime failure still fails the run. When a known failure starts passing it is `XPASS`, which fails by default so that stale expectations are reviewed. `--allow-xpass` permits exploratory validation while updating the manifest.
+
+The stack argument manifest records failures in the current implementation. These expectations preserve visible evidence of the behavior; they do not claim fault-detection coverage. Remove or update an expectation when its underlying issue is fixed and the relevant configuration is verified.
+
+Freestanding manifests can set `verify_machineinstrs: true` to compile each IR source a second time with `-verify-machineinstrs`. This extra compilation writes separate `.verify` logs and assembly; the normal build still runs so that a verifier defect does not hide functional evidence. A verifier failure makes the configuration an `ERROR` and the command exits nonzero, including when the runtime result matches a known failure. The JSON report retains `outcome`, `functional_status` and `verification` separately, and includes both overall `counts` and `functional_counts`.
+
+`--verify-machineinstrs` enables verification for a selected freestanding run; `--no-verify-machineinstrs` disables the extra compilation for a functional-only investigation. The independent oracle and reference comparisons still apply. Verifier failures and newly observed runtime failures belong in the TODO while compiler fixes are deferred.
+
+== Adding cases and suites
+
+Create a directory below `regression/` or `apps/` with a `suite.json` file, source files and any expected-output files. Manifests are discovered recursively. Add cases to an existing manifest when they share a build adapter and configuration. A new case does not need a Python runner.
+
+Use `adapter: "freestanding"` for small C reproducers without a C library. For example:
+
+[,json]
+----
+{
+  "name": "arithmetic",
+  "adapter": "freestanding",
+  "architectures": ["rv32", "rv64"],
+  "modes": ["EDDI", "SWIFT"],
+  "schedules": ["cgs"],
+  "cases": [
+    {
+      "name": "sum",
+      "sources": ["sum.c"],
+      "defines": [],
+      "functions": ["sum"],
+      "expected": {"exit": 42, "stdout": ""}
+    }
+  ]
+}
+----
+
+The shared adapter supplies startup code and the build/run flow. Source paths and `stdout_file` paths are relative to the manifest directory. Establish the expected exit and output independently; comparing two builds with the same wrong result is insufficient.
+
+Suite-level `sources`, `functions`, `defines`, `expected` and target-profile fields can be overridden by individual cases. Multiple source files are compiled separately and linked together, as in the hard-float call-boundary tests. Use one source file for cases that must share a compiler pass instance, as in the multiple-function suite. Use `modes`, `cfp_modes` and `schedules` to declare the hardening matrix, and `verify_machineinstrs: true` to request the additional compiler check. The freestanding adapter currently uses `-O1` and disables sibling-call optimization; tail-call coverage needs further adapter configuration.
+
+Use `adapter: "cmake"` for an application with a CMake project. The link:apps/crc/suite.json[CRC manifest] is the initial example: it declares the executable, ISA, protected functions and a case whose expected stdout comes from link:apps/crc/expected.stdout[expected.stdout]. Its CMake project uses the repository's `compas_source()` helper and accepts `DMR_MOD`, `DMR_FUNCTIONS`, `CFP_MOD`, `CFP_FUNCTIONS` and `COMPAS_FINE_GRAINED` from the runner.
+
+Imported benchmarks and test suites belong in this structure too. Select deterministic inputs, retain their license and attribution, and record the expected observable result. Keep generated IR, assembly, binaries and logs in the build directory. Add fault injection or code-generation checks as separate future capabilities when needed; the shared suite currently checks functional equivalence.

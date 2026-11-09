@@ -1,0 +1,53 @@
+{
+  "name": "call_abi",
+  "adapter": "freestanding",
+  "architectures": ["rv32", "rv64"],
+  "modes": ["none", "EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
+  "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+  "schedules": ["cgs"],
+  "verify_machineinstrs": true,
+  "sources": ["call_abi.c"],
+  "expected": {"exit": 42, "stdout": ""},
+  "cases": [
+    {
+      "name": "caller_only",
+      "defines": ["TEST_CASE=1"],
+      "functions": ["abi_caller"]
+    },
+    {
+      "name": "callee_only",
+      "defines": ["TEST_CASE=1"],
+      "functions": ["abi_leaf"]
+    },
+    {
+      "name": "caller_and_callee",
+      "defines": ["TEST_CASE=1"],
+      "functions": ["abi_caller", "abi_leaf"]
+    },
+    {
+      "name": "nested_live_values",
+      "defines": ["TEST_CASE=2"],
+      "functions": ["abi_nested_top", "abi_nested_middle", "abi_leaf"]
+    },
+    {
+      "name": "indirect_calls",
+      "defines": ["TEST_CASE=3"],
+      "functions": ["abi_indirect", "abi_leaf", "abi_indirect_other"]
+    },
+    {
+      "name": "ten_integer_arguments",
+      "defines": ["TEST_CASE=4"],
+      "functions": ["abi_stack_arguments", "abi_ten_args"]
+    },
+    {
+      "name": "wide_live_values",
+      "defines": ["TEST_CASE=5"],
+      "functions": ["abi_wide_caller", "abi_wide_leaf"]
+    },
+    {
+      "name": "stack_alignment",
+      "defines": ["TEST_CASE=6"],
+      "functions": ["abi_stack_caller", "abi_stack_callee"]
+    }
+  ]
+}

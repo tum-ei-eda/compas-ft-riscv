@@ -12,7 +12,7 @@ The transformation passes and shared helpers live in [src](../src/), with corres
 - `RISCVCfcss` and `RISCVRasm` implement control-flow protection, including RASM and RACFED.
 - `common` provides shared register, instruction and calling-convention helpers.
 
-LLVM backend integration belongs in the version-specific [patches](../patches/). The [cmake](../cmake/) directory provides consumer-project integration and RISC-V toolchain files; [tests/crc](../tests/crc/) contains the CRC example used by CI. Configuration parsing utilities live in [config_parser](../config_parser/). Register new pass sources in the root [CMakeLists.txt](../CMakeLists.txt).
+LLVM backend integration belongs in the version-specific [patches](../patches/). The [cmake](../cmake/) directory provides consumer-project integration and RISC-V toolchain files. [tests/regression](../tests/regression/) holds functional regression cases and benchmark suites; [tests/apps](../tests/apps/) holds selected application tests, including [CRC](../tests/apps/crc/). Configuration parsing utilities live in [config_parser](../config_parser/). Register new pass sources in the root [CMakeLists.txt](../CMakeLists.txt).
 
 Use the C++ standard configured for the LLVM build, currently C++17 in [docker/.env](../docker/.env), and follow the LLVM style in [.clang-format](../.clang-format). Format changed code consistently with its surroundings. Keep assumptions about LLVM machine instructions, register aliases, relocations, CFG edges and pass ordering explicit. When adding an instruction or ISA extension, account for both primary and shadow operands, register widths, stack alignment and interactions with other enabled protection passes.
 
@@ -46,13 +46,30 @@ cmake --build "${LLVM_BUILD}" --parallel 2 --target clang llc llvm-objdump
 
 Clone and apply the patch once per LLVM source tree. After editing COMPAS sources, rerun the build command. Choose parallelism to fit available memory, and use separate source and build directories for different LLVM releases. Check that `llc --help-hidden` lists the expected COMPAS options; an upstream LLVM binary without the integration patch cannot run these passes.
 
-For runtime validation, use a RISC-V GNU toolchain for assembly, linking and C library headers, plus Spike and a matching proxy kernel (`pk`). The following example mirrors the CRC configuration in CI. Replace the installation prefix and executable basename with those of your toolchain. `COMPAS_LLVM_ROOT` may point to the LLVM build directory above or to an installed COMPAS-enabled LLVM prefix.
+Use the [shared test runner](../tests/README.adoc) to build unprotected references, run programs through the COMPAS flow and compare their functional behavior against independent expected results. `python3 tests/run.py --list` lists available cases without requiring tools. The runners under `tests/regression` and `tests/apps` select each group; use manifests to add cases without writing a separate build/run script. The current suite checks fault-free equivalence, not fault-detection capability or coverage.
+
+Runtime validation requires a RISC-V GNU toolchain for assembly and linking, QEMU user-mode executables for freestanding regressions, and Spike with a matching proxy kernel (`pk`) for CMake applications. Application builds also need the toolchain's C library headers. For example, run the CRC configuration through the shared harness:
+
+```sh
+python3 tests/apps/run.py --case 'crc/*' \
+  --llvm-root "${LLVM_BUILD}" \
+  --riscv-prefix /path/to/riscv-toolchain \
+  --riscv-basename riscv-none-elf \
+  --spike /path/to/riscv-toolchain/bin/spike \
+  --pk /path/to/riscv-toolchain/riscv-none-elf/bin/pk \
+  --mode NZDC+NEMESEC --cfp RASM \
+  --functions 'crcSlow;crcFast' --cfp-functions 'crcSlow;crcFast'
+```
+
+The runner requires execution tools, retains build and runtime logs, and writes `build/tests/results.json`. Known runtime failures must match explicit manifest expectations; build failures and missing tools remain failures. An unexpected pass fails by default so that the known-failure entry can be updated. See the [test documentation](../tests/README.adoc) for tool environment variables, selection options and manifest examples.
+
+For a direct CMake build while debugging the application integration, use the following commands. Replace the installation prefix and executable basename with those of your toolchain. `COMPAS_LLVM_ROOT` may point to the LLVM build directory above or to an installed COMPAS-enabled LLVM prefix.
 
 ```sh
 RISCV_PREFIX=/path/to/riscv-toolchain
 RISCV_BASENAME=riscv-none-elf
 
-cmake -S tests/crc -B build/crc-nemesec-rasm \
+cmake -S tests/apps/crc -B build/crc-nemesec-rasm \
   -DCOMPAS_LLVM_ROOT="${LLVM_BUILD}" \
   -DRISCV_TOOLCHAIN_PREFIX="${RISCV_PREFIX}" \
   -DRISCV_TOOLCHAIN_BASENAME="${RISCV_BASENAME}" \
@@ -65,7 +82,7 @@ cmake --build build/crc-nemesec-rasm --parallel 2
   build/crc-nemesec-rasm/crc
 ```
 
-Function selections are CMake lists separated by semicolons; the consumer helper converts them to comma-separated `llc` arguments. Use separate build directories for unprotected, individual-pass and combined-pass configurations. The CRC CMake project currently builds an executable without registering CTest tests; inspect its output and diagnostics against an independently established expected result. A zero host exit status alone is insufficient evidence of correct execution, since target error exits may be truncated by the execution environment.
+Function selections are CMake lists separated by semicolons; the consumer helper converts them to comma-separated `llc` arguments. Use separate build directories for unprotected, individual-pass and combined-pass configurations. The direct CMake build does not perform the shared runner's reference and expected-output comparisons. A zero host exit status alone is insufficient evidence of correct execution, since target error exits may be truncated by the execution environment.
 
 Run checks appropriate to the change. Use small C/C++ or LLVM IR reproducers and inspect emitted assembly as well as execution results. Check fault-free equivalence to an unprotected reference, selected and unselected functions, calls and returns, branch successors and signature adjustments, and primary/shadow register consistency. Cover RV32/RV64, enabled ISA extensions, code models and scheduling modes where the affected contract requires them. Record exact commands, tool revisions, random seeds where applicable, results and untested configurations.
 

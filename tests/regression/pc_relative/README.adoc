@@ -1,0 +1,55 @@
+= PC-relative address regressions
+
+These fault-free cases exercise global address materialization, loads and stores,
+and addresses retained across calls or branch joins. Each successful execution
+exits with `42` and no standard output; an incorrect result exits with `17`.
+Inputs and observable memory effects are volatile, and protected functions are
+not inlined. Constant result and memory tables provide independent oracles.
+
+[cols="1,3,3",options="header"]
+|===
+|Case |Inputs and paths |Independent oracle
+
+|`global_read_write`
+|Inputs `-4, 0, 3, 9` repeatedly update two distinct globals. The previous
+accumulator remains live while the new value and a second global are stored.
+|Results `33, 21, 39, 102`; accumulator values `7, 7, 16, 43`; XOR effects
+`9, 25, 10, 19`.
+
+|`array_offsets`
+|Offsets `-3, -1, 0, 2, 3` index a three-element window relative to element
+four of a global array. Negative and positive indices remain within the same
+array, including its first and last elements.
+|For initial values `3, 5, 11, 17, 23, 31, 41, 47, 59`, the weighted windows
+`a + 3*b + 5*c` produce `73, 177, 241, 389, 477`.
+
+|`address_helpers`
+|Global element addresses are passed to a protected helper and used again after
+the call. Element indices `0, 3, 1, 0` and increments `5, -7, 9, -3` include
+repeated writes to the same address. Both caller and callee are protected.
+|Results `106, 262, 144, 115`; final array `9, 22, 29, 36, 61`. The return
+combines `3*previous + 2*updated + 61`, so it checks the callee result and the
+caller's subsequent load independently.
+
+|`branch_bases`
+|Selectors `0, 1, 2, 3, -2` choose between two global array bases, join, and
+then take positive and nonpositive store paths. Both selected and alternate
+bases remain live through the second join.
+|Results `88, 130, 92, 135, 90`; accumulated effects
+`34, 109, 145, 223, 261`; final arrays `13, 17, 25` and `31, 37, 47`.
+|===
+
+The default matrix covers RV32 and RV64 with both `medlow` and `medany` code
+models. The `medany` builds exercise AUIPC/PC-relative low-part address pairs;
+`medlow` provides coverage of the alternative global address lowering. Builds
+disable linker relaxation so the final executable retains the address
+materialization being checked rather than replacing it with a GP-relative load.
+Every supported data-flow/control-flow protection combination uses coarse-grained
+scheduling. Machine-instruction verification runs separately from functional
+execution. These checks do not inject faults or measure detection coverage.
+
+[source,sh]
+----
+python3 tests/regression/run.py --case 'pc_relative/*'
+python3 tests/regression/run.py --case 'pc_relative/*' --code-model medany
+----

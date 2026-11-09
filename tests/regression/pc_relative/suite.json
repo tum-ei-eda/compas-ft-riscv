@@ -1,0 +1,35 @@
+{
+  "name": "pc_relative",
+  "adapter": "freestanding",
+  "architectures": ["rv32", "rv64"],
+  "code_models": ["medlow", "medany"],
+  "relax": false,
+  "modes": ["none", "EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
+  "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+  "schedules": ["cgs"],
+  "verify_machineinstrs": true,
+  "sources": ["pc_relative.c"],
+  "expected": {"exit": 42, "stdout": ""},
+  "cases": [
+    {
+      "name": "global_read_write",
+      "defines": ["TEST_CASE=1"],
+      "functions": ["pcrel_global_update"]
+    },
+    {
+      "name": "array_offsets",
+      "defines": ["TEST_CASE=2"],
+      "functions": ["pcrel_array_window"]
+    },
+    {
+      "name": "address_helpers",
+      "defines": ["TEST_CASE=3"],
+      "functions": ["pcrel_update_slot", "pcrel_address_helper"]
+    },
+    {
+      "name": "branch_bases",
+      "defines": ["TEST_CASE=4"],
+      "functions": ["pcrel_branch_bases"]
+    }
+  ]
+}

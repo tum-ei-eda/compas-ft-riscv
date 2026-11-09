@@ -1,0 +1,33 @@
+= Multiple-function regressions
+
+All four cases compile the same source file into one IR module and pass that
+module to one `llc` invocation. This keeps the compiler pass instance alive while
+it processes several functions, covering state that must reset between functions.
+Compiling these functions separately would miss that behavior.
+
+The definition order is `multi_tiny`, `multi_diamond`, `multi_helper`, `multi_loop`,
+`multi_early`, then `multi_driver`. They have a straight-line body, branch joins,
+an unprotected helper, a loop, early returns, and nested calls respectively.
+`multi_helper` and `main` are never selected for protection.
+
+[cols="1,3",options="header"]
+|===
+|Case |Functions selected for protection
+|`all_shapes` |All five participating functions, with the unprotected helper between protected definitions.
+|`alternating_functions` |The tiny function, loop and driver, leaving other participating definitions and calls unprotected.
+|`callees_only` |The tiny function, diamond, loop and early returns, invoked by an unprotected driver.
+|`caller_only` |The driver, whose callees are unprotected.
+|===
+
+Volatile inputs and `noinline` functions preserve runtime calls and observable
+memory writes. The program visits all four input sets repeatedly, rotates their
+order, and alternates the function call order between repetitions. It checks each
+function independently and then checks the combined driver result. Literal tables
+specify both the return value and the exact side-effect count for each input;
+the reference build does not calculate those expectations.
+
+Every successful execution produces no output and exits with `42`. A wrong
+result or side-effect count exits with `17`. The manifest covers RV32 and RV64,
+all six DMR selections, all four CFP selections, coarse-grained scheduling and
+the separate machine-instruction verifier check. Newly exposed compiler failures
+belong in the project test TODO while compiler fixes remain deferred.

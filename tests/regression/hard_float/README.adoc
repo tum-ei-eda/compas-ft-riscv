@@ -1,0 +1,34 @@
+= Hard-float calling-convention regressions
+
+These fault-free cases check preservation of FP arguments, return values and
+values live across calls. Separate translation units prevent the caller from
+inferring the callee's register usage. Volatile inputs, a volatile multiplier and
+`noinline` calls retain the runtime loads and FP operations.
+
+[cols="1,1,3",options="header"]
+|===
+|Case |ISA / ABI |Coverage
+|`float_live_rv32` |RV32IMAF / ILP32F |A protected caller retains binary32 values across two calls to an unprotected callee.
+|`float_live_rv64` |RV64IMAF / LP64F |The same check with XLEN 64 and FLEN 32, including callee-saved FP spills.
+|`double_live_rv32` |RV32IMAFD / ILP32D |A protected caller retains binary64 values with nonzero lower 32 bits across calls; XLEN is 32 and FLEN is 64.
+|`double_live_rv64` |RV64IMAFD / LP64D |The binary64 caller check with matching XLEN and FLEN.
+|`float_callee_rv64` |RV64IMAF / LP64F |An unprotected caller invokes a protected binary32 callee.
+|`double_callee_rv32` |RV32IMAFD / ILP32D |An unprotected caller invokes a protected binary64 callee.
+|`mixed_float_rv64` |RV64IMAF / LP64F |Both sides are protected, with integer and FP arguments and live values across both calls.
+|`mixed_double_rv32` |RV32IMAFD / ILP32D |Both sides are protected, retaining integer and full-width binary64 values across calls.
+|===
+
+The checks compare exact IEEE binary32 or binary64 encodings, rather than using
+floating-point tolerances. Every arithmetic operation is exact for the chosen
+finite inputs. The simple caller evaluates `3*a + 2*b + 2*c`: its binary32 results
+are `10.25` and `0.5`; its binary64 results are `10.25 + 19*2^-30` and
+`0.5 + 2^-30`. The mixed caller evaluates `4*a + 2*b + (n & 7) + ((n + 1) & 7)`
+before combining its encoding with an independently checked integer sentinel.
+For binary32 these intermediate results are `7` and `3.5`; for binary64 they are
+`7 - 2^-28` and `3.5`.
+
+Every case exits with `42` on success or `17` on an oracle mismatch, and produces
+no output. No libc floating-point routines are required. The manifest enables
+separate machine-instruction verification and the complete data/control-flow
+hardening matrix with coarse-grained scheduling. Newly exposed hardening errors
+belong in the project test TODO; the expected numerical results stay unchanged.

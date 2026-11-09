@@ -28,17 +28,23 @@ if(NOT RISCV_ISA)
 endif()
 
 if(NOT CMAKE_TOOLCHAIN_FILE)
-    set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/${RISCV_ISA}-toolchain.cmake")
+    set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../../../cmake/${RISCV_ISA}-toolchain.cmake")
 endif()
 project(compas_crc LANGUAGES ASM C)
 ####################################################################################################
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../../cmake")
-include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/compas.cmake")
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../../../cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../../cmake/compas.cmake")
 
 add_executable(crc)
 
+option(COMPAS_FINE_GRAINED "Use fine-grained DMR instruction scheduling" OFF)
+set(COMPAS_SCHEDULE)
+if(COMPAS_FINE_GRAINED)
+    set(COMPAS_SCHEDULE FINE_GRAINED)
+endif()
 
 compas_source(crc
+    ${COMPAS_SCHEDULE}
     SOURCES 
     "${CMAKE_CURRENT_SOURCE_DIR}/main.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/crc.c"

@@ -1,0 +1,43 @@
+{
+  "name": "control_flow",
+  "adapter": "freestanding",
+  "architectures": ["rv32", "rv64"],
+  "modes": ["none", "EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
+  "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+  "schedules": ["cgs"],
+  "verify_machineinstrs": true,
+  "sources": ["control_flow.c"],
+  "expected": {"exit": 42, "stdout": ""},
+  "cases": [
+    {
+      "name": "diamond",
+      "defines": ["TEST_CASE=1"],
+      "functions": ["control_diamond"]
+    },
+    {
+      "name": "edges",
+      "defines": ["TEST_CASE=2"],
+      "functions": ["control_edges"]
+    },
+    {
+      "name": "early_returns",
+      "defines": ["TEST_CASE=3"],
+      "functions": ["control_early", "control_classify"]
+    },
+    {
+      "name": "short_circuit",
+      "defines": ["TEST_CASE=4"],
+      "functions": ["control_probe", "control_short"]
+    },
+    {
+      "name": "loop_values",
+      "defines": ["TEST_CASE=5"],
+      "functions": ["control_loop"]
+    },
+    {
+      "name": "break_continue",
+      "defines": ["TEST_CASE=6"],
+      "functions": ["control_break_continue"]
+    }
+  ]
+}
