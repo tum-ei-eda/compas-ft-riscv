@@ -11,6 +11,8 @@ These tests check that programs retain their behavior when compiled through the 
 
 The link:regression/stack_args/[stack argument cases] preserve the current failures associated with https://github.com/tum-ei-eda/compas-ft-riscv/issues/14[issue #14]. `mixed_pointer` is a functional-equivalence case, including the merge between a global pointer and a local stack pointer.
 
+The link:regression/control_flow/README.adoc[control-flow suite] checks branch outcomes, joins, early returns, short-circuit side effects and loop boundaries against constant result tables. It runs on RV32 and RV64 with coarse-grained scheduling, all six DMR selections and all four CFP selections. Its manifest also enables LLVM machine-instruction verification.
+
 See the link:TODO.md[deferred hardening TODO] for failing compiler configurations, observed results and reproduction commands to investigate later.
 
 [[running-tests]]
@@ -52,6 +54,7 @@ python3 tests/regression/run.py \
 python3 tests/apps/run.py \
   --case 'crc/*' --mode NZDC+NEMESEC --cfp RASM \
   --functions 'crcSlow;crcFast' --cfp-functions 'crcSlow;crcFast'
+python3 tests/regression/run.py --case 'control_flow/*'
 ----
 
 `--case` accepts a glob matching `suite/case`; quote it to prevent shell expansion. Repeat `--case`, `--arch`, `--mode`, `--schedule` or `--cfp` to select multiple values. Available DMR modes are `none`, `EDDI`, `SWIFT`, `NZDC`, `NZDC+NEMESIS` and `NZDC+NEMESEC`; schedules are coarse-grained (`cgs`) and fine-grained (`fgs`); control-flow selections are `none`, `CFCSS`, `RASM` and `RACFED`. Use `--mode none --cfp RASM`, for example, to check control-flow protection alone. `--functions` and `--cfp-functions` override manifest function selections with comma- or semicolon-separated lists. An explicit empty string passes an empty selection, allowing the selective-hardening combinations used by CI to be reproduced.

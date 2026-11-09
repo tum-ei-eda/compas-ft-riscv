@@ -56,3 +56,38 @@ python3 tests/apps/run.py \
   --functions 'main,crcInit,crcSlow,crcFast' \
   --build-dir build/tests-todo-crc-llvm13
 ```
+
+## Control-flow combinations: fault-free signature failures
+
+- [ ] Investigate the failing combinations in the [control-flow suite](regression/control_flow/README.adoc).
+
+All six native oracles pass at `-O1` and `-O2`, and all RV32/RV64 unprotected references return `42`. The following protected configurations instead reach target exit `-256`, with empty stdout and host status zero. Scheduling is `cgs`, and the selected functions are declared per case in the manifest.
+
+| Cases | DMR | CFP | Architecture | Backend |
+| --- | --- | --- | --- | --- |
+| `edges` | `NZDC+NEMESIS`, `NZDC+NEMESEC` | `CFCSS` | RV32, RV64 | LLVM 13.0.1, 16.0.6 |
+| `short_circuit` | `EDDI` | `RACFED` | RV32, RV64 | LLVM 13.0.1, 16.0.6 |
+| `break_continue` | `NZDC+NEMESIS`, `NZDC+NEMESEC` | `CFCSS` | RV64 | LLVM 13.0.1 only |
+
+The 288-execution matrix per backend has **280 functional PASS / 8 FAIL** on LLVM13 and **282 functional PASS / 6 FAIL** on LLVM16. No new runtime-failure allowances have been added. The cause of each signature failure remains to be investigated.
+
+```sh
+python3 tests/regression/run.py --case 'control_flow/*' \
+  --no-verify-machineinstrs --build-dir build/tests-todo-control-flow
+```
+
+## Remaining machine-instruction and CFG verification errors
+
+- [ ] Correct the metadata and CFG violations reported by LLVM's machine verifier on the new suites.
+
+The control-flow matrix reports verifier errors for every enabled DMR mode with every CFP selection, and for CFP-only `CFCSS`, on both architectures and both tested backends: **252 verifier errors / 36 verifier passes** per backend.
+
+Diagnostics include explicit definitions marked as uses, undefined physical registers, ordinary instructions after terminators, missing or unexpected CFG successors, duplicate successor/predecessor entries and missing `mayStore` flags. These are observed diagnostics; they do not establish a single common root cause. Existing fixes for destination flags and signature-block normalization do not cover every instruction path exercised by these cases.
+
+The runner preserves normal execution results under `functional_status` and records verification separately. A verifier error makes the overall configuration `ERROR` even if runtime behavior passes or matches a known failure. Do not convert these errors into runtime `XFAIL` entries.
+
+```sh
+python3 tests/regression/run.py --case control_flow/diamond \
+  --arch rv32 --mode SWIFT --cfp none --verify-machineinstrs \
+  --build-dir build/tests-todo-machine-verifier
+```
