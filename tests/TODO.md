@@ -76,11 +76,30 @@ python3 tests/regression/run.py --case 'control_flow/*' \
   --no-verify-machineinstrs --build-dir build/tests-todo-control-flow
 ```
 
+## Call ABI combinations: live values and stack-passed arguments
+
+- [ ] Investigate the failing combinations in the [call ABI suite](regression/call_abi/README.adoc).
+
+All six native scenario oracles pass at `-O1` and `-O2`; all sixteen unprotected RV32/RV64 case references pass, including real stack-alignment checks. The following failures reproduce with both LLVM 13.0.1 and LLVM 16.0.6 backends using `cgs` and the manifest's selected functions.
+
+| Cases | DMR | CFP | Architecture | Observed target exit |
+| --- | --- | --- | --- | --- |
+| `caller_only`, `caller_and_callee`, `nested_live_values`, `indirect_calls`, `wide_live_values`, `stack_alignment` | `EDDI` | `RACFED` | RV32, RV64 | `-256` |
+| `ten_integer_arguments` | `none`, `SWIFT`, `NZDC`, `NZDC+NEMESIS`, `NZDC+NEMESEC` | `RACFED` | RV32, RV64 | `17` (the argument/result oracle failed) |
+| `ten_integer_arguments` | `EDDI` | `CFCSS`, `RASM`, `RACFED` | RV32, RV64 | `-512` |
+
+Each backend's 384-execution matrix has **356 functional PASS / 28 FAIL** and no build or simulator setup errors when run without the optional verifier. These failures remain `FAIL`. The stack-argument mismatch is distinct from the existing local-stack-pointer cases: the ninth and tenth integer arguments actually travel on the call stack.
+
+```sh
+python3 tests/regression/run.py --case 'call_abi/*' \
+  --no-verify-machineinstrs --build-dir build/tests-todo-call-abi
+```
+
 ## Remaining machine-instruction and CFG verification errors
 
 - [ ] Correct the metadata and CFG violations reported by LLVM's machine verifier on the new suites.
 
-The control-flow matrix reports verifier errors for every enabled DMR mode with every CFP selection, and for CFP-only `CFCSS`, on both architectures and both tested backends: **252 verifier errors / 36 verifier passes** per backend.
+The control-flow matrix reports verifier errors for every enabled DMR mode with every CFP selection, and for CFP-only `CFCSS`, on both architectures and both tested backends: **252 verifier errors / 36 verifier passes** per backend. The LLVM16 call ABI matrix likewise reports **336 verifier errors / 48 verifier passes**. The two runtime oracle failures with CFP-only `RACFED` still fail even though their machine verification passes.
 
 Diagnostics include explicit definitions marked as uses, undefined physical registers, ordinary instructions after terminators, missing or unexpected CFG successors, duplicate successor/predecessor entries and missing `mayStore` flags. These are observed diagnostics; they do not establish a single common root cause. Existing fixes for destination flags and signature-block normalization do not cover every instruction path exercised by these cases.
 
@@ -90,4 +109,17 @@ The runner preserves normal execution results under `functional_status` and reco
 python3 tests/regression/run.py --case control_flow/diamond \
   --arch rv32 --mode SWIFT --cfp none --verify-machineinstrs \
   --build-dir build/tests-todo-machine-verifier
+```
+
+## Protected inline assembly: stack-pointer probe assertion
+
+- [ ] Investigate support or an explicit diagnostic for hardening the inline-assembly stack-pointer probe.
+
+The call ABI alignment case deliberately leaves its noinline `abi_stack_pointer` helper unprotected. The helper consists of `mv a0, sp` and a return on the tested architectures, so it observes the calling frame without creating its own frame. Selecting the helper for EDDI as well reproduces a LLVM13 `MachineOperand::getReg()` / `isReg()` assertion during the EDDI pass. The unprotected reference still passes. This remains a build `ERROR`; the normal alignment case isolates calling-convention behavior from inline-assembly hardening.
+
+```sh
+python3 tests/regression/run.py --case call_abi/stack_alignment \
+  --arch rv64 --mode EDDI --cfp none --no-verify-machineinstrs \
+  --functions 'abi_stack_caller,abi_stack_callee,abi_stack_pointer' \
+  --build-dir build/tests-todo-protected-inline-asm
 ```

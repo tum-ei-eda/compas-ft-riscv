@@ -1,0 +1,29 @@
+= Call ABI regressions
+
+These freestanding cases check fault-free calling-convention behavior on RV32 and
+RV64. Each case checks independently calculated results, exits with `42` on
+success or `17` on an oracle mismatch, and produces no output.
+
+[cols="1,3",options="header"]
+|===
+|Case |Coverage
+|`caller_only` |A protected caller invokes an unprotected callee, retaining a live value across the call.
+|`callee_only` |An unprotected caller invokes a protected callee.
+|`caller_and_callee` |Both sides of the same boundary are protected.
+|`nested_live_values` |Repeated nested calls retain values across multiple calls and stack frames.
+|`indirect_calls` |A volatile function pointer invokes two distinct targets, then restores the first target for the next invocation.
+|`ten_integer_arguments` |Ten word-sized arguments require argument passing on the stack as well as in registers.
+|`wide_live_values` |Arguments, return values and values live across a call contain nonzero upper 32 bits; RV32 also exercises register pairs.
+|`stack_alignment` |The caller and callee observe 16-byte stack alignment and the caller observes the same stack pointer after return.
+|===
+
+`volatile` inputs and `noinline` functions keep the calls dependent on runtime
+loads. Sibling-call optimization is disabled by the shared runner. The stack
+alignment case reads the real RISC-V stack pointer in an unprotected leaf helper
+with inline assembly; its native smoke build checks only the arithmetic oracle.
+
+The manifest selects the participating functions explicitly and enables machine
+instruction verification. It exercises the unprotected configuration, each data
+hardening mode, each control-flow mode and their combinations, using coarse-grained
+scheduling. Failures should be recorded in the project test TODO without changing
+the expected functional result.
