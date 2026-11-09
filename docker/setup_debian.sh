@@ -100,16 +100,18 @@ patch_llvm() {
   build_dir="${2}"
   install_dir="${3}"
   version="${4#*-}"
-  llvm_patches_dir="${5}"
+  if [ "$#" -lt 5 ] || [ -z "$5" ]; then
+    echo "[patch] LLVM patch directory is required." >&2
+    return 1
+  fi
+  # Docker's workspace path may be relative to the current directory.
+  llvm_patches_dir="$(cd "$5" && pwd)" || return 1
   llvm_patch_file="llvm${version}_src.patch"
-  _home_=${PWD}
 
   echo "[patch?] llvm ... "
   if [ -f "${llvm_patches_dir}/${llvm_patch_file}" ]; then
     echo "yes. Applying patch: ${llvm_patch_file} from [${llvm_patches_dir}]."
-    cd ${src_dir}
-    git apply "${llvm_patches_dir}/${llvm_patch_file}"
-    cd ${_home_}
+    git -C "${src_dir}" apply "${llvm_patches_dir}/${llvm_patch_file}" || return 1
   else
     echo "no. Directory ${llvm_patches_dir} does not contain an matching patch file ${llvm_patch_file}. ls <dir>: $(ls "${llvm_patches_dir}")"
     return 1
@@ -118,9 +120,7 @@ patch_llvm() {
   llvm_patch_file="gccGTE13.llvmorg-${version}.patch"
   if [ -f "${llvm_patches_dir}/${llvm_patch_file}" ]; then
     echo "yes. Applying patch: ${llvm_patch_file} from [${llvm_patches_dir}]."
-    cd ${src_dir}
-    git apply "${llvm_patches_dir}/${llvm_patch_file}"
-    cd ${_home_}
+    git -C "${src_dir}" apply "${llvm_patches_dir}/${llvm_patch_file}" || return 1
   else
     echo "no. Directory ${llvm_patches_dir} does not contain an matching patch file ${llvm_patch_file}. ls <dir>: $(ls "${llvm_patches_dir}")"
   fi
@@ -128,15 +128,11 @@ patch_llvm() {
   return 0
 }
 setup_compas() {
-  compas_src_dir="${1}"
+  compas_src_dir="$(cd "$1" && pwd)" || return 1
   llvm_src_dir="${2}"
 
-  _home_=${PWD}
   echo "[setup] compas ... "
-  cd "${llvm_src_dir}/llvm/lib/Target/RISCV"
-  ln -s "${compas_src_dir}" "compas-ft-riscv"
-  ls -la .
-  cd "${_home_}"
+  ln -s "${compas_src_dir}" "${llvm_src_dir}/llvm/lib/Target/RISCV/compas-ft-riscv"
 }
 ########################################################################################################################
 # RISC-V GNU Toolchain

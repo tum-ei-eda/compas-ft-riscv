@@ -57,33 +57,33 @@ cd path/to/compas-ft-riscv/clone
 source docker/.env
 
 # Build compas-ft-riscv-deps image
-docker buildx build . -f docker/Dockerfile \
+docker buildx build . -f docker/dockerfile \
                       --tag tumeda/compas-ft-riscv-deps:latest-default-debian-stable \
-                      --target compas-ft-riscv-deps-deps \
+                      --target compas-ft-riscv-deps \
                       --build-arg BASE_IMAGE=debian:stable \
-                      --build-arg workspace_dir=. \
+                      --build-arg workspace_dir=${workspace_dir} \
                       --build-arg ENV_LLVM_FROM_SOURCE=${ENV_LLVM_FROM_SOURCE} \
                       --build-arg ENV_LLVM_VERSION=${ENV_LLVM_VERSION} \
                       --build-arg ENV_BUILD_CONFIG=${ENV_BUILD_CONFIG} \
                       --build-arg ENV_BUILD_CXX_STANDARD=${ENV_BUILD_CXX_STANDARD}
 
 # Build compas-ft-riscv-dev image
-docker buildx build . -f docker/Dockerfile \
-                      --tag tumeda/compas-ft-riscv-deps:latest-default-debian-stable \
-                      --target compas-ft-riscv-deps-dev \
+docker buildx build . -f docker/dockerfile \
+                      --tag tumeda/compas-ft-riscv-dev:latest-default-debian-stable \
+                      --target compas-ft-riscv-dev \
                       --build-arg BASE_IMAGE=debian:stable \
-                      --build-arg workspace_dir=. \
+                      --build-arg workspace_dir=${workspace_dir} \
                       --build-arg ENV_LLVM_FROM_SOURCE=${ENV_LLVM_FROM_SOURCE} \
                       --build-arg ENV_LLVM_VERSION=${ENV_LLVM_VERSION} \
                       --build-arg ENV_BUILD_CONFIG=${ENV_BUILD_CONFIG} \
                       --build-arg ENV_BUILD_CXX_STANDARD=${ENV_BUILD_CXX_STANDARD}
 
 # Build compas-ft-riscv-base image
-docker buildx build . -f docker/Dockerfile \
-                      --tag tumeda/compas-ft-riscv-deps:latest-default-debian-stable \
-                      --target compas-ft-riscv-deps-base \
+docker buildx build . -f docker/dockerfile \
+                      --tag tumeda/compas-ft-riscv-base:latest-default-debian-stable \
+                      --target compas-ft-riscv-base \
                       --build-arg BASE_IMAGE=debian:stable \
-                      --build-arg workspace_dir=. \
+                      --build-arg workspace_dir=${workspace_dir} \
                       --build-arg ENV_LLVM_FROM_SOURCE=${ENV_LLVM_FROM_SOURCE} \
                       --build-arg ENV_LLVM_VERSION=${ENV_LLVM_VERSION} \
                       --build-arg ENV_BUILD_CONFIG=${ENV_BUILD_CONFIG} \
@@ -92,15 +92,11 @@ docker buildx build . -f docker/Dockerfile \
 
 Build times (excluding pulling of base image) on 18-core workstation::
 
-- `compas-ft-riscv-deps`: `t.b.d.`
-- `compas-ft-riscv-dev`: `t.b.d.`
-- `compas-ft-riscv-base`: `t.b.d.`
+- `compas-ft-riscv-base`: `4h` (on GitHub runner)
 
 Image sizes::
 
-- `compas-ft-riscv-deps`: `1.66GB`
-- `compas-ft-riscv-dev`:
-- `compas-ft-riscv-base`:
+- `compas-ft-riscv-base`: `1.66GB`
 
 ==== GitHub Action
 

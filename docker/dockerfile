@@ -73,25 +73,25 @@ ARG llvm_patch_dir="${compas_src_dir}/patches/"
 RUN \
   --mount=type=bind,source=".",target=${workspace_dir} \
   . "${workspace_dir}/docker/setup_debian.sh" && \
-  patch_llvm ${llvm_src_dir} ${llvm_builddir} ${llvm_destdir} ${llvm_version} ${llvm_patches_dir}
+  patch_llvm "${llvm_src_dir}" "${llvm_builddir}" "${llvm_destdir}" "${llvm_version}" "${llvm_patch_dir}"
 RUN \
   --mount=type=bind,source=".",target=${workspace_dir} \
   . "${workspace_dir}/docker/setup_debian.sh" && \
-  setup_compas ${compas_src_dir} ${llvm_src_dir}
+  setup_compas "${compas_src_dir}" "${llvm_src_dir}"
 ##################
 # Compas (build) #
 ##################
 RUN \
   --mount=type=bind,source=".",target=${workspace_dir} \
   . "${workspace_dir}/docker/setup_debian.sh" && \
-  build_llvm ${llvm_src_dir} ${llvm_builddir} ${llvm_destdir} ${llvm_version} ${llvm_patches_dir}
+  build_llvm "${llvm_src_dir}" "${llvm_builddir}" "${llvm_destdir}" "${llvm_version}"
 ####################
 # Compas (install) #
 ####################
 RUN \
   --mount=type=bind,source=".",target=${workspace_dir} \
   . "${workspace_dir}/docker/setup_debian.sh" && \
-  install_llvm ${llvm_src_dir} ${llvm_builddir} ${llvm_destdir} ${llvm_version} ${llvm_patches_dir}
+  install_llvm "${llvm_src_dir}" "${llvm_builddir}" "${llvm_destdir}" "${llvm_version}"
 ###################################################################################################
 FROM compas-ft-riscv-dev AS compas-ft-riscv-base
 ##################
@@ -101,9 +101,8 @@ ARG llvm_src_dir="/llvm-project"
 ARG llvm_builddir="/llvm-build"
 ARG llvm_destdir="/llvm-install"
 ARG llvm_version="${ENV_LLVM_VERSION}"
-ARG llvm_patch_dir="${compas_src_dir}/patches/"
 RUN \
   --mount=type=bind,source=".",target=${workspace_dir} \
   . "${workspace_dir}/docker/setup_debian.sh" && \
-  cleanup_llvm ${llvm_src_dir} ${llvm_builddir} ${llvm_destdir} ${llvm_version} ${llvm_patches_dir}
+  cleanup_llvm "${llvm_src_dir}" "${llvm_builddir}" "${llvm_destdir}" "${llvm_version}"
 ###################################################################################################
