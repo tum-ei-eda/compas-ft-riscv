@@ -17,6 +17,8 @@ The link:regression/call_abi/README.adoc[call ABI suite] checks selective harden
 
 The link:regression/pc_relative/README.adoc[PC-relative suite] checks globals, array offsets and addresses retained across calls and branches with both `medlow` and `medany` code models. It disables relaxation to retain address-materialization instructions in the executable and enables the hardening matrix and separate machine verifier.
 
+The link:regression/multi_function/README.adoc[multiple-function suite] compiles differently shaped protected functions and unprotected helpers together in one module. It checks repeated and reordered calls with selective hardening and enables the separate machine verifier.
+
 See the link:TODO.md[deferred hardening TODO] for failing compiler configurations, observed results and reproduction commands to investigate later.
 
 [[running-tests]]
@@ -61,6 +63,7 @@ python3 tests/apps/run.py \
 python3 tests/regression/run.py --case 'control_flow/*'
 python3 tests/regression/run.py --case 'call_abi/*'
 python3 tests/regression/run.py --case 'pc_relative/*' --code-model medany
+python3 tests/regression/run.py --case 'multi_function/*'
 ----
 
 `--case` accepts a glob matching `suite/case`; quote it to prevent shell expansion. Repeat `--case`, `--arch`, `--mode`, `--schedule` or `--cfp` to select multiple values. Available DMR modes are `none`, `EDDI`, `SWIFT`, `NZDC`, `NZDC+NEMESIS` and `NZDC+NEMESEC`; schedules are coarse-grained (`cgs`) and fine-grained (`fgs`); control-flow selections are `none`, `CFCSS`, `RASM` and `RACFED`. Use `--mode none --cfp RASM`, for example, to check control-flow protection alone. `--functions` and `--cfp-functions` override manifest function selections with comma- or semicolon-separated lists. An explicit empty string passes an empty selection, allowing the selective-hardening combinations used by CI to be reproduced.
@@ -136,7 +139,7 @@ Use `adapter: "freestanding"` for small C reproducers without a C library. For e
 
 The shared adapter supplies startup code and the build/run flow. Source paths and `stdout_file` paths are relative to the manifest directory. Establish the expected exit and output independently; comparing two builds with the same wrong result is insufficient.
 
-Suite-level `sources`, `functions`, `defines`, `expected` and target-profile fields can be overridden by individual cases. Multiple source files are compiled separately and linked together. Use one source file for cases that must share a compiler pass instance. Use `modes`, `cfp_modes` and `schedules` to declare the hardening matrix, and `verify_machineinstrs: true` to request the additional compiler check. The freestanding adapter currently uses `-O1` and disables sibling-call optimization; tail-call coverage needs further adapter configuration.
+Suite-level `sources`, `functions`, `defines`, `expected` and target-profile fields can be overridden by individual cases. Multiple source files are compiled separately and linked together. Use one source file for cases that must share a compiler pass instance, as in the multiple-function suite. Use `modes`, `cfp_modes` and `schedules` to declare the hardening matrix, and `verify_machineinstrs: true` to request the additional compiler check. The freestanding adapter currently uses `-O1` and disables sibling-call optimization; tail-call coverage needs further adapter configuration.
 
 Use `adapter: "cmake"` for an application with a CMake project. The link:apps/crc/suite.json[CRC manifest] is the initial example: it declares the executable, ISA, protected functions and a case whose expected stdout comes from link:apps/crc/expected.stdout[expected.stdout]. Its CMake project uses the repository's `compas_source()` helper and accepts `DMR_MOD`, `DMR_FUNCTIONS`, `CFP_MOD`, `CFP_FUNCTIONS` and `COMPAS_FINE_GRAINED` from the runner.
 

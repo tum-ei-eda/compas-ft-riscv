@@ -1,0 +1,29 @@
+{
+  "name": "multi_function",
+  "adapter": "freestanding",
+  "architectures": ["rv32", "rv64"],
+  "modes": ["none", "EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
+  "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+  "schedules": ["cgs"],
+  "verify_machineinstrs": true,
+  "sources": ["multi_function.c"],
+  "expected": {"exit": 42, "stdout": ""},
+  "cases": [
+    {
+      "name": "all_shapes",
+      "functions": ["multi_tiny", "multi_diamond", "multi_loop", "multi_early", "multi_driver"]
+    },
+    {
+      "name": "alternating_functions",
+      "functions": ["multi_tiny", "multi_loop", "multi_driver"]
+    },
+    {
+      "name": "callees_only",
+      "functions": ["multi_tiny", "multi_diamond", "multi_loop", "multi_early"]
+    },
+    {
+      "name": "caller_only",
+      "functions": ["multi_driver"]
+    }
+  ]
+}

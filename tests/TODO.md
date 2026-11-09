@@ -124,6 +124,24 @@ python3 tests/regression/run.py --case call_abi/stack_alignment \
   --build-dir build/tests-todo-protected-inline-asm
 ```
 
+## Multiple functions: signature state and protection boundaries
+
+- [ ] Investigate the failing combinations in the [multiple-function suite](regression/multi_function/README.adoc).
+
+Each case compiles all definitions in one translation unit and one `llc` invocation, with an unprotected helper between protected definitions. Native `-O1`/`-O2` oracles and every unprotected reference pass. The following `cgs` configurations fail on both RV32 and RV64 with both LLVM13 and LLVM16 backends:
+
+| Cases | DMR | CFP | Observed target exit |
+| --- | --- | --- | --- |
+| `all_shapes`, `alternating_functions`, `callees_only` | Every non-`none` DMR mode | `CFCSS` | `-512` |
+| `all_shapes`, `alternating_functions`, `caller_only` | `EDDI` | `RACFED` | `-256` |
+
+Each backend's 192-execution matrix has **156 functional PASS / 36 FAIL**. The separate verifier reports **168 ERROR / 24 PASS**, including configurations whose functional behavior passes. Diagnostics include incorrect definition flags, undefined registers, invalid CFG successors, instructions after terminators, missing `mayStore` and expected-register-operand errors. These observations do not establish whether a runtime failure comes from retained pass state or the interaction between protection schemes.
+
+```sh
+python3 tests/regression/run.py --case 'multi_function/*' \
+  --no-verify-machineinstrs --build-dir build/tests-todo-multi-function
+```
+
 ## PC-relative addresses: backend assertions, relocation errors and fault-free failures
 
 - [ ] Investigate the failing combinations in the [PC-relative suite](regression/pc_relative/README.adoc).
