@@ -46,6 +46,23 @@ cmake --build "${LLVM_BUILD}" --parallel 2 --target clang llc llvm-objdump
 
 Clone and apply the patch once per LLVM source tree. After editing COMPAS sources, rerun the build command. Choose parallelism to fit available memory, and use separate source and build directories for different LLVM releases. Check that `llc --help-hidden` lists the expected COMPAS options; an upstream LLVM binary without the integration patch cannot run these passes.
 
+### Compiler caching
+
+CI uses [sccache](https://github.com/mozilla/sccache) through [ccache-action](https://github.com/hendrikmuhs/ccache-action) to cache host C/C++ compilation for LLVM and COMPAS. The 2 GB cache is scoped by OS, LLVM release, build configuration and C++ standard. Source changes can reuse unchanged compilation results; a cold cache still requires the full build. Linking and the RISC-V regression programs are not cached by this launcher. The action reports cache statistics at the end of the LLVM build job.
+
+For local builds, install `sccache` or `ccache` and add both launcher options to the LLVM configure command above:
+
+```sh
+-DCMAKE_C_COMPILER_LAUNCHER=sccache \
+-DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+```
+
+When using `configure_llvm` from `docker/setup_debian.sh`, set `COMPAS_COMPILER_LAUNCHER=sccache` (or `ccache`) before calling it. The launcher must be on `PATH`, or specified as an executable path. Unset this variable and rerun `configure_llvm` to disable caching; the helper clears both launcher entries even in an existing build directory. Direct CMake users can clear the two options by setting them to empty strings. Use compiler launchers without also enabling `LLVM_CCACHE_BUILD`.
+
+This cache belongs to the LLVM CI build job. Docker image builds do not yet restore this compiler cache across workflow runs.
+
+### Functional validation
+
 Use the [shared test runner](../tests/README.adoc) to build unprotected references, run programs through the COMPAS flow and compare their functional behavior against independent expected results. `python3 tests/run.py --list` lists available cases without requiring tools. The runners under `tests/regression` and `tests/apps` select each group; use manifests to add cases without writing a separate build/run script. The current suite checks fault-free equivalence, not fault-detection capability or coverage.
 
 Runtime validation requires a RISC-V GNU toolchain for assembly and linking, QEMU user-mode executables for freestanding regressions, and Spike with a matching proxy kernel (`pk`) for CMake applications. Application builds also need the toolchain's C library headers. For example, run the CRC configuration through the shared harness:

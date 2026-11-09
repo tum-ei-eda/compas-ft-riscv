@@ -43,10 +43,10 @@ jobs:
     name: build_${{ matrix.os.name }}-${{ matrix.os.version }}_compas_llvm${{ matrix.llvm.tag }}
 
     steps:
-    - name: Install git on container
+    - name: Install checkout and cache dependencies
       run: |
         apt update
-        apt install -y git
+        apt install -y git curl ca-certificates
     - name: Clone COMPAS
       uses: actions/checkout@v4
       with:
@@ -70,6 +70,12 @@ jobs:
       run: |
         . ./compas-ft-riscv_src/docker/setup_debian.sh
         setup_env
+    - name: Set up compiler cache
+      uses: hendrikmuhs/ccache-action@v1
+      with:
+        variant: sccache
+        max-size: 2G
+        key: llvm-${{ matrix.os.name }}-${{ matrix.os.version }}-${{ matrix.llvm.tag }}-${{ env.ENV_BUILD_CONFIG }}-cxx${{ env.ENV_BUILD_CXX_STANDARD }}
     - name: Clone LLVM
       working-directory: ${{ github.workspace }}
       run: |
@@ -91,6 +97,8 @@ jobs:
                      "${{ github.workspace }}/../llvm_src"
     - name: Configure LLVM (base build)
       working-directory: ${{ github.workspace }}
+      env:
+        COMPAS_COMPILER_LAUNCHER: sccache
       run: |
         . ./compas-ft-riscv_src/docker/setup_debian.sh
         configure_llvm "${{ github.workspace }}/../llvm_src" \

@@ -47,6 +47,11 @@ configure_llvm() {
   install_dir="$3"
   version="${4}"
 
+  if [ -n "${COMPAS_COMPILER_LAUNCHER:-}" ] && ! command -v "$COMPAS_COMPILER_LAUNCHER" >/dev/null 2>&1; then
+    echo "[configure] Compiler launcher not found: $COMPAS_COMPILER_LAUNCHER" >&2
+    return 1
+  fi
+
   echo "[configure] llvm"
   cmake \
     -G "Ninja" \
@@ -54,6 +59,8 @@ configure_llvm() {
     -B "${build_dir}" \
     -D "CMAKE_BUILD_TYPE=${ENV_BUILD_CONFIG}" \
     -D "CMAKE_CXX_STANDARD=${ENV_BUILD_CXX_STANDARD}" \
+    -D "CMAKE_C_COMPILER_LAUNCHER=${COMPAS_COMPILER_LAUNCHER:-}" \
+    -D "CMAKE_CXX_COMPILER_LAUNCHER=${COMPAS_COMPILER_LAUNCHER:-}" \
     -D "LLVM_ENABLE_PROJECTS=clang" \
     -D "LLVM_TARGETS_TO_BUILD=RISCV" \
     -D "LLVM_ENABLE_ASSERTIONS=ON" \
