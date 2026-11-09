@@ -69,6 +69,13 @@ After cloning the repo, run the following command from the repository root to ge
 ----
 latexmk -cd -pdf -outdir="$(pwd)/build/manual" docs/manual/src/main.tex
 ----
+
+To generate the versioned PDF and HTML used by GitHub Pages, install `latexmk`, `texlive-latex-extra`, `texlive-fonts-recommended`, `pandoc`, and `poppler-utils`, then run:
+[,bash]
+----
+sh docs/manual/generate.sh
+----
+The output is written to `build/manual/site`. Open `build/manual/site/index.html` to preview the site.
 ====
 
 == Contributing
