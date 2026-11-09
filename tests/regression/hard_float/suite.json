@@ -1,0 +1,61 @@
+{
+  "name": "hard_float",
+  "adapter": "freestanding",
+  "architectures": ["rv32", "rv64"],
+  "modes": ["none", "EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
+  "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+  "schedules": ["cgs"],
+  "verify_machineinstrs": true,
+  "sources": ["hard_float.c", "hard_float_helpers.c"],
+  "expected": {"exit": 42, "stdout": ""},
+  "cases": [
+    {
+      "name": "float_live_rv32",
+      "architectures": ["rv32"], "isa": "rv32imaf", "abi": "ilp32f",
+      "defines": ["TEST_CASE=1"],
+      "functions": ["fp_float_caller"]
+    },
+    {
+      "name": "float_live_rv64",
+      "architectures": ["rv64"], "isa": "rv64imaf", "abi": "lp64f",
+      "defines": ["TEST_CASE=1"],
+      "functions": ["fp_float_caller"]
+    },
+    {
+      "name": "double_live_rv32",
+      "architectures": ["rv32"], "isa": "rv32imafd", "abi": "ilp32d",
+      "defines": ["TEST_CASE=2"],
+      "functions": ["fp_double_caller"]
+    },
+    {
+      "name": "double_live_rv64",
+      "architectures": ["rv64"], "isa": "rv64imafd", "abi": "lp64d",
+      "defines": ["TEST_CASE=2"],
+      "functions": ["fp_double_caller"]
+    },
+    {
+      "name": "float_callee_rv64",
+      "architectures": ["rv64"], "isa": "rv64imaf", "abi": "lp64f",
+      "defines": ["TEST_CASE=1"],
+      "functions": ["fp_float_leaf"]
+    },
+    {
+      "name": "double_callee_rv32",
+      "architectures": ["rv32"], "isa": "rv32imafd", "abi": "ilp32d",
+      "defines": ["TEST_CASE=2"],
+      "functions": ["fp_double_leaf"]
+    },
+    {
+      "name": "mixed_float_rv64",
+      "architectures": ["rv64"], "isa": "rv64imaf", "abi": "lp64f",
+      "defines": ["TEST_CASE=3"],
+      "functions": ["fp_mixed_float_caller", "fp_mixed_float_leaf"]
+    },
+    {
+      "name": "mixed_double_rv32",
+      "architectures": ["rv32"], "isa": "rv32imafd", "abi": "ilp32d",
+      "defines": ["TEST_CASE=4"],
+      "functions": ["fp_mixed_double_caller", "fp_mixed_double_leaf"]
+    }
+  ]
+}

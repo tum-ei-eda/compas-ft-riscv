@@ -142,6 +142,35 @@ python3 tests/regression/run.py --case 'multi_function/*' \
   --no-verify-machineinstrs --build-dir build/tests-todo-multi-function
 ```
 
+## Hard-float calls: assembly errors, dataflow failures and missing shadow mappings
+
+- [ ] Investigate the build and execution failures in the [hard-float suite](regression/hard_float/README.adoc).
+
+All eight ISA/ABI profiles pass their unprotected exact-bit oracle and machine verification on both tested backends. Native GCC/Clang builds at `-O1` and `-O2` also pass. Reference assembly retains full-width saved FP values across calls: `fsd`/`fld` on RV32+D and `fsw`/`flw` on RV64+F. The inputs and expected binary64 results contain nonzero lower 32 bits.
+
+The following table covers every CFP selection (`none`, `CFCSS`, `RASM`, `RACFED`) with `cgs`. "Caller/mixed profiles" means the four `*_live_*` cases and the two `mixed_*` cases. The callee-only cases are `float_callee_rv64` and `double_callee_rv32`.
+
+| Backend | Profiles | DMR | Observation |
+| --- | --- | --- | --- |
+| LLVM13 | Caller/mixed profiles | `EDDI`, `SWIFT` | 48 assembler/link errors: generated integer comparisons use FP operands, for example `bne fa0,fs8,...`. |
+| LLVM13 | Caller/mixed profiles | `NZDC`, `NZDC+NEMESIS`, `NZDC+NEMESEC` | 72 runtime failures: target exit `-512`, rather than `42`; host status zero. |
+| LLVM16 | All eight profiles | Every non-`none` DMR mode | 160 backend aborts: `genShadowFromPrimary` asserts `reg not found in P2S_`. |
+
+Each backend runs 192 configurations. LLVM13 has **72 functional PASS / 72 FAIL / 48 build ERROR**; both callee-only profiles pass all functional configurations. LLVM16 has **32 functional PASS / 160 build ERROR**, with reference and CFP-only execution passing. Separately, machine verification fails for 120 built configurations on LLVM13 and eight CFP-only `CFCSS` configurations on LLVM16. The combined result is **24 PASS / 168 ERROR** on each backend because verification failures take precedence while retaining the functional result. No new failure allowances have been added.
+
+```sh
+python3 tests/regression/run.py --case 'hard_float/*' \
+  --no-verify-machineinstrs --build-dir build/tests-todo-hard-float
+```
+
+Use the LLVM13 tools to reproduce an invalid FP branch operand, or the LLVM16 tools to reproduce the missing shadow-register mapping:
+
+```sh
+python3 tests/regression/run.py --case hard_float/float_live_rv64 \
+  --mode EDDI --cfp none --no-verify-machineinstrs \
+  --build-dir build/tests-todo-hard-float-eddi
+```
+
 ## PC-relative addresses: backend assertions, relocation errors and fault-free failures
 
 - [ ] Investigate the failing combinations in the [PC-relative suite](regression/pc_relative/README.adoc).

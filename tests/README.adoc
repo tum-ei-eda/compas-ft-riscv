@@ -19,6 +19,8 @@ The link:regression/pc_relative/README.adoc[PC-relative suite] checks globals, a
 
 The link:regression/multi_function/README.adoc[multiple-function suite] compiles differently shaped protected functions and unprotected helpers together in one module. It checks repeated and reordered calls with selective hardening and enables the separate machine verifier.
 
+The link:regression/hard_float/README.adoc[hard-float suite] checks exact FP results and live values with RV32/RV64 F/D ISA and ABI profiles, including XLEN/FLEN mismatches. It enables the hardening matrix and separate machine verifier.
+
 See the link:TODO.md[deferred hardening TODO] for failing compiler configurations, observed results and reproduction commands to investigate later.
 
 [[running-tests]]
@@ -64,6 +66,7 @@ python3 tests/regression/run.py --case 'control_flow/*'
 python3 tests/regression/run.py --case 'call_abi/*'
 python3 tests/regression/run.py --case 'pc_relative/*' --code-model medany
 python3 tests/regression/run.py --case 'multi_function/*'
+python3 tests/regression/run.py --case 'hard_float/*'
 ----
 
 `--case` accepts a glob matching `suite/case`; quote it to prevent shell expansion. Repeat `--case`, `--arch`, `--mode`, `--schedule` or `--cfp` to select multiple values. Available DMR modes are `none`, `EDDI`, `SWIFT`, `NZDC`, `NZDC+NEMESIS` and `NZDC+NEMESEC`; schedules are coarse-grained (`cgs`) and fine-grained (`fgs`); control-flow selections are `none`, `CFCSS`, `RASM` and `RACFED`. Use `--mode none --cfp RASM`, for example, to check control-flow protection alone. `--functions` and `--cfp-functions` override manifest function selections with comma- or semicolon-separated lists. An explicit empty string passes an empty selection, allowing the selective-hardening combinations used by CI to be reproduced.
@@ -97,7 +100,7 @@ Freestanding cases can declare target settings at suite or case level:
 
 `--isa` and `--abi` override the manifest for a selected freestanding run. Repeating `--code-model` selects one or both models. The runner validates architecture/ISA/ABI compatibility and passes matching settings to the frontend, backend and GNU linker. Build directories and JSON results identify each ISA, ABI, code model and relaxation selection. Known-failure signatures also match those settings, so changing a profile cannot reuse an allowance for a different one.
 
-A case can restrict `architectures` and declare a matching ISA/ABI pair. Listing cases shows these profiles without requiring any tools. CMake applications retain their project's toolchain configuration; these freestanding overrides do not apply to that adapter.
+For example, the link:regression/hard_float/suite.json[hard-float manifest] restricts each case to its declared architecture and uses explicit FP ISA/ABI pairs. Listing cases shows these profiles without requiring any tools. CMake applications retain their project's toolchain configuration; these freestanding overrides do not apply to that adapter.
 
 == Results and known failures
 
@@ -139,7 +142,7 @@ Use `adapter: "freestanding"` for small C reproducers without a C library. For e
 
 The shared adapter supplies startup code and the build/run flow. Source paths and `stdout_file` paths are relative to the manifest directory. Establish the expected exit and output independently; comparing two builds with the same wrong result is insufficient.
 
-Suite-level `sources`, `functions`, `defines`, `expected` and target-profile fields can be overridden by individual cases. Multiple source files are compiled separately and linked together. Use one source file for cases that must share a compiler pass instance, as in the multiple-function suite. Use `modes`, `cfp_modes` and `schedules` to declare the hardening matrix, and `verify_machineinstrs: true` to request the additional compiler check. The freestanding adapter currently uses `-O1` and disables sibling-call optimization; tail-call coverage needs further adapter configuration.
+Suite-level `sources`, `functions`, `defines`, `expected` and target-profile fields can be overridden by individual cases. Multiple source files are compiled separately and linked together, as in the hard-float call-boundary tests. Use one source file for cases that must share a compiler pass instance, as in the multiple-function suite. Use `modes`, `cfp_modes` and `schedules` to declare the hardening matrix, and `verify_machineinstrs: true` to request the additional compiler check. The freestanding adapter currently uses `-O1` and disables sibling-call optimization; tail-call coverage needs further adapter configuration.
 
 Use `adapter: "cmake"` for an application with a CMake project. The link:apps/crc/suite.json[CRC manifest] is the initial example: it declares the executable, ISA, protected functions and a case whose expected stdout comes from link:apps/crc/expected.stdout[expected.stdout]. Its CMake project uses the repository's `compas_source()` helper and accepts `DMR_MOD`, `DMR_FUNCTIONS`, `CFP_MOD`, `CFP_FUNCTIONS` and `COMPAS_FINE_GRAINED` from the runner.
 
