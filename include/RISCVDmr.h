@@ -293,6 +293,7 @@ protected:
   std::set<llvm::MachineBasicBlock *> nemesis_bbs_{};
   std::set<llvm::MachineInstr *> loadbacks_{};
   std::set<llvm::MachineInstr *> indirect_calls_{};
+  std::map<const llvm::MachineInstr *, RegSetType> stack_address_call_args_{};
   std::string fname_{};
   bool use_shadow_for_stack_ops_{true};
   int frame_size_{0};
@@ -300,6 +301,7 @@ protected:
   virtual void init();
   void analyze_function();
   void calc_framesize();
+  void analyzeStackArguments();
   void updateSelectiveCalls();
   void duplicateInstructions();
   void preparePCRelativeAddresses();
