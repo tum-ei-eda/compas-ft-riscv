@@ -15,6 +15,8 @@ The link:regression/control_flow/README.adoc[control-flow suite] checks branch o
 
 The link:regression/call_abi/README.adoc[call ABI suite] checks selective hardening across calls, nested and indirect calls, ten integer arguments, wide live values and stack alignment. It runs on RV32 and RV64 with coarse-grained scheduling, all six DMR selections and all four CFP selections. Its manifest also enables LLVM machine-instruction verification.
 
+The link:regression/pc_relative/README.adoc[PC-relative suite] checks globals, array offsets and addresses retained across calls and branches with both `medlow` and `medany` code models. It disables relaxation to retain address-materialization instructions in the executable and enables the hardening matrix and separate machine verifier.
+
 See the link:TODO.md[deferred hardening TODO] for failing compiler configurations, observed results and reproduction commands to investigate later.
 
 [[running-tests]]
@@ -58,6 +60,7 @@ python3 tests/apps/run.py \
   --functions 'crcSlow;crcFast' --cfp-functions 'crcSlow;crcFast'
 python3 tests/regression/run.py --case 'control_flow/*'
 python3 tests/regression/run.py --case 'call_abi/*'
+python3 tests/regression/run.py --case 'pc_relative/*' --code-model medany
 ----
 
 `--case` accepts a glob matching `suite/case`; quote it to prevent shell expansion. Repeat `--case`, `--arch`, `--mode`, `--schedule` or `--cfp` to select multiple values. Available DMR modes are `none`, `EDDI`, `SWIFT`, `NZDC`, `NZDC+NEMESIS` and `NZDC+NEMESEC`; schedules are coarse-grained (`cgs`) and fine-grained (`fgs`); control-flow selections are `none`, `CFCSS`, `RASM` and `RACFED`. Use `--mode none --cfp RASM`, for example, to check control-flow protection alone. `--functions` and `--cfp-functions` override manifest function selections with comma- or semicolon-separated lists. An explicit empty string passes an empty selection, allowing the selective-hardening combinations used by CI to be reproduced.

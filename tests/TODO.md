@@ -123,3 +123,41 @@ python3 tests/regression/run.py --case call_abi/stack_alignment \
   --functions 'abi_stack_caller,abi_stack_callee,abi_stack_pointer' \
   --build-dir build/tests-todo-protected-inline-asm
 ```
+
+## PC-relative addresses: backend assertions, relocation errors and fault-free failures
+
+- [ ] Investigate the failing combinations in the [PC-relative suite](regression/pc_relative/README.adoc).
+
+The four cases exercise globals, array offsets, helper calls and branch joins on RV32/RV64 with both `medlow` and `medany`. Relaxation is disabled. All 32 unprotected references across both backends/models and all native `-O1`/`-O2` oracles pass. Disassembly confirms AUIPC address materialization inside the tested functions in all sixteen `medany` reference executables; the checks do not rely on an AUIPC in startup code.
+
+The following `cgs` build errors occur on LLVM13 with `medany`, on both architectures:
+
+| Cases | DMR / CFP selections | Observation |
+| --- | --- | --- |
+| `global_read_write` | Every protected configuration: CFP-only or any enabled DMR, with any CFP selection | Backend `!NodePtr->isKnownSentinel()` assertion |
+| `branch_bases` | Any DMR selection, including `none`, with `CFCSS`, `RASM` or `RACFED` | Same backend assertion |
+| `array_offsets`, `address_helpers` | Any DMR selection, including `none`, with `CFCSS`, `RASM` or `RACFED` | Linker reports `%pcrel_lo missing matching %pcrel_hi` |
+
+There are 82 assertion failures and 72 relocation/link errors. LLVM16 builds all configurations. The successfully built configurations expose these runtime failures:
+
+| Backend / model | Cases | DMR | CFP | Architecture | Target exit |
+| --- | --- | --- | --- | --- | --- |
+| LLVM13 / `medany` | `array_offsets`, `address_helpers`, `branch_bases` | Every non-`none` mode | `none` | RV32, RV64 | `-512` |
+| LLVM13 / `medlow` | `address_helpers` | `EDDI` | `RACFED` | RV32, RV64 | `-256` |
+| LLVM16 / both models | `address_helpers` | `EDDI` | `RACFED` | RV32, RV64 | `-256` |
+| LLVM16 / both models | `branch_bases` | `EDDI` | `CFCSS`, `RASM`, `RACFED` | RV32, RV64 | `-512` |
+
+Each backend's matrix contains 384 configurations. LLVM13 has **198 functional PASS / 32 FAIL / 154 build ERROR**; LLVM16 has **368 functional PASS / 16 FAIL**. Separate verification reports **32 PASS / 198 ERROR** on built LLVM13 configurations and **48 PASS / 336 ERROR** on LLVM16. Failed LLVM13 builds cannot run the verifier. The failures remain visible, with no new allowances or compiler fixes.
+
+```sh
+python3 tests/regression/run.py --case 'pc_relative/*' \
+  --no-verify-machineinstrs --build-dir build/tests-todo-pc-relative
+```
+
+For a narrower LLVM13 build-error reproduction:
+
+```sh
+python3 tests/regression/run.py --case pc_relative/global_read_write \
+  --arch rv32 --code-model medany --mode EDDI --cfp none \
+  --no-verify-machineinstrs --build-dir build/tests-todo-pcrel-build
+```
