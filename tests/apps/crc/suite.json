@@ -1,0 +1,19 @@
+{
+  "name": "crc",
+  "adapter": "cmake",
+  "architectures": ["rv64"],
+  "isa": "rv64gc",
+  "executable": "crc",
+  "functions": ["main", "crcInit", "crcSlow", "crcFast"],
+  "modes": ["EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
+  "schedules": ["cgs"],
+  "cases": [
+    {
+      "name": "default",
+      "expected": {
+        "exit": 0,
+        "stdout_file": "expected.stdout"
+      }
+    }
+  ]
+}

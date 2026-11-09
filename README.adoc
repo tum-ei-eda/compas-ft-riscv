@@ -81,6 +81,7 @@ The output is written to `build/manual/site`. Open `build/manual/site/index.html
 == Contributing
 
 See link:docs/CONTRIBUTING.md[CONTRIBUTING.md] for development, validation and contribution guidelines.
+See link:tests/README.adoc[the test guide] for functional regression and application suites, including the shared build/run commands.
 
 == Version History
 
