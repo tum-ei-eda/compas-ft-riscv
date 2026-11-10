@@ -7,6 +7,37 @@ if (NOT COMPAS_LLVM_ROOT)
 endif()
 
 message(STATUS "LLVM_DIR: ${COMPAS_LLVM_ROOT}")
+
+set(COMPAS_RSM_INSTRUCTIONS "all" CACHE STRING "RSM instruction classes: orig, dmr, balance, combinations with '+' or all")
+set_property(CACHE COMPAS_RSM_INSTRUCTIONS PROPERTY STRINGS orig dmr balance orig+dmr orig+balance dmr+balance all)
+
+function(_compas_rsm_instructions OUTPUT VALUE)
+    if("${VALUE}" STREQUAL "all")
+        set(${OUTPUT} all PARENT_SCOPE)
+        return()
+    endif()
+    if(NOT "${VALUE}" MATCHES "^(orig|dmr|balance)(\\+(orig|dmr|balance))*$")
+        message(FATAL_ERROR "RSM instructions must combine orig, dmr and balance with '+' or use all")
+    endif()
+    string(REPLACE "+" ";" CLASSES "${VALUE}")
+    set(ORDERED)
+    foreach(CLASS orig dmr balance)
+        if(CLASS IN_LIST CLASSES)
+            list(APPEND ORDERED "${CLASS}")
+        endif()
+    endforeach()
+    list(LENGTH ORDERED CLASS_COUNT)
+    list(LENGTH CLASSES INPUT_CLASS_COUNT)
+    if(NOT CLASS_COUNT EQUAL INPUT_CLASS_COUNT)
+        message(FATAL_ERROR "RSM instruction classes must not contain duplicates")
+    endif()
+    if(CLASS_COUNT EQUAL 3)
+        set(NORMALIZED all)
+    else()
+        list(JOIN ORDERED "+" NORMALIZED)
+    endif()
+    set(${OUTPUT} "${NORMALIZED}" PARENT_SCOPE)
+endfunction()
 find_package(LLVM CONFIG
     NO_DEFAULT_PATH
     NO_SYSTEM_ENVIRONMENT_PATH
@@ -29,12 +60,14 @@ endif()
 #         DMR_MOD [SINGLE VAL] {NZDC, NZDC+NEMESIS, NZDC+NEMESEC}, if specified its value will be passed as the dual module redundancy protection technique to LLC
 #         CFP_MOD [SINGLE VAL] {CFCSS, RASM}, if specified its value will be passed as the control flow protection technique to LLC
 #         DMR_FUNCTIONS [MULTI VAL], May contain a list of function names (symbolic names) that the DMR technique shall be applied to
-#         CFP_FUNCTIONS [MULTI VAL], May contain a list of function names (symbolic names) that the CFP technique shall be applied to
+#         CFP_FUNCTIONS [MULTI VAL], Function names or FUNCTION:INSTRUCTION_CLASSES selections
+#         RSM_INSTRUCTIONS [SINGLE VAL], Override COMPAS_RSM_INSTRUCTIONS for bare CFP function names
 #         SOURCES [MULTI VAL], List of C and C++ sources that shall pass through clang+llc instead of direct listing within CMake
 #         INCLUDE_DIRS [MULTI VAL], Additional include directories for clang+llc flow
 function(compas_source TARGET)
+    set(RSM_INSTRUCTIONS_DEFAULT "${COMPAS_RSM_INSTRUCTIONS}")
     set(foptions FINE_GRAINED)
-    set(foneValueArgs DMR_MOD CFP_MOD OPT)
+    set(foneValueArgs DMR_MOD CFP_MOD OPT RSM_INSTRUCTIONS)
     set(fmultiValueArgs DMR_FUNCTIONS CFP_FUNCTIONS SOURCES INCLUDE_DIRS COMPILE_DEFINITIONS)
     cmake_parse_arguments(COMPAS "${foptions}" "${foneValueArgs}" "${fmultiValueArgs}" ${ARGN})
 
@@ -141,8 +174,25 @@ function(compas_source TARGET)
         set(DMR_ARG "-${COMPAS_DMR_MOD}=${DMR_FUNCTIONS}")
     endif()
     if(COMPAS_CFP_MOD)
-        # format function names for control flow protection technique
-        list(JOIN COMPAS_CFP_FUNCTIONS "," CFP_FUNCTIONS)
+        if(NOT COMPAS_RSM_INSTRUCTIONS)
+            set(COMPAS_RSM_INSTRUCTIONS "${RSM_INSTRUCTIONS_DEFAULT}")
+        endif()
+        _compas_rsm_instructions(INSTRUCTION_MASK "${COMPAS_RSM_INSTRUCTIONS}")
+        set(CFP_SELECTIONS)
+        foreach(SELECTION IN LISTS COMPAS_CFP_FUNCTIONS)
+            if(SELECTION MATCHES "^([^:]+):(.+)$")
+                # Explicit per-function selections take precedence unchanged.
+                _compas_rsm_instructions(EXPLICIT_MASK "${CMAKE_MATCH_2}")
+                list(APPEND CFP_SELECTIONS "${SELECTION}")
+            elseif(SELECTION MATCHES ":")
+                message(FATAL_ERROR "CFP_FUNCTIONS selections require FUNCTION:INSTRUCTION_CLASSES")
+            elseif(INSTRUCTION_MASK STREQUAL "all")
+                list(APPEND CFP_SELECTIONS "${SELECTION}")
+            else()
+                list(APPEND CFP_SELECTIONS "${SELECTION}:${INSTRUCTION_MASK}")
+            endif()
+        endforeach()
+        list(JOIN CFP_SELECTIONS "," CFP_FUNCTIONS)
         set(CFP_ARG "-${COMPAS_CFP_MOD}=${CFP_FUNCTIONS}")
     endif()
 
