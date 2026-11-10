@@ -69,19 +69,6 @@ python3 tests/regression/run.py --case call_abi/stack_alignment \
   --build-dir build/tests-todo-protected-inline-asm
 ```
 
-## CRC: LLVM13 EDDI assembly-printer assertion
-
-- [ ] Investigate the LLVM13 `MCOperand::getReg()` / `isReg()` assertion when compiling CRC with EDDI on all four functions.
-
-Previously reproduced during assembly printing of `main` with RV64 `rv64gc`, `cgs` and no CFP, including with the original CRC sources and older compiler. The LLVM16 backend did not reproduce this failure in that investigation. This is a build error.
-
-```sh
-python3 tests/apps/run.py --case 'crc/*' --arch rv64 \
-  --mode EDDI --cfp none --schedule cgs \
-  --functions 'main,crcInit,crcSlow,crcFast' \
-  --build-dir build/tests-todo-crc-llvm13
-```
-
 ## Floating-point checks
 
 - [ ] Correct FP equality checks for NaNs and signed zero.
@@ -92,23 +79,4 @@ The current `FEQ_S`/`FEQ_D` checks reject matching NaNs and accept oppositely si
 ```sh
 python3 tests/regression/run.py --case 'hard_float/*' \
   --no-verify-machineinstrs --build-dir build/tests-todo-hard-float
-```
-
-## PC-relative addresses
-
-- [ ] Correct LLVM13 `medany` backend assertions, relocation errors and runtime failures.
-
-The [PC-relative suite](regression/pc_relative/README.adoc) disables relaxation and covers both architectures and code models. Current EDDI `cgs` checks retain:
-
-| Backend / model | Cases / CFP | Observation |
-| --- | --- | --- |
-| LLVM13 / `medany` | `global_read_write`, every CFP; `branch_bases`, enabled CFP | `!NodePtr->isKnownSentinel()` backend assertion. |
-| LLVM13 / `medany` | `array_offsets`, `address_helpers`, enabled CFP | `%pcrel_lo missing matching %pcrel_hi` linker error. |
-| LLVM13 / `medany` | `array_offsets`, `address_helpers`, `branch_bases`, CFP `none` | Target `-512`. |
-
-Earlier all-mode runs also found LLVM13 CFP-only and other DMR selections affected by the assertions/relocation errors; revalidate those when changing address or signature emission.
-
-```sh
-python3 tests/regression/run.py --case 'pc_relative/*' \
-  --no-verify-machineinstrs --build-dir build/tests-todo-pc-relative
 ```
