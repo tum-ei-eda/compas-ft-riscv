@@ -4,7 +4,7 @@ These items track compiler work for later. Keep the functional checks and their 
 
 Run the commands below from the repository root after [configuring the tools](README.adoc#running-tests). Select `COMPAS_LLVM_ROOT`, and any `COMPAS_CLANG` or `COMPAS_LLC` overrides, for the compiler combination being investigated. Validation with the LLVM 16.0.6 backend used the Clang 13.0.1 frontend; it does not establish results for a Clang 16 frontend.
 
-Recorded matrix counts describe the original EDDI and RSM investigations before their branches were combined. The combined call ABI suite retains both sets of cases; those historical counts do not describe its expanded matrix.
+Historical matrix counts describe the original EDDI and RSM investigations. Later sections record revalidation for the combined branch and subsequent fixes; use their stated configuration selections when comparing results.
 
 ## Stack arguments and instruction scheduling
 
@@ -111,15 +111,16 @@ Earlier private builds combining this EDDI change with the RSM branch passed all
 
 - [x] Preserve RACFED's runtime signature without shifting outgoing stack arguments.
 - [x] Preserve actual RASM and CFCSS runtime state across returning calls instead of assigning expected constants.
+- [x] Preserve outgoing stack arguments across returning selective DMR call wrappers.
 - [ ] Correct the remaining DMR call-boundary and frame failures in the [call ABI suite](regression/call_abi/README.adoc).
 
 All three signature schemes now reserve fixed FP-relative slots before frame layout and preserve their actual runtime state immediately around returning calls: one XLEN word for RASM/RACFED, two for CFCSS's G and D. The stack pointers and outgoing argument offsets are unchanged at the call. These slots remain stable across stack realignment and DMR's separate pushes. Standard DMR call wrappers exclude the signature registers from their outer spills/restores so they cannot overwrite the state restored by CFP. CFCSS initializes D before any entry-block adjustment, making calls before its first adjustment safe.
 
 Before the rebase, the RSM suite contained fourteen protection cases over eleven source scenarios, including repeated indirect stack-argument calls, nested calls, a large frame with a VLA, realigned live values, and `signature_join_calls`. All eleven native oracles pass with GCC and Clang at `-O1` and `-O2`; all 28 unprotected RV32/RV64 references pass. All 28 CFP-only configurations per scheme pass execution on both backends; RASM and RACFED also pass machine verification, while CFCSS still reports metadata/CFG errors. The new `signature_join_calls` case passes all 48 functional configurations per backend, including calls to a helper that clobbers the caller-saved signature registers and paths requiring CFCSS fan-in adjustments. A separate RACFED variadic-call smoke check passes on both architectures/backends with a live `va_list` across a call, checking that its signature slot does not overlap the register-varargs save area.
 
-The rebased manifest also retains main's three forced-frame-pointer protection cases, for seventeen cases over twelve source scenarios in total.
+The rebase retained main's three forced-frame-pointer protection cases, giving seventeen cases over twelve source scenarios. The selective-call regressions below add three protection selections of existing scenarios, for twenty cases with unchanged independent oracles.
 
-Revalidation of the combined suite with the LLVM 13.0.1 and 16.0.6 backends, Clang 13.0.1 frontend, RV32/RV64, `cgs`, DMR `none`/`EDDI` and all four CFP selections gives **228 PASS / 36 FAIL / 8 build ERROR per backend**. All 48 `frame_pointer_calls*` configurations pass. Compared with the original RSM branch's 224 shared configurations, twelve failures become passes on each backend with no new failures. The remaining EDDI failures are unchanged: `ten_integer_arguments` and `indirect_stack_arguments` with CFP enabled, `nested_stack_arguments` and `realigned_live_values` with every CFP selection (target `-512`), and `nested_stack_arguments_caller_only` with every CFP selection (target `17`). The eight `dynamic_stack_arguments` EDDI build assertions also remain unchanged. No failure allowances were added.
+Revalidation after the rebase, before the selective-call preservation correction, with the LLVM 13.0.1 and 16.0.6 backends, Clang 13.0.1 frontend, RV32/RV64, `cgs`, DMR `none`/`EDDI` and all four CFP selections gives **228 PASS / 36 FAIL / 8 build ERROR per backend**. All 48 `frame_pointer_calls*` configurations pass. Compared with the original RSM branch's 224 shared configurations, twelve failures become passes on each backend with no new failures. The remaining EDDI failures are unchanged: `ten_integer_arguments` and `indirect_stack_arguments` with CFP enabled, `nested_stack_arguments` and `realigned_live_values` with every CFP selection (target `-512`), and `nested_stack_arguments_caller_only` with every CFP selection (target `17`). The eight `dynamic_stack_arguments` EDDI build assertions also remain unchanged. No failure allowances were added.
 
 ```sh
 python3 tests/regression/run.py --case 'call_abi/*' \
@@ -129,7 +130,6 @@ python3 tests/regression/run.py --case 'call_abi/*' \
 ```
 
 CFP-only RASM/RACFED revalidation passes all **102 functional and verifier configurations per backend**, including references. All 48 native GCC/Clang `-O1`/`-O2` scenario checks pass. The combined CFCSS control-flow/CRC smoke also passes all 42 configurations per backend with `NZDC+NEMESIS`/`NZDC+NEMESEC`; separate verifier debt remains documented below.
-
 
 Before combining the branches, the full 672-configuration matrix per backend had **584 functional PASS / 80 FAIL / 8 build ERROR**. With machine verification enabled, the overall results are **84 PASS / 588 ERROR**, retaining functional outcomes separately. That investigation recorded these failures on both architectures and backends with `cgs`:
 
@@ -141,7 +141,7 @@ Before combining the branches, the full 672-configuration matrix per backend had
 | `nested_stack_arguments_caller_only` | Every non-`none` mode | Every selection, including `none` | Target exit `17`: incorrect argument/result values across the protected-to-unprotected boundary. |
 | `dynamic_stack_arguments` | `EDDI` | Every selection, including `none` | Backend assertion in `MachineOperand::setImm()`; the same eight build errors reproduce with the pre-correction compilers. |
 
-DMR's own call wrappers still use `saveRegs`/`loadRegs` to move SP after outgoing arguments have been stored. The caller-only nested case exposes that broader ABI problem without CFP enabled. These failures are distinct from the local-stack-pointer tracking cases in issue #14. Keep their runtime results as `FAIL` and build/verifier failures as `ERROR`; no new allowances have been added.
+The caller-only nested failure above exposed selective DMR wrappers moving SP after outgoing arguments had been stored, even with CFP disabled. Returning selective calls now use the fixed preservation frame described below. Duplicated-libcall, late tail-conversion and repair-mode wrappers retain their legacy handling. These call-ABI failures are distinct from the local-stack-pointer tracking cases in issue #14; runtime failures remain `FAIL` and build/verifier failures remain `ERROR`.
 
 - [x] Correct EDDI's equality check of primary/shadow frame addresses before callee-saved FP stores.
 
@@ -172,11 +172,44 @@ python3 tests/regression/run.py \
 
 Compiler-generated `__riscv_save_*` calls execute before FP setup and can clobber G/RTS in t0. They need prologue-aware initialization and instrumentation; ordinary body-call preservation cannot safely access its FP-relative slot there. This is separate from preservation across ordinary returning calls.
 
+### Returning selective calls: fixed preservation frame
+
+A protected caller can invoke an unprotected callee, or an unprotected caller can invoke a protected callee. In the nested-call reproducer, the former wrappers pushed 64 bytes on RV32 or 128 bytes on RV64 after arguments nine and ten had been written at `0(sp)` and one word above it. The callee then read spilled registers as arguments. Both directions now preserve caller context in a separate, preallocated FP-relative bank, leaving primary and shadow SP unchanged at the call. FP is reserved before register allocation and the fixed bank before frame layout, independently of CFP. The bank remains separate from signature state, varargs and callee-saved storage, and its alignment accounts for FLEN as well as XLEN.
+
+The manifest adds `ten_integer_arguments_caller_only`, `nested_stack_arguments_callee_only` and `dynamic_stack_arguments_caller_only`. These reuse the existing arithmetic literals and exercise both boundary directions, repeated calls, large fixed frames and a VLA.
+
+The full twenty-case `cgs` matrix, with all six DMR selections and all four CFP selections on RV32/RV64, gives **908 PASS / 36 FAIL / 16 build ERROR per backend** on LLVM 13.0.1 and 16.0.6 using the Clang 13.0.1 frontend. Across 858 matched baseline configurations per backend, **144 failures become passes with zero functional regressions**; the additional 102 CFP-only profiles also pass. All remaining runtime failures use EDDI and target `-512`:
+
+| Cases | CFP |
+| --- | --- |
+| `ten_integer_arguments`, `indirect_stack_arguments` | `CFCSS`, `RASM`, `RACFED` |
+| `nested_stack_arguments`, `nested_stack_arguments_callee_only`, `realigned_live_values` | Every selection, including `none` |
+
+The sixteen build errors are the existing EDDI assertions in `dynamic_stack_arguments` and its caller-only variant. They are not runtime allowances. The focused four-case `fgs` matrix gives **176 PASS / 8 FAIL / 8 build ERROR per backend**, again fixing 144 matched failures with no regressions. Its remaining failures are EDDI nested-callee checks and EDDI dynamic-frame build assertions. Assembly checks at twelve returning call sites across both backends confirm that FP-relative preservation replaces the old SP displacement. Forty RV32+D caller profiles retain eight-byte-aligned FSD/FLD accesses, including a four-byte RASM/RACFED signature slot before the DMR bank.
+
+Paired verifier checks for both selective-call directions with EDDI/SWIFT and CFP disabled retain **4 PASS / 8 verifier ERROR per backend**. Reordered copies of the same IR ensure verification reaches the new callee-only wrapper instructions. No new diagnostic classes or fixed-slot load/store metadata errors appear; existing definition flags, undefined registers, terminator placement and CFG errors remain. These verifier outcomes are separate from the functional improvements above.
+
+```sh
+python3 tests/regression/run.py --case 'call_abi/*' \
+  --no-verify-machineinstrs --build-dir build/tests-dmr-call-frame
+
+python3 tests/regression/run.py \
+  --case call_abi/nested_stack_arguments_caller_only \
+  --case call_abi/ten_integer_arguments_caller_only \
+  --case call_abi/nested_stack_arguments_callee_only \
+  --case call_abi/dynamic_stack_arguments_caller_only \
+  --schedule fgs --no-verify-machineinstrs \
+  --build-dir build/tests-dmr-call-frame-fgs
+```
+
+- [ ] Correct outgoing-argument displacement in duplicated-libcall, late tail-conversion and repair-mode preservation. Late tail wrappers execute after the original epilogue has restored FP; they need earlier conversion or a distinct preservation plan. Duplicated calls need separate outer and argument/result snapshots with positional return-to-shadow reloads. The legacy `saveRegs`/`loadRegs` helpers remain unchanged for these paths and transient address formation.
+- [ ] Exclude CFP-owned state from ordinary selective-call balance checks when DMR and CFP select different functions. Separate paired probes reproduce target `-512` before and after this correction when RACFED protects a caller without DMR that invokes a DMR-protected callee: its evolving RTS in `t0` need not equal ordinary shadow `t4`. Large signature-slot offsets can expose the same mismatch when RASM uses `t4` for address formation. This is separate from argument displacement. LLVM16 large-offset DMR-bank probes pass fourteen functional and fourteen structural checks while keeping the signature slot within its direct-offset range; the LLVM13 MIR-resumption harness reaches an assembly-printer assertion, so that particular probe establishes no LLVM13 result.
+
 ## Remaining machine-instruction and CFG verification errors
 
 - [ ] Correct the metadata and CFG violations reported by LLVM's machine verifier on the new suites.
 
-The control-flow matrix reports verifier errors for every enabled DMR mode with every CFP selection, and for CFP-only `CFCSS`, on both architectures and both tested backends: **252 verifier errors / 36 verifier passes** per backend. The fourteen-case call ABI matrix reports **588 overall ERROR / 84 PASS** per backend, including eight preexisting EDDI build errors. CFP-only RASM and RACFED pass all call ABI runtime and verifier checks; CFCSS and the remaining DMR configurations still require metadata and CFG repairs.
+The control-flow matrix reports verifier errors for every enabled DMR mode with every CFP selection, and for CFP-only `CFCSS`, on both architectures and both tested backends: **252 verifier errors / 36 verifier passes** per backend. The historical fourteen-case call ABI matrix reported **588 overall ERROR / 84 PASS** per backend, including eight preexisting EDDI build errors. CFP-only RASM and RACFED pass all call ABI runtime and verifier checks; CFCSS and the remaining DMR configurations still require metadata and CFG repairs.
 
 Diagnostics include explicit definitions marked as uses, undefined physical registers, ordinary instructions after terminators, missing or unexpected CFG successors, duplicate successor/predecessor entries and missing `mayStore` flags. These are observed diagnostics; they do not establish a single common root cause. Existing fixes for destination flags and signature-block normalization do not cover every instruction path exercised by these cases.
 
