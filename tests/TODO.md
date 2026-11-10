@@ -25,6 +25,10 @@ python3 tests/regression/run.py \
   --build-dir build/tests-todo-stack
 ```
 
+Paired revalidation on the current EDDI stack-tracking branch gives **48 functional PASS / 34 XPASS / 4 XFAIL / 4 build ERROR** per backend; the incoming-FP correction leaves all ninety outcomes unchanged. The remaining runtime failures are EDDI `forwarded` on both architectures and schedules. EDDI `mixed_pointer` reports the unsupported/mixed-address diagnostic at compilation in those four profiles. The earlier allowances still contain 34 stale `XPASS` entries from the separate stack-argument correction.
+
+- [ ] Update the stale stack-argument failure allowances after reviewing the stack-tracking correction.
+
 ## CRC: truncated output with CFCSS combinations
 
 - [ ] Investigate why `NZDC+NEMESIS` and `NZDC+NEMESEC` combined with `CFCSS` terminate before completing CRC.
@@ -76,11 +80,34 @@ python3 tests/regression/run.py --case 'control_flow/*' \
   --no-verify-machineinstrs --build-dir build/tests-todo-control-flow
 ```
 
+## EDDI: incoming frame-pointer preservation
+
+- [x] Preserve caller-owned frame pointers without comparing their primary/shadow values for equality at the callee-saved spill.
+
+Incoming `s0` can point into the caller's primary frame while its shadow points into the caller's separate shadow frame. The callee cannot validate this pair using its own frame size; a caller that does not use FP can instead have an ordinary value in `s0`. EDDI now recognizes the full-width FP save by its callee-saved spill object and preserves both values independently. Other store-value checks remain enabled, including ordinary data held in `s0`.
+
+The three `frame_pointer_calls*` cases in the [call ABI suite](regression/call_abi/README.adoc) force frame pointers in callers and leaf functions. They retain volatile locals across nested calls and cover all-protected, caller-only and callee-only selections. Native GCC/Clang checks pass at `-O1`/`-O2`. With EDDI enabled and CFP disabled, all twelve protected RV32/RV64 configurations across `cgs`/`fgs` now pass per backend; eight failed before the correction, while the caller-only controls already passed. The six unprotected references also pass. An assembly corruption smoke confirms that ordinary scalar stores using `s0` still detect a one-bit shadow mismatch with exit `-512`.
+
+```sh
+python3 tests/regression/run.py --case 'call_abi/frame_pointer_calls*' \
+  --mode EDDI --cfp none --schedule cgs --schedule fgs \
+  --build-dir build/tests-eddi-frame-pointer
+```
+
+The new cases' full 144-configuration `cgs` matrix has **142 functional PASS / 2 FAIL** on LLVM13 and **132 functional PASS / 12 FAIL** on LLVM16. Paired checks resolve sixteen and fourteen failures respectively, with no new functional or verifier failures. Verification still reports **18 overall PASS / 126 ERROR** on each backend; functional results are retained separately. These remaining runtime failures are deferred:
+
+| Cases | DMR | CFP | Backend | Observation |
+| --- | --- | --- | --- | --- |
+| `frame_pointer_calls_caller_only` | `EDDI` | `RACFED` | LLVM13, LLVM16 | RV32/RV64 target exit `-256`; the separate RSM preservation correction is not included in this branch. |
+| `frame_pointer_calls_callee_only` | Every non-`none` mode | `CFCSS` | LLVM16 | RV32/RV64 target exit `-512`; the separate CFCSS preservation correction is not included in this branch. |
+
+Private builds combining this EDDI change with the RSM branch pass all thirty tested functional profiles per backend: `nested_live_values`, `stack_alignment` and the three new FP cases, with EDDI and CFCSS/RASM on RV32/RV64, including unprotected references. Existing machine-verifier failures remain.
+
 ## Call ABI combinations: live values and stack-passed arguments
 
 - [ ] Investigate the failing combinations in the [call ABI suite](regression/call_abi/README.adoc).
 
-All six native scenario oracles pass at `-O1` and `-O2`; all sixteen unprotected RV32/RV64 case references pass, including real stack-alignment checks. The following failures reproduce with both LLVM 13.0.1 and LLVM 16.0.6 backends using `cgs` and the manifest's selected functions.
+The original eight cases cover six source scenarios. All six native scenario oracles pass at `-O1` and `-O2`; all sixteen unprotected RV32/RV64 references pass, including real stack-alignment checks. Their outcomes remain unchanged by the incoming-FP correction. The following failures reproduce with both LLVM 13.0.1 and LLVM 16.0.6 backends using `cgs` and the manifest's selected functions.
 
 | Cases | DMR | CFP | Architecture | Observed target exit |
 | --- | --- | --- | --- | --- |
@@ -88,7 +115,7 @@ All six native scenario oracles pass at `-O1` and `-O2`; all sixteen unprotected
 | `ten_integer_arguments` | `none`, `SWIFT`, `NZDC`, `NZDC+NEMESIS`, `NZDC+NEMESEC` | `RACFED` | RV32, RV64 | `17` (the argument/result oracle failed) |
 | `ten_integer_arguments` | `EDDI` | `CFCSS`, `RASM`, `RACFED` | RV32, RV64 | `-512` |
 
-Each backend's 384-execution matrix has **356 functional PASS / 28 FAIL** and no build or simulator setup errors when run without the optional verifier. These failures remain `FAIL`. The stack-argument mismatch is distinct from the existing local-stack-pointer cases: the ninth and tenth integer arguments actually travel on the call stack.
+Each backend's original 384-execution matrix has **356 functional PASS / 28 FAIL** and no build or simulator setup errors when run without the optional verifier. These failures remain `FAIL`. The stack-argument mismatch is distinct from the existing local-stack-pointer cases: the ninth and tenth integer arguments actually travel on the call stack. The three additional FP cases and their remaining failures are recorded above.
 
 ```sh
 python3 tests/regression/run.py --case 'call_abi/*' \

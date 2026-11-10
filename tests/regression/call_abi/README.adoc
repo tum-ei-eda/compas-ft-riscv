@@ -15,12 +15,23 @@ success or `17` on an oracle mismatch, and produces no output.
 |`ten_integer_arguments` |Ten word-sized arguments require argument passing on the stack as well as in registers.
 |`wide_live_values` |Arguments, return values and values live across a call contain nonzero upper 32 bits; RV32 also exercises register pairs.
 |`stack_alignment` |The caller and callee observe 16-byte stack alignment and the caller observes the same stack pointer after return.
+|`frame_pointer_calls` |Three protected functions have different frame-size requirements, retain FP-relative locals across repeated nested calls, and restore each caller's incoming frame pointer.
+|`frame_pointer_calls_caller_only` |The same calls select only the outer function, exercising a protected caller with unprotected nested callees.
+|`frame_pointer_calls_callee_only` |An unprotected outer function invokes two protected nested callees, exercising entry from an ordinary caller and the protected-to-protected boundary.
 |===
 
 `volatile` inputs and `noinline` functions keep the calls dependent on runtime
 loads. Sibling-call optimization is disabled by the shared runner. The stack
 alignment case reads the real RISC-V stack pointer in an unprotected leaf helper
 with inline assembly; its native smoke build checks only the arithmetic oracle.
+
+The frame-pointer cases set `frame_pointer: true` in their manifest, forcing a
+frame pointer even in leaf functions without depending on control-flow protection
+to reserve it. All slots in volatile arrays of 3, 5 and 7 words participate in
+the results, exercising different frame-size requirements. Constant indices
+keep this case focused on frame-pointer preservation across calls.
+Post-call loads check that FP-relative locals remain accessible after each pair
+of calls. Each input is checked twice against an independent literal result.
 
 The manifest selects the participating functions explicitly and enables machine
 instruction verification. It exercises the unprotected configuration, each data
