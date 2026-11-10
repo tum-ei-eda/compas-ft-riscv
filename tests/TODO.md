@@ -28,6 +28,17 @@ python3 tests/regression/run.py --case 'stack_args/*' \
 
 Direct calls across either selective DMR boundary now use returning wrappers prepared before frame layout in every DMR mode. The wrappers preserve context in fixed caller-frame slots; late machine IR that bypasses this decision is diagnosed. Scalar calls between compatible protected functions can still be tails. REPAIR rejects those tails and indirect tails because its fixed caller snapshot requires a live frame; use `-fno-optimize-sibling-calls` for returning calls. Defining the corresponding early REPAIR decision and explicit `musttail` behavior remains separate work.
 
+## Global signature selection with save/restore helpers
+
+- [ ] Preserve RASM/RACFED signatures when all helper wrappers are selected.
+
+`save_restore/repeated_calls` with `--cfp-functions=-1` exits with target `-256` under RASM and RACFED on RV32/RV64 with LLVM13/16. The same four configurations fail with main's pre-rebase compiler. Selecting only `helper_repeated_calls` passes, including the `orig+dmr` and `balance` masks. Keep the global-selection call-boundary issue separate from the resolved CFCSS balance checks.
+
+```sh
+python3 tests/regression/run.py --case 'save_restore/repeated_calls' \
+  --cfp RASM --cfp RACFED --cfp-functions=-1 --verify-machineinstrs
+```
+
 ## Floating-point checks
 
 - [ ] Correct FP equality checks for NaNs and signed zero.
