@@ -91,6 +91,14 @@ bool needs_incoming_shadow_sp(const llvm::MachineFunction &MF) {
   return false;
 }
 
+bool needs_pointer_deltas(const llvm::MachineFunction &MF) {
+  return riscv_common::inCSString(llvm::cl::enable_eddi,
+                                  std::string{MF.getName()}) &&
+         !MF.getInfo<llvm::RISCVMachineFunctionInfo>()
+              ->getCompasIncomingPointerRegs()
+              .empty();
+}
+
 unsigned dmr_frame_size(const llvm::MachineFunction &MF) {
   const auto &subtarget = MF.getSubtarget<llvm::RISCVSubtarget>();
   const unsigned word_size = subtarget.is64Bit() ? 8 : 4;
@@ -118,13 +126,13 @@ public:
 
   bool runOnMachineFunction(llvm::MachineFunction &MF) override {
     if (!needs_signature_frame(MF) && !needs_dmr_frame(MF) &&
-        !needs_incoming_shadow_sp(MF))
+        !needs_incoming_shadow_sp(MF) && !needs_pointer_deltas(MF))
       return false;
     auto &frame = MF.getFrameInfo();
     if (frame.isFrameAddressTaken())
       return false;
     // Reserve a stable base before register allocation. Signature state,
-    // selective-call context and EDDI's incoming shadow SP receive fixed
+    // selective-call context and EDDI's incoming pointer state receive fixed
     // slots after CSI assignment.
     frame.setFrameAddressIsTaken(true);
     return true;
@@ -153,7 +161,9 @@ void llvm::reserveRISCVCompasCallFrame(llvm::MachineFunction &MF) {
   const bool incoming_shadow_sp =
       info->getCompasIncomingShadowSPFrameIndex() >= 0 &&
       needs_incoming_shadow_sp(MF);
-  if (!signature_frame && !dmr_frame && !incoming_shadow_sp)
+  const bool pointer_deltas =
+      info->getCompasPointerDeltaFrameIndex() >= 0 && needs_pointer_deltas(MF);
+  if (!signature_frame && !dmr_frame && !incoming_shadow_sp && !pointer_deltas)
     return;
 
   auto &frame = MF.getFrameInfo();
@@ -199,4 +209,9 @@ void llvm::reserveRISCVCompasCallFrame(llvm::MachineFunction &MF) {
     // Keep the caller's argument bank distinct from this callee's shadow
     // frame, even when nested calls overwrite the live shadow SP.
     info->setCompasIncomingShadowSPFrameIndex(reserve(word_size, word_size));
+  if (pointer_deltas)
+    // Each formal pointer can address a different caller bank. Preserve one
+    // independent shadow-minus-primary relation for every recorded register.
+    info->setCompasPointerDeltaFrameIndex(reserve(
+        word_size * info->getCompasIncomingPointerRegs().size(), word_size));
 }

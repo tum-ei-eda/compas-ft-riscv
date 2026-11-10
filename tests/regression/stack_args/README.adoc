@@ -1,0 +1,58 @@
+= Stack-address call regressions
+
+These freestanding cases check pointers into caller-owned stack memory across
+function calls on RV32 and RV64. Each case uses an independent result oracle,
+exits with `42` on success or `17` on an oracle mismatch, and produces no output.
+The manifest runs EDDI and SWIFT with coarse- and fine-grained scheduling.
+
+[cols="1,3",options="header"]
+|===
+|Case |Coverage
+|`direct` |A pointer to a local scalar crosses one protected call.
+|`branch` |Both predecessors pass different offsets into the same local array.
+|`loop` |A local-array pointer advances across a loop before a call.
+|`scalar` |A scalar loaded from a volatile local remains an ordinary scalar argument.
+|`mixed` |A call carries both a local pointer and a scalar value.
+|`register_reuse` |A pointer call is followed by a scalar call using the returned value.
+|`global` |A pointer to global storage crosses the same pointer-helper interface.
+|`forwarded` |A caller-owned local pointer passes through another protected function before being dereferenced.
+|`forwarded_frames` |Two pointers and a scalar traverse repeated nested calls, distinct local frames, constant pointer offsets and a scalar branch join.
+|`forwarded_frames_frame_pointer` |The same nested calls force FP, covering stable frame addressing independently of control-flow protection.
+|`forwarded_wide` |A 64-bit tag and scalar precede an inherited pointer, checking its actual ABI register after arguments split differently on RV32 and RV64.
+|`mixed_pointer` |A control-flow merge selects global or local storage inside one function.
+|===
+
+The nested frame cases call the same helpers from separate local and global
+callers. One call also passes a caller-local pointer and a global pointer
+together, so each pointer needs its own relationship to the shadow pointee.
+Forwarding a pointer does not make it refer to the forwarding function's frame.
+Protected callers retain independent primary and shadow local arrays throughout
+the chain; global pointers retain their global origin. All participating pointer
+helpers are selected, keeping these cases focused on protected boundaries.
+
+EDDI gives ordinary pointer parameters passed in integer registers an immutable
+entry snapshot of each primary-to-shadow address difference. The caller checks
+the pair before entry; later forwarding checks use the saved difference for that
+pointer, even when the forwarding function has a different frame size. A fault
+between the caller's validation and the entry capture falls outside this check.
+Pointer parameters passed on the stack or indirectly, and pointer provenance
+that the pass cannot represent, require separate support or an explicit
+diagnostic. These cases do not establish detection coverage for those paths.
+
+The inner and middle helpers retain volatile arrays of three and seven integers
+across two calls, while the local caller owns two eight-element arrays. Incoming
+pointers are read again after nested calls. The inner helper branches only on a
+scalar result choice, avoiding a global/local pointer merge in these cases.
+Three volatile inputs exercise both paths twice. Main compares the results with
+literal values calculated independently by expanding the weighted sums and
+checksums. Sibling-call optimization is disabled by the shared runner.
+
+The wide-argument case keeps nonzero high and low halves of its tag in the
+result. With the default ABIs, the pointer is passed in `a3` on RV32 and `a2`
+on RV64. Separate local and global callers exercise the same forwarding helper;
+each result is checked twice against a literal oracle.
+
+The separate `mixed_pointer` case covers a pointer merge within one function;
+its outcome must be tracked independently. Remaining failures and verifier debt
+are recorded in link:../../TODO.md[the test TODO]. Fault-free equivalence does
+not establish fault-detection coverage.

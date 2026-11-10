@@ -284,7 +284,8 @@ protected:
   std::set<llvm::MachineInstr *> branches_{};
   std::set<llvm::MachineInstr *> loads_{};
   std::set<llvm::MachineInstr *> shadow_loads_{};
-  std::set<llvm::MachineInstr *> frame_address_stores_{};
+  // A zero origin denotes this frame; other origins name incoming pointer regs.
+  std::map<llvm::MachineInstr *, llvm::Register> frame_address_stores_{};
   std::map<llvm::MCSymbol *, llvm::MCSymbol *> shadow_pcrel_symbols_{};
   std::set<llvm::MachineBasicBlock *> exit_bbs_{};
   llvm::MachineBasicBlock *entry_bb_{nullptr};
@@ -294,7 +295,7 @@ protected:
   std::set<llvm::MachineBasicBlock *> nemesis_bbs_{};
   std::set<llvm::MachineInstr *> loadbacks_{};
   std::set<llvm::MachineInstr *> indirect_calls_{};
-  std::map<const llvm::MachineInstr *, RegSetType> stack_address_call_args_{};
+  std::map<const llvm::MachineInstr *, RegMapType> stack_address_call_args_{};
   std::string fname_{};
   bool use_shadow_for_stack_ops_{true};
   int frame_size_{0};
@@ -308,7 +309,9 @@ protected:
   void updateSelectiveCalls();
   void duplicateInstructions();
   void preparePCRelativeAddresses();
-  void checkFrameAddress(llvm::MachineInstr *, llvm::Register);
+  void saveIncomingPointerDeltas(llvm::MachineInstr *);
+  void checkFrameAddress(llvm::MachineInstr *, llvm::Register,
+                         llvm::Register incoming_origin = 0);
   void protectStores();
   void protectLoads();
   void protectCalls();

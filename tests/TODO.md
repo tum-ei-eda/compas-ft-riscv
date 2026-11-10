@@ -6,11 +6,11 @@ Run commands from the repository root after [configuring the tools](README.adoc#
 
 ## Stack-pointer arguments: issue #14
 
-- [ ] Correct EDDI's forwarded pointers into the caller's duplicated stack frame.
 - [ ] Define support for mixed global/local stack-address merges.
 - [ ] Remove stale stack-argument failure allowances after reviewing the passing configurations.
+- [ ] Extend inherited-pointer tracking beyond ordinary register formals and private full-word spills.
 
-In [`stack_args`](regression/stack_args/suite.json) ([issue #14](https://github.com/tum-ei-eda/compas-ft-riscv/issues/14)), EDDI `forwarded` still exits `-512` on RV32/RV64 with both schedules. With CFP disabled it matches an existing `XFAIL`; CFP-enabled runs also fail. EDDI `mixed_pointer` instead reports the unsupported/mixed-address diagnostic at compilation. The CFP-disabled EDDI/SWIFT matrix has 34 stale `XPASS` entries; the original broad scheduling failures are resolved.
+In [`stack_args`](regression/stack_args/suite.json) ([issue #14](https://github.com/tum-ei-eda/compas-ft-riscv/issues/14)), EDDI `mixed_pointer` reports the unsupported/mixed-address diagnostic. Stack-passed/byval pointer formals and inherited-pointer tail calls are explicitly unsupported; pointer returns and reloads from arbitrary memory are not tracked. The CFP-disabled EDDI/SWIFT matrix retains 34 stale `XPASS` entries.
 
 ```sh
 python3 tests/regression/run.py --case 'stack_args/*' \
@@ -46,7 +46,7 @@ Compiler-generated `__riscv_save_*` calls execute before FP setup and can clobbe
 
 - [ ] Correct verifier errors across the regression suites, including `control_flow`, `crc_control_flow`, `call_abi` and `multi_function`.
 
-Observed diagnostics include definitions marked as uses, undefined physical registers, instructions after terminators, missing/unexpected or duplicate CFG edges, missing `mayStore` flags and expected-register-operand errors. DMR and CFP-only CFCSS still expose errors even where functional execution passes. CFP-only RASM/RACFED pass call-ABI verification.
+Observed diagnostics include definitions marked as uses, undefined physical registers, instructions after terminators, missing/unexpected or duplicate CFG edges, missing `mayStore` flags and expected-register-operand errors. Forced-FP pointer callees also expose entry RA checks before frame stores. DMR and CFP-only CFCSS still expose errors even where functional execution passes. CFP-only RASM/RACFED pass call-ABI verification.
 
 Keep the runner's `functional_status` separate from verification: a verifier error makes the overall result `ERROR` even when execution passes. Do not turn these into runtime `XFAIL` allowances.
 

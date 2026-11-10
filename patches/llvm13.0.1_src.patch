@@ -130,10 +130,56 @@ diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp b/llvm/lib/Target/RISC
    const RISCVRegisterInfo *RegInfo =
        MF.getSubtarget<RISCVSubtarget>().getRegisterInfo();
    MachineFrameInfo &MFI = MF.getFrameInfo();
+diff --git a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp b/llvm/lib/Target/RISCV/RISCVISelLowering.cpp
+--- a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp
++++ b/llvm/lib/Target/RISCV/RISCVISelLowering.cpp
+@@ -7685,6 +7685,32 @@
+     analyzeInputArgs(MF, CCInfo, Ins, /*IsRet=*/false,
+                      CallConv == CallingConv::Fast ? CC_RISCV_FastCC
+                                                    : CC_RISCV);
++
++  // Record pointer locations while the calling convention still identifies
++  // each lowered value's original IR argument. Physical argument positions
++  // cannot be inferred from IR indices after wide or hard-float arguments.
++  auto *CompasInfo = MF.getInfo<RISCVMachineFunctionInfo>();
++  for (const CCValAssign &VA : ArgLocs) {
++    const auto &Input = Ins[VA.getValNo()];
++    if (!Input.isOrigArg())
++      continue;
++    const Argument &Arg = *Func.getArg(Input.OrigArgIndex);
++    if (!Arg.getType()->isPointerTy())
++      continue;
++    const bool OrdinaryPointer =
++        CallConv == CallingConv::C && Input.PartOffset == 0 &&
++        !Input.Flags.isByVal() && !Input.Flags.isByRef() &&
++        !Input.Flags.isInAlloca() && VA.isRegLoc() &&
++        VA.getLocInfo() == CCValAssign::Full && VA.getValVT() == XLenVT &&
++        VA.getLocVT() == XLenVT &&
++        DAG.getDataLayout().getPointerSizeInBits(
++            Arg.getType()->getPointerAddressSpace()) == Subtarget.getXLen() &&
++        VA.getLocReg() >= RISCV::X10 && VA.getLocReg() <= RISCV::X17;
++    if (OrdinaryPointer)
++      CompasInfo->addCompasIncomingPointerReg(VA.getLocReg());
++    else
++      CompasInfo->setCompasUnsupportedPointerArgs();
++  }
+
+   for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i) {
+     CCValAssign &VA = ArgLocs[i];
 diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
 --- a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
 +++ b/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
-@@ -25,6 +25,12 @@
+@@ -14,6 +14,9 @@
+ #define LLVM_LIB_TARGET_RISCV_RISCVMACHINEFUNCTIONINFO_H
+
+ #include "RISCVSubtarget.h"
++#include "llvm/ADT/ArrayRef.h"
++#include "llvm/ADT/SmallVector.h"
++#include "llvm/MC/MCRegister.h"
+ #include "llvm/CodeGen/MachineFrameInfo.h"
+ #include "llvm/CodeGen/MachineFunction.h"
+
+@@ -25,6 +28,17 @@
  private:
    /// FrameIndex for start of varargs area
    int VarArgsFrameIndex = 0;
@@ -143,10 +189,15 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/
 +  int CompasDmrCallFrameIndex = 0;
 +  /// Caller shadow SP used by EDDI incoming stack-argument loads.
 +  int CompasIncomingShadowSPFrameIndex = 0;
++  /// Physical locations of ordinary full-width incoming pointer arguments.
++  SmallVector<MCPhysReg, 4> CompasIncomingPointerRegs;
++  /// One XLEN shadow-minus-primary delta per incoming pointer register.
++  int CompasPointerDeltaFrameIndex = 0;
++  bool CompasUnsupportedPointerArgs = false;
    /// Size of the save area used for varargs
    int VarArgsSaveSize = 0;
    /// FrameIndex used for transferring values between 64-bit FPRs and a pair
-@@ -44,6 +50,17 @@
+@@ -44,6 +58,38 @@
 
    int getVarArgsFrameIndex() const { return VarArgsFrameIndex; }
    void setVarArgsFrameIndex(int Index) { VarArgsFrameIndex = Index; }
@@ -160,6 +211,27 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/
 +  }
 +  void setCompasIncomingShadowSPFrameIndex(int Index) {
 +    CompasIncomingShadowSPFrameIndex = Index;
++  }
++  ArrayRef<MCPhysReg> getCompasIncomingPointerRegs() const {
++    return CompasIncomingPointerRegs;
++  }
++  void addCompasIncomingPointerReg(MCPhysReg Reg) {
++    for (MCPhysReg Existing : CompasIncomingPointerRegs)
++      if (Existing == Reg)
++        return;
++    CompasIncomingPointerRegs.push_back(Reg);
++  }
++  int getCompasPointerDeltaFrameIndex() const {
++    return CompasPointerDeltaFrameIndex;
++  }
++  void setCompasPointerDeltaFrameIndex(int Index) {
++    CompasPointerDeltaFrameIndex = Index;
++  }
++  bool hasCompasUnsupportedPointerArgs() const {
++    return CompasUnsupportedPointerArgs;
++  }
++  void setCompasUnsupportedPointerArgs(bool Unsupported = true) {
++    CompasUnsupportedPointerArgs = Unsupported;
 +  }
 
    unsigned getVarArgsSaveSize() const { return VarArgsSaveSize; }
