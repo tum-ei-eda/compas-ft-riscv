@@ -18,6 +18,9 @@
 
 #include <random>
 
+#include "RISCVFrameLowering.h"
+#include "RISCVInstrInfo.h"
+#include "RISCVMachineFunctionInfo.h"
 #include "RISCVSubtarget.h"
 #include "common.h"
 #include "llvm/CodeGen/CommandFlags.h"
@@ -29,6 +32,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 
 #include "MCTargetDesc/RISCVBaseInfo.h"
 
@@ -36,6 +40,158 @@
 // #define DBG
 
 namespace {
+
+bool incomingStackArgumentOffset(const llvm::MachineInstr &MI,
+                                 int64_t &offset) {
+  if (!MI.mayLoad())
+    return false;
+  const auto &frame = MI.getParent()->getParent()->getFrameInfo();
+  bool found = false;
+  for (const auto *memory : MI.memoperands()) {
+    if (!memory->isLoad())
+      continue;
+    const auto *slot =
+        llvm::dyn_cast_or_null<llvm::FixedStackPseudoSourceValue>(
+            memory->getPseudoValue());
+    if (!slot || !frame.isFixedObjectIndex(slot->getFrameIndex()) ||
+        frame.getObjectOffset(slot->getFrameIndex()) < 0)
+      continue;
+    const int64_t argument_offset =
+        frame.getObjectOffset(slot->getFrameIndex()) + memory->getOffset();
+    if (found && offset != argument_offset)
+      llvm::report_fatal_error(
+          "COMPAS: ambiguous incoming stack argument load");
+    offset = argument_offset;
+    found = true;
+  }
+  if (found && (MI.getNumExplicitOperands() != 3 || !MI.getOperand(0).isReg() ||
+                !MI.getOperand(0).isDef() || !MI.getOperand(1).isReg() ||
+                !MI.getOperand(2).isImm() || MI.mayStore()))
+    llvm::report_fatal_error(
+        "COMPAS: unsupported incoming stack argument load");
+  return found;
+}
+
+// Called after duplication so these address helpers are not duplicated again.
+void rewriteIncomingStackArguments(
+    llvm::MachineFunction &MF,
+    const std::map<llvm::MachineInstr *, llvm::MachineInstr *> &loads,
+    int64_t frame_size, llvm::MachineInstr &primary_sp,
+    llvm::MachineInstr &shadow_sp, llvm::Register shadow_zero,
+    llvm::Register shadow_stack, llvm::Register shadow_frame) {
+  if (loads.empty())
+    return;
+
+  const auto &subtarget = MF.getSubtarget<llvm::RISCVSubtarget>();
+  const auto *tii = subtarget.getInstrInfo();
+  const auto *info = MF.getInfo<llvm::RISCVMachineFunctionInfo>();
+  const auto &frame = MF.getFrameInfo();
+  const int snapshot = info->getCompasIncomingShadowSPFrameIndex();
+  if (snapshot >= 0)
+    llvm::report_fatal_error(
+        "COMPAS: incoming shadow SP slot was not prepared");
+  llvm::Register frame_reg;
+  const auto snapshot_offset =
+      subtarget.getFrameLowering()->getFrameIndexReference(MF, snapshot,
+                                                           frame_reg);
+  if (snapshot_offset.getScalable() || frame_reg != riscv_common::kFP)
+    llvm::report_fatal_error(
+        "COMPAS: incoming stack arguments require stable FP");
+  const riscv_common::ISAConfig isa_config{MF};
+  auto snapshot_memory = [&](bool load) {
+    return MF.getMachineMemOperand(
+        llvm::MachinePointerInfo::getFixedStack(MF, snapshot),
+        load ? llvm::MachineMemOperand::MOLoad
+             : llvm::MachineMemOperand::MOStore,
+        isa_config.word_length, llvm::Align(isa_config.word_length));
+  };
+  auto reset_scratch = [&](llvm::MachineInstr &MI) {
+    llvm::BuildMI(*MI.getParent(), std::next(MI.getIterator()),
+                  MI.getDebugLoc(), tii->get(llvm::RISCV::ADDI), shadow_zero)
+        .addReg(riscv_common::k0)
+        .addImm(0);
+  };
+  auto address = [&](llvm::MachineInstr &MI, llvm::Register base,
+                     int64_t offset) {
+    if (llvm::isInt<12>(offset))
+      return std::make_pair(base, offset);
+    // LLVM13's movImm can allocate virtual intermediates, which is too late
+    // after RA. Keep one physical scratch and leave an encodable load offset.
+    do {
+      const int64_t step = offset > 0 ? 2047 : -2048;
+      llvm::BuildMI(*MI.getParent(), MI.getIterator(), MI.getDebugLoc(),
+                    tii->get(llvm::RISCV::ADDI), shadow_zero)
+          .addReg(base)
+          .addImm(step);
+      base = shadow_zero;
+      offset -= step;
+    } while (!llvm::isInt<12>(offset));
+    return std::make_pair(shadow_zero, offset);
+  };
+
+  // At entry, P and S identify the caller's two outgoing argument banks.
+  // EDDI changes SP to P-2F and shadow SP to P-F. Save S between these two
+  // adjustments, before the live shadow SP starts addressing this frame.
+  const int64_t store_offset = frame_size + frame.getObjectOffset(snapshot);
+  if (!llvm::isInt<12>(store_offset))
+    llvm::report_fatal_error(
+        "COMPAS: unsupported incoming shadow SP slot offset");
+  llvm::BuildMI(*primary_sp.getParent(), shadow_sp.getIterator(),
+                primary_sp.getDebugLoc(), tii->get(isa_config.store_opcode))
+      .addReg(shadow_stack)
+      .addReg(riscv_common::kSP)
+      .addImm(store_offset)
+      .addMemOperand(snapshot_memory(false))
+      .setMIFlag(llvm::MachineInstr::FrameSetup);
+
+  for (const auto &pair : loads) {
+    auto &primary = *pair.first;
+    auto &shadow = *pair.second;
+    int64_t argument_offset = 0;
+    if (!incomingStackArgumentOffset(primary, argument_offset))
+      llvm::report_fatal_error(
+          "COMPAS: incoming stack argument lost its object");
+
+    // The ordinary prologue sets primary FP to P-F-VarArgsSaveSize.
+    // Rebuild from the formal object's entry-SP offset, regardless of the
+    // SP/FP/materialized base selected by LLVM before EDDI doubled the frame.
+    const auto primary_address =
+        address(primary, riscv_common::kFP,
+                frame_size + info->getVarArgsSaveSize() + argument_offset);
+    primary.getOperand(1).setReg(primary_address.first);
+    primary.getOperand(1).setIsKill(false);
+    primary.getOperand(1).setIsUndef(false);
+    primary.getOperand(2).setImm(primary_address.second);
+    if (primary_address.first == shadow_zero)
+      reset_scratch(primary);
+
+    // In CGS the primary epilogue can restore FP before this shadow load.
+    // Shadow FP is still live here and is F above the primary frame base.
+    const auto saved_address =
+        address(shadow, shadow_frame, snapshot_offset.getFixed() - frame_size);
+    llvm::BuildMI(*shadow.getParent(), shadow.getIterator(),
+                  shadow.getDebugLoc(), tii->get(isa_config.load_opcode),
+                  shadow_zero)
+        .addReg(saved_address.first)
+        .addImm(saved_address.second)
+        .addMemOperand(snapshot_memory(true));
+    const auto shadow_address = address(shadow, shadow_zero, argument_offset);
+    shadow.getOperand(1).setReg(shadow_address.first);
+    shadow.getOperand(1).setIsKill(false);
+    shadow.getOperand(1).setIsUndef(false);
+    shadow.getOperand(2).setImm(shadow_address.second);
+    // S may name the protected caller's separate bank. Do not retain the
+    // original MMO's assertion that this load aliases the primary argument.
+    llvm::SmallVector<llvm::MachineMemOperand *, 1> memory;
+    for (const auto *old : shadow.memoperands())
+      memory.push_back(MF.getMachineMemOperand(
+          llvm::MachinePointerInfo(), old->getFlags(), old->getSize(),
+          old->getAlign(), llvm::AAMDNodes(), nullptr, old->getSyncScopeID(),
+          old->getSuccessOrdering(), old->getFailureOrdering()));
+    shadow.setMemRefs(MF, memory);
+    reset_scratch(shadow);
+  }
+}
 
 bool savesIncomingFramePointer(const llvm::MachineInstr &MI,
                                unsigned store_opcode) {
@@ -673,6 +829,62 @@ void RISCVDmr::preparePCRelativeAddresses() {
 
 void RISCVDmr::duplicateInstructions() {
   preparePCRelativeAddresses();
+  std::map<llvm::MachineInstr *, llvm::MachineInstr *> incoming_stack_loads;
+  if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_)) {
+    for (auto &MBB : *MF_)
+      for (auto &MI : MBB) {
+        int64_t offset = 0;
+        if (incomingStackArgumentOffset(MI, offset))
+          incoming_stack_loads.emplace(&MI, nullptr);
+      }
+    if (!incoming_stack_loads.empty()) {
+      // The existing EDDI frame expansion supports one fixed allocation.
+      // Reject other prologues explicitly rather than reconstructing entry
+      // addresses from a partial/split allocation or a save/restore libcall.
+      const auto *info = MF_->getInfo<llvm::RISCVMachineFunctionInfo>();
+      unsigned allocations = 0, frame_pointers = 0;
+      bool supported = frame_size_ > 0 && llvm::isInt<12>(-2 * frame_size_) &&
+                       MF_->getFrameInfo().getStackSize() ==
+                           static_cast<uint64_t>(frame_size_) &&
+                       MF_->getFrameInfo().getOffsetAdjustment() == 0 &&
+                       !info->useSaveRestoreLibCalls(*MF_);
+      for (const auto &MI : *entry_bb_) {
+        if (!MI.getFlag(llvm::MachineInstr::FrameSetup) ||
+            MI.isCFIInstruction() || !MI.getNumOperands() ||
+            !MI.getOperand(0).isReg() || !MI.getOperand(0).isDef())
+          continue;
+        const auto destination = MI.getOperand(0).getReg();
+        if (destination != riscv_common::kSP &&
+            destination != riscv_common::kFP)
+          continue;
+        supported &= MI.getOpcode() == llvm::RISCV::ADDI &&
+                     MI.getNumOperands() >= 3 && MI.getOperand(1).isReg() &&
+                     MI.getOperand(1).getReg() == riscv_common::kSP &&
+                     MI.getOperand(2).isImm();
+        if (!supported)
+          break;
+        if (destination == riscv_common::kSP) {
+          ++allocations;
+          supported &= MI.getOperand(2).getImm() == -frame_size_;
+        } else {
+          ++frame_pointers;
+          supported &=
+              MI.getOperand(2).getImm() ==
+              frame_size_ - static_cast<int64_t>(info->getVarArgsSaveSize());
+        }
+      }
+      if (!supported || allocations != 1 || frame_pointers != 1)
+        llvm::report_fatal_error("COMPAS: incoming EDDI stack arguments "
+                                 "require a single fixed frame");
+    }
+  }
+  auto shadow_instruction = [&](llvm::MachineInstr &MI) {
+    auto *shadow = genShadowFromPrimary(&MI);
+    auto incoming = incoming_stack_loads.find(&MI);
+    if (incoming != incoming_stack_loads.end())
+      incoming->second = shadow;
+    return shadow;
+  };
   if (config_.is == InstructionSchedule::CGS) {
     for (auto &MBB : *MF_) {
       if (err_bb_ == &MBB) {
@@ -697,7 +909,7 @@ void RISCVDmr::duplicateInstructions() {
           shadow_block.clear();
           terminator_reached = false;
         } else {
-          shadow_block.emplace_back(genShadowFromPrimary(&MI));
+          shadow_block.emplace_back(shadow_instruction(MI));
 
           if (MI.mayLoad()) {
             shadow_loads_.emplace(shadow_block.back());
@@ -729,7 +941,7 @@ void RISCVDmr::duplicateInstructions() {
           // SWIFT uses one checked load followed by a copy, in either schedule.
           continue;
         } else {
-          MBB.insert(&MI, genShadowFromPrimary(&MI));
+          MBB.insert(&MI, shadow_instruction(MI));
         }
       }
     }
@@ -788,6 +1000,19 @@ void RISCVDmr::duplicateInstructions() {
       // allocation is special: the shadow must use the newly doubled stack.
       shadow_sp->removeFromParent();
       entry_bb_->insert(std::next(primary_sp->getIterator()), shadow_sp);
+    }
+    if (!incoming_stack_loads.empty()) {
+      if (!primary_sp || !shadow_sp)
+        llvm::report_fatal_error(
+            "COMPAS: incoming argument frame setup is missing");
+      for (const auto &pair : incoming_stack_loads)
+        if (!pair.second)
+          llvm::report_fatal_error(
+              "COMPAS: incoming stack argument was not duplicated");
+      rewriteIncomingStackArguments(
+          *MF_, incoming_stack_loads, frame_size_, *primary_sp, *shadow_sp,
+          P2S_.at(riscv_common::k0), P2S_.at(riscv_common::kSP),
+          P2S_.at(riscv_common::kFP));
     }
     // epilogue
     for (auto exit_BB : exit_bbs_) {

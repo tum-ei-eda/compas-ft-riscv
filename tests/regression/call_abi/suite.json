@@ -45,6 +45,12 @@
       "functions": ["abi_stack_arguments"]
     },
     {
+      "name": "ten_integer_arguments_callee_only_frame_pointer",
+      "defines": ["TEST_CASE=4"],
+      "frame_pointer": true,
+      "functions": ["abi_ten_args"]
+    },
+    {
       "name": "wide_live_values",
       "defines": ["TEST_CASE=5"],
       "functions": ["abi_wide_caller", "abi_wide_leaf"]
@@ -90,6 +96,18 @@
     {
       "name": "nested_stack_arguments_callee_only",
       "defines": ["TEST_CASE=8"],
+      "functions": ["abi_ten_arg_middle", "abi_ten_args"]
+    },
+    {
+      "name": "nested_stack_arguments_frame_pointer",
+      "defines": ["TEST_CASE=8"],
+      "frame_pointer": true,
+      "functions": ["abi_nested_stack_arguments", "abi_ten_arg_middle", "abi_ten_args"]
+    },
+    {
+      "name": "nested_stack_arguments_callee_only_frame_pointer",
+      "defines": ["TEST_CASE=8"],
+      "frame_pointer": true,
       "functions": ["abi_ten_arg_middle", "abi_ten_args"]
     },
     {

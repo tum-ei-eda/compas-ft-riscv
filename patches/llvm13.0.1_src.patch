@@ -133,7 +133,7 @@ diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp b/llvm/lib/Target/RISC
 diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
 --- a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
 +++ b/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
-@@ -25,6 +25,10 @@
+@@ -25,6 +25,12 @@
  private:
    /// FrameIndex for start of varargs area
    int VarArgsFrameIndex = 0;
@@ -141,10 +141,12 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/
 +  int CompasSignatureFrameIndex = 0;
 +  /// Fixed slot for ordinary selective DMR call preservation.
 +  int CompasDmrCallFrameIndex = 0;
++  /// Caller shadow SP used by EDDI incoming stack-argument loads.
++  int CompasIncomingShadowSPFrameIndex = 0;
    /// Size of the save area used for varargs
    int VarArgsSaveSize = 0;
    /// FrameIndex used for transferring values between 64-bit FPRs and a pair
-@@ -44,6 +48,11 @@
+@@ -44,6 +50,17 @@
 
    int getVarArgsFrameIndex() const { return VarArgsFrameIndex; }
    void setVarArgsFrameIndex(int Index) { VarArgsFrameIndex = Index; }
@@ -153,6 +155,12 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/
 +  void setCompasSignatureFrameIndex(int Index) { CompasSignatureFrameIndex = Index; }
 +  int getCompasDmrCallFrameIndex() const { return CompasDmrCallFrameIndex; }
 +  void setCompasDmrCallFrameIndex(int Index) { CompasDmrCallFrameIndex = Index; }
++  int getCompasIncomingShadowSPFrameIndex() const {
++    return CompasIncomingShadowSPFrameIndex;
++  }
++  void setCompasIncomingShadowSPFrameIndex(int Index) {
++    CompasIncomingShadowSPFrameIndex = Index;
++  }
 
    unsigned getVarArgsSaveSize() const { return VarArgsSaveSize; }
    void setVarArgsSaveSize(int Size) { VarArgsSaveSize = Size; }

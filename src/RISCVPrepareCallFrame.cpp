@@ -21,6 +21,8 @@
 #include "common.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/MachineMemOperand.h"
+#include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
@@ -63,6 +65,32 @@ bool needs_dmr_frame(const llvm::MachineFunction &MF) {
   return false;
 }
 
+bool needs_incoming_shadow_sp(const llvm::MachineFunction &MF) {
+  if (!riscv_common::inCSString(llvm::cl::enable_eddi,
+                                std::string{MF.getName()}))
+    return false;
+
+  const auto &frame = MF.getFrameInfo();
+  for (const auto &MBB : MF)
+    for (const auto &MI : MBB) {
+      if (!MI.mayLoad())
+        continue;
+      for (const auto *memory : MI.memoperands()) {
+        if (!memory->isLoad())
+          continue;
+        const auto *slot =
+            llvm::dyn_cast_or_null<llvm::FixedStackPseudoSourceValue>(
+                memory->getPseudoValue());
+        // Formal stack arguments live at or above incoming SP. Negative
+        // fixed objects also include register-varargs saves and CSI slots.
+        if (slot && frame.isFixedObjectIndex(slot->getFrameIndex()) &&
+            frame.getObjectOffset(slot->getFrameIndex()) >= 0)
+          return true;
+      }
+    }
+  return false;
+}
+
 unsigned dmr_frame_size(const llvm::MachineFunction &MF) {
   const auto &subtarget = MF.getSubtarget<llvm::RISCVSubtarget>();
   const unsigned word_size = subtarget.is64Bit() ? 8 : 4;
@@ -89,13 +117,15 @@ public:
   }
 
   bool runOnMachineFunction(llvm::MachineFunction &MF) override {
-    if (!needs_signature_frame(MF) && !needs_dmr_frame(MF))
+    if (!needs_signature_frame(MF) && !needs_dmr_frame(MF) &&
+        !needs_incoming_shadow_sp(MF))
       return false;
     auto &frame = MF.getFrameInfo();
     if (frame.isFrameAddressTaken())
       return false;
-    // Reserve a stable base before register allocation. Both signature state
-    // and selective DMR call context receive fixed slots after CSI assignment.
+    // Reserve a stable base before register allocation. Signature state,
+    // selective-call context and EDDI's incoming shadow SP receive fixed
+    // slots after CSI assignment.
     frame.setFrameAddressIsTaken(true);
     return true;
   }
@@ -120,7 +150,10 @@ void llvm::reserveRISCVCompasCallFrame(llvm::MachineFunction &MF) {
       info->getCompasSignatureFrameIndex() >= 0 && needs_signature_frame(MF);
   const bool dmr_frame =
       info->getCompasDmrCallFrameIndex() >= 0 && needs_dmr_frame(MF);
-  if (!signature_frame && !dmr_frame)
+  const bool incoming_shadow_sp =
+      info->getCompasIncomingShadowSPFrameIndex() >= 0 &&
+      needs_incoming_shadow_sp(MF);
+  if (!signature_frame && !dmr_frame && !incoming_shadow_sp)
     return;
 
   auto &frame = MF.getFrameInfo();
@@ -162,4 +195,8 @@ void llvm::reserveRISCVCompasCallFrame(llvm::MachineFunction &MF) {
             : word_size;
     info->setCompasDmrCallFrameIndex(reserve(dmr_frame_size(MF), alignment));
   }
+  if (incoming_shadow_sp)
+    // Keep the caller's argument bank distinct from this callee's shadow
+    // frame, even when nested calls overwrite the live shadow SP.
+    info->setCompasIncomingShadowSPFrameIndex(reserve(word_size, word_size));
 }
