@@ -18,6 +18,12 @@ NOINLINE double fp_double_leaf(double first, double second);
 NOINLINE float fp_mixed_float_leaf(float first, float second, word value);
 #elif TEST_CASE == 4
 NOINLINE double fp_mixed_double_leaf(double first, double second, word value);
+#elif TEST_CASE == 5
+NOINLINE float fp_eight_float_leaf(float first, float second, float third, float fourth,
+                                   float fifth, float sixth, float seventh, float eighth);
+#elif TEST_CASE == 6
+NOINLINE double fp_eight_double_leaf(double first, double second, double third, double fourth,
+                                     double fifth, double sixth, double seventh, double eighth);
 #else
 #error "Unknown hard-float TEST_CASE"
 #endif

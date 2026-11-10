@@ -82,19 +82,12 @@ python3 tests/apps/run.py --case 'crc/*' --arch rv64 \
   --build-dir build/tests-todo-crc-llvm13
 ```
 
-## Hard-float calls
+## Floating-point checks
 
-- [ ] Correct FP shadow-register mapping and call/dataflow failures.
-- [ ] Revalidate and correct the previously observed LLVM13 SWIFT comparisons using FP operands in integer branches.
+- [ ] Correct FP equality checks for NaNs and signed zero.
+- [ ] Define protection of architectural FP control/status state.
 
-The latest EDDI checks of the [hard-float suite](regression/hard_float/README.adoc), with all four CFP selections and both schedules, retain:
-
-| Backend | Profiles | Observation |
-| --- | --- | --- |
-| LLVM13 | Four `*_live_*` and two `mixed_*` cases | Target `-512`; both callee-only cases pass. |
-| LLVM16 | All eight ISA/ABI profiles | Backend abort in `genShadowFromPrimary`: `reg not found in P2S_`. |
-
-Earlier all-mode `cgs` runs also found LLVM13 SWIFT assembler/link errors such as `bne fa0,fs8,...`, and NZDC/NEMESIS/NEMESEC runtime exits `-512` in caller/mixed cases. Recheck those selections when fixing the FP paths. Preserve full-width RV32+D saves/restores and the exact-bit oracles, which include nonzero lower binary64 bits.
+The current `FEQ_S`/`FEQ_D` checks reject matching NaNs and accept oppositely signed zeroes. The rounding-mode input (`FRM`) is shared by primary and shadow computations; FP control/status state has no shadow. The [hard-float suite](regression/hard_float/README.adoc) checks finite values against exact-bit oracles, including nonzero lower binary64 bits on RV32. Machine-verifier failures remain tracked above.
 
 ```sh
 python3 tests/regression/run.py --case 'hard_float/*' \

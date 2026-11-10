@@ -41,6 +41,16 @@
 
 namespace {
 
+bool isFullWidthFPRegister(llvm::Register reg,
+                           const llvm::RISCVSubtarget &subtarget) {
+  // Copy and preserve each physical FPR once, using its enabled FLEN rather
+  // than XLEN or the width of one of its overlapping views.
+  if (subtarget.hasStdExtD())
+    return riscv_common::getRegType(reg) == riscv_common::RegType::FD;
+  return subtarget.hasStdExtF() &&
+         riscv_common::getRegType(reg) == riscv_common::RegType::FS;
+}
+
 bool incomingStackArgumentOffset(const llvm::MachineInstr &MI,
                                  int64_t &offset) {
   if (!MI.mayLoad())
@@ -868,6 +878,10 @@ RISCVDmr::genShadowFromPrimary(const llvm::MachineInstr *MI) const {
     si->setPreInstrSymbol(*MF_, symbol->second);
   for (auto &o : si->operands()) {
     if (o.isReg()) {
+      // Both FP computations use the architectural rounding mode. LLVM16
+      // models this shared input explicitly; it has no shadow GPR/FPR.
+      if (o.isImplicit() && o.isUse() && o.getReg() == llvm::RISCV::FRM)
+        continue;
       assert((riscv_common::setmapContains(P2S_, o.getReg())) &&
              "reg not found in P2S_");
       o.setReg(P2S_.at(o.getReg()));
@@ -1241,12 +1255,10 @@ void RISCVDmr::syncFPRegs(llvm::MachineBasicBlock *MBB,
     assert(0 && "unexpected reg operands passed");
   }
 
-  llvm::BuildMI(*MBB, insert, DLL, TII_->get(feq_opcode))
-      .addReg(shadow_zero)
+  llvm::BuildMI(*MBB, insert, DLL, TII_->get(feq_opcode), shadow_zero)
       .addReg(r1)
       .addReg(r2);
-  llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::ADDI))
-      .addReg(shadow_zero)
+  llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::ADDI), shadow_zero)
       .addReg(shadow_zero)
       .addImm(-1);
   llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::BNE))
@@ -1683,18 +1695,15 @@ void RISCVDmr::moveIntoShadow(llvm::MachineBasicBlock *MBB,
   auto DLL{MBB->begin()->getDebugLoc()};
 
   if (riscv_common::getRegType(rp) == riscv_common::RegType::I) {
-    llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::ADDI))
-        .addReg(rs)
+    llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::ADDI), rs)
         .addReg(rp)
         .addImm(0);
   } else if (riscv_common::getRegType(rp) == riscv_common::RegType::FS) {
-    llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::FSGNJ_S))
-        .addReg(rs)
+    llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::FSGNJ_S), rs)
         .addReg(rp)
         .addReg(rp);
   } else if (riscv_common::getRegType(rp) == riscv_common::RegType::FD) {
-    llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::FSGNJ_D))
-        .addReg(rs)
+    llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::FSGNJ_D), rs)
         .addReg(rp)
         .addReg(rp);
   } else if (riscv_common::getRegType(rp) == riscv_common::RegType::FH) {
@@ -1812,11 +1821,10 @@ void RISCVDmr::updateSelectiveCalls() {
           // into their shadows
           for (const auto &regpair : P2S_) {
             if (riscv_common::getRegType(regpair.first) ==
-                riscv_common::RegType::I) {
+                    riscv_common::RegType::I ||
+                isFullWidthFPRegister(
+                    regpair.first, MF_->getSubtarget<llvm::RISCVSubtarget>())) {
               moveIntoShadow(MBB, insert, regpair.first, regpair.second);
-
-            } else {
-              // FIXME: only handle Base Integer Registers for now
             }
           }
 
@@ -1870,6 +1878,12 @@ void RISCVDmr::updateSelectiveCalls() {
               // FIXME: only handle Base Integer Registers for now
             }
           }
+          // Only ABI return values remain meaningful in caller-clobbered
+          // primary FPRs. Use the actual return alias: a binary32 value can
+          // be NaN-boxed in a wider physical register.
+          for (const auto reg : ret_regs)
+            if (riscv_common::getRegType(reg) != riscv_common::RegType::I)
+              syncFPRegs(MBB, insert, reg, P2S_.at(reg));
         }
 
       } else {               // the callee is not a DMR-function
@@ -1898,6 +1912,19 @@ void RISCVDmr::updateSelectiveCalls() {
             if (!riscv_common::setmapContains(callee_saved_regs_, r)) {
               spill_regs.emplace(r);
             }
+          }
+          // The original compiler preserves live primaries across this
+          // ordinary ABI call. Preserve their shadows when the call mask
+          // permits clobbering the physical register's full enabled FLEN.
+          for (const auto &pair : P2S_) {
+            if (!isFullWidthFPRegister(
+                    pair.first, MF_->getSubtarget<llvm::RISCVSubtarget>()))
+              continue;
+            for (const auto &operand : MI->operands())
+              if (operand.isRegMask() && operand.clobbersPhysReg(pair.second)) {
+                spill_regs.emplace(pair.second);
+                break;
+              }
           }
 
           // ret-regs would be changed after func call hence dont need to stack

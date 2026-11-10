@@ -102,13 +102,13 @@ bool needs_pointer_deltas(const llvm::MachineFunction &MF) {
 unsigned dmr_frame_size(const llvm::MachineFunction &MF) {
   const auto &subtarget = MF.getSubtarget<llvm::RISCVSubtarget>();
   const unsigned word_size = subtarget.is64Bit() ? 8 : 4;
-  if (riscv_common::isDmrFunction(std::string{MF.getName()}))
-    // SCC2 saves only the integer caller-clobbered register set. Leave one
-    // additional word in its upper bound without reserving an unused FP bank.
-    return llvm::alignTo(18 * word_size, 16);
-  // SCC1 can preserve sixteen live shadow GPRs and sixteen physical FPRs.
-  // FP aliases consume one slot with the enabled FLEN, matching spill_frame.
-  unsigned size = 16 * word_size;
+  // SCC1 preserves live shadow registers; SCC2 preserves caller-clobbered
+  // shadows around an ordinary ABI call. A narrower ABI can clobber the full
+  // hardware FP view even when it preserves a subregister. Allow sixteen
+  // physical FP slots and deduplicate aliases as spill_frame does.
+  unsigned size =
+      (riscv_common::isDmrFunction(std::string{MF.getName()}) ? 18 : 16) *
+      word_size;
   if (subtarget.hasStdExtF())
     size += 16 * std::max(word_size, subtarget.hasStdExtD() ? 8u : 4u);
   return llvm::alignTo(size, 16);

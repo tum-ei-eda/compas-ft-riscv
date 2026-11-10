@@ -56,6 +56,18 @@
       "architectures": ["rv32"], "isa": "rv32imafd", "abi": "ilp32d",
       "defines": ["TEST_CASE=4"],
       "functions": ["fp_mixed_double_caller", "fp_mixed_double_leaf"]
+    },
+    {
+      "name": "eight_float_rv64",
+      "architectures": ["rv64"], "isa": "rv64imaf", "abi": "lp64f",
+      "defines": ["TEST_CASE=5"],
+      "functions": ["fp_eight_float_caller"]
+    },
+    {
+      "name": "eight_double_rv32",
+      "architectures": ["rv32"], "isa": "rv32imafd", "abi": "ilp32d",
+      "defines": ["TEST_CASE=6"],
+      "functions": ["fp_eight_double_caller"]
     }
   ]
 }
