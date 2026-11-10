@@ -1272,7 +1272,14 @@ void RISCVDmr::updateSelectiveCalls() {
           std::vector<llvm::Register> sregs(spill_regs.begin(),
                                             spill_regs.end());
           auto insert = call_iter;
-          riscv_common::saveRegs(sregs, MBB, insert);
+          // Outgoing stack arguments already occupy their ABI offsets here.
+          // A returning call must preserve the caller without moving SP.
+          // Late tail conversion still needs its legacy post-epilogue path.
+          const bool fixed_call_frame = !TII_->isTailCall(*MI);
+          if (fixed_call_frame)
+            riscv_common::saveCallRegs(sregs, MBB, insert);
+          else
+            riscv_common::saveRegs(sregs, MBB, insert);
           // insert the default duplication segment, i.e., move all primaries
           // into their shadows
           for (const auto &regpair : P2S_) {
@@ -1295,7 +1302,10 @@ void RISCVDmr::updateSelectiveCalls() {
           }
           insert = MI->getIterator();
           ++insert;
-          riscv_common::loadRegs(sregs, MBB, insert);
+          if (fixed_call_frame)
+            riscv_common::loadCallRegs(sregs, MBB, insert);
+          else
+            riscv_common::loadRegs(sregs, MBB, insert);
 
           insert = MI->getIterator();
           ++insert;
@@ -1371,7 +1381,10 @@ void RISCVDmr::updateSelectiveCalls() {
           std::vector<llvm::Register> sregs(spill_regs.begin(),
                                             spill_regs.end());
 
-          if (use_shadow_for_stack_ops_) {
+          const bool fixed_call_frame = !TII_->isTailCall(*MI);
+          if (fixed_call_frame) {
+            riscv_common::saveCallRegs(sregs, MBB, MI->getIterator());
+          } else if (use_shadow_for_stack_ops_) {
             riscv_common::saveRegs(sregs, MBB, MI->getIterator(),
                                    P2S_.at(riscv_common::kSP));
 
@@ -1401,7 +1414,9 @@ void RISCVDmr::updateSelectiveCalls() {
           }
           insert = MI->getIterator();
           ++insert;
-          if (use_shadow_for_stack_ops_) {
+          if (fixed_call_frame) {
+            riscv_common::loadCallRegs(sregs, MBB, insert);
+          } else if (use_shadow_for_stack_ops_) {
             riscv_common::loadRegs(sregs, MBB, insert,
                                    P2S_.at(riscv_common::kSP));
           } else {

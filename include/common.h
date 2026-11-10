@@ -57,6 +57,7 @@ const unsigned kTP{llvm::RISCV::X4};
 const unsigned kFP{llvm::RISCV::X8};
 
 RegType getRegType(llvm::Register);
+bool isDmrFunction(const std::string &name);
 // Runtime control-flow state owned by the selected signature scheme.
 std::vector<llvm::Register> signatureRegisters(const llvm::MachineFunction &MF);
 // Preserve actual signature state in the preallocated fixed frame, without
@@ -64,6 +65,12 @@ std::vector<llvm::Register> signatureRegisters(const llvm::MachineFunction &MF);
 void preserveSignatureAcrossCall(llvm::MachineInstr *call,
                                  const std::vector<llvm::Register> &regs,
                                  llvm::Register scratch);
+// Preserve selective-call context in a preallocated fixed frame. These helpers
+// leave both stack pointers unchanged at the call boundary.
+void saveCallRegs(const std::vector<llvm::Register> &, llvm::MachineBasicBlock *,
+                  llvm::MachineBasicBlock::iterator);
+void loadCallRegs(const std::vector<llvm::Register> &, llvm::MachineBasicBlock *,
+                  llvm::MachineBasicBlock::iterator);
 // save registers in the vector one by one onto the stack and do this
 // at the instruction point pointed to by iterator
 void saveRegs(std::vector<llvm::Register>, llvm::MachineBasicBlock*,
