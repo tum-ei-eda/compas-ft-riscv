@@ -26,6 +26,7 @@
 #include "RISCVSubtarget.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
 namespace {
@@ -103,6 +104,14 @@ SpillFrame spill_frame(const std::vector<llvm::Register> &regs,
 }
 
 } // namespace
+
+bool riscv_common::isDmrFunction(const std::string &name) {
+  return inCSString(llvm::cl::enable_eddi, name) ||
+         inCSString(llvm::cl::enable_swift, name) ||
+         inCSString(llvm::cl::enable_nzdc, name) ||
+         inCSString(llvm::cl::enable_nzdc_nemesis, name) ||
+         inCSString(llvm::cl::enable_nzdc_nemesec, name);
+}
 
 bool riscv_common::inCSString(std::string cs_string, std::string x) {
   std::istringstream iss{cs_string};
@@ -251,6 +260,132 @@ void riscv_common::preserveSignatureAcrossCall(
   };
   preserve(call->getIterator(), false);
   preserve(std::next(call->getIterator()), true);
+}
+
+namespace {
+
+void access_call_regs(const std::vector<llvm::Register> &regs,
+                      llvm::MachineBasicBlock *MBB,
+                      llvm::MachineBasicBlock::iterator insert, bool restore) {
+  if (regs.empty())
+    return;
+
+  auto &MF = *MBB->getParent();
+  const int frame_index = MF.getInfo<llvm::RISCVMachineFunctionInfo>()
+                              ->getCompasDmrCallFrameIndex();
+  if (frame_index >= 0)
+    llvm::report_fatal_error("COMPAS: DMR call frame was not prepared");
+  const auto frame = spill_frame(regs, MF);
+  if (frame.size > MF.getFrameInfo().getObjectSize(frame_index))
+    llvm::report_fatal_error("COMPAS: DMR call frame is too small");
+
+  const auto &subtarget = MF.getSubtarget<llvm::RISCVSubtarget>();
+  const auto *tii = subtarget.getInstrInfo();
+  const auto DL = MBB->front().getDebugLoc();
+  const riscv_common::ISAConfig isa_config{MF};
+  llvm::Register frame_reg;
+  const auto offset = subtarget.getFrameLowering()->getFrameIndexReference(
+      MF, frame_index, frame_reg);
+  if (offset.getScalable() || frame_reg != riscv_common::kFP)
+    llvm::report_fatal_error("COMPAS: DMR call frame requires a stable FP");
+  const int64_t displacement = offset.getFixed();
+  const bool large_offset =
+      !llvm::isInt<12>(displacement) ||
+      !llvm::isInt<12>(displacement + frame.slots.back().offset);
+
+  auto access = [&](const SpillSlot &slot, llvm::Register value,
+                    llvm::Register base, int64_t base_offset) {
+    const unsigned memory_width =
+        riscv_common::getRegType(slot.reg) == riscv_common::RegType::FS
+            ? 4
+            : slot.width;
+    auto *memory = MF.getMachineMemOperand(
+        llvm::MachinePointerInfo::getFixedStack(MF, frame_index, slot.offset),
+        restore ? llvm::MachineMemOperand::MOLoad
+                : llvm::MachineMemOperand::MOStore,
+        memory_width, llvm::Align(memory_width));
+    llvm::BuildMI(*MBB, insert, DL,
+                  tii->get(restore ? slot.load_opcode : slot.store_opcode))
+        .addReg(value, restore ? llvm::RegState::Define : 0)
+        .addReg(base)
+        .addImm(base_offset + slot.offset)
+        .addMemOperand(memory);
+  };
+  if (!large_offset) {
+    for (const auto &slot : frame.slots)
+      access(slot, slot.reg, frame_reg, displacement);
+    return;
+  }
+
+  // Normally fixed objects remain close to FP even in large or realigned
+  // frames. An unusually large existing fixed area can still require address
+  // materialization. Borrow registers that none of the signature passes own,
+  // preserving their values and restoring SP before the actual call.
+  const llvm::Register address{llvm::RISCV::X27};
+  const llvm::Register buffer{llvm::RISCV::X7};
+  const std::vector<llvm::Register> temporaries{address, buffer};
+  const auto temporary_frame = spill_frame(temporaries, MF);
+  riscv_common::saveRegs(temporaries, MBB, insert);
+  tii->movImm(*MBB, insert, DL, address, displacement);
+  llvm::BuildMI(*MBB, insert, DL, tii->get(llvm::RISCV::ADD), address)
+      .addReg(frame_reg)
+      .addReg(address);
+
+  auto reload_temporary = [&](llvm::Register value, unsigned index) {
+    llvm::BuildMI(*MBB, insert, DL, tii->get(isa_config.load_opcode), value)
+        .addReg(riscv_common::kSP)
+        .addImm(temporary_frame.slots[index].offset);
+  };
+  if (!restore) {
+    for (const auto &slot : frame.slots) {
+      llvm::Register value = slot.reg;
+      if (value == address || value == buffer) {
+        reload_temporary(buffer, value == address ? 0 : 1);
+        value = buffer;
+      }
+      access(slot, value, address, 0);
+    }
+    riscv_common::loadRegs(temporaries, MBB, insert);
+    return;
+  }
+
+  bool restore_address = false, restore_buffer = false;
+  for (const auto &slot : frame.slots) {
+    if (slot.reg == address) {
+      restore_address = true;
+      continue; // Reload the address register after its final use.
+    }
+    restore_buffer |= slot.reg == buffer;
+    access(slot, slot.reg, address, 0);
+  }
+  if (!restore_buffer)
+    reload_temporary(buffer, 1);
+  if (restore_address) {
+    const auto slot = std::find_if(
+        frame.slots.begin(), frame.slots.end(),
+        [&](const SpillSlot &saved) { return saved.reg == address; });
+    access(*slot, address, address, 0);
+  } else {
+    reload_temporary(address, 0);
+  }
+  llvm::BuildMI(*MBB, insert, DL, tii->get(llvm::RISCV::ADDI),
+                riscv_common::kSP)
+      .addReg(riscv_common::kSP)
+      .addImm(temporary_frame.size);
+}
+
+} // namespace
+
+void riscv_common::saveCallRegs(const std::vector<llvm::Register> &regs,
+                                llvm::MachineBasicBlock *MBB,
+                                llvm::MachineBasicBlock::iterator insert) {
+  access_call_regs(regs, MBB, insert, false);
+}
+
+void riscv_common::loadCallRegs(const std::vector<llvm::Register> &regs,
+                                llvm::MachineBasicBlock *MBB,
+                                llvm::MachineBasicBlock::iterator insert) {
+  access_call_regs(regs, MBB, insert, true);
 }
 
 void riscv_common::saveRegs(std::vector<llvm::Register> regs,

@@ -15,6 +15,7 @@
  */
 
 #include "RISCV.h"
+#include "RISCVInstrInfo.h"
 #include "RISCVMachineFunctionInfo.h"
 #include "RISCVSubtarget.h"
 #include "common.h"
@@ -26,7 +27,7 @@
 
 namespace {
 
-bool needs_call_frame(const llvm::MachineFunction &MF) {
+bool needs_signature_frame(const llvm::MachineFunction &MF) {
   if (riscv_common::signatureRegisters(MF).empty())
     return false;
 
@@ -37,6 +38,44 @@ bool needs_call_frame(const llvm::MachineFunction &MF) {
       if (MI.isCall() && !MI.getFlag(llvm::MachineInstr::FrameSetup))
         return true;
   return false;
+}
+
+bool needs_dmr_frame(const llvm::MachineFunction &MF) {
+  const bool caller_dmr =
+      riscv_common::isDmrFunction(std::string{MF.getName()});
+  const auto *tii = MF.getSubtarget<llvm::RISCVSubtarget>().getInstrInfo();
+  for (const auto &MBB : MF)
+    for (const auto &MI : MBB) {
+      // Late tail conversion runs after the original epilogue has restored FP.
+      // Keep those wrappers on their existing path until conversion is moved.
+      if (!MI.isCall() || MI.getFlag(llvm::MachineInstr::FrameSetup) ||
+          tii->isTailCall(MI) || !MI.getNumOperands())
+        continue;
+      const auto &callee = MI.getOperand(0);
+      if (!callee.isGlobal() && !callee.isSymbol())
+        continue;
+      const std::string callee_name =
+          callee.isGlobal() ? std::string{callee.getGlobal()->getName()}
+                            : std::string{callee.getSymbolName()};
+      if (caller_dmr != riscv_common::isDmrFunction(callee_name))
+        return true;
+    }
+  return false;
+}
+
+unsigned dmr_frame_size(const llvm::MachineFunction &MF) {
+  const auto &subtarget = MF.getSubtarget<llvm::RISCVSubtarget>();
+  const unsigned word_size = subtarget.is64Bit() ? 8 : 4;
+  if (riscv_common::isDmrFunction(std::string{MF.getName()}))
+    // SCC2 saves only the integer caller-clobbered register set. Leave one
+    // additional word in its upper bound without reserving an unused FP bank.
+    return llvm::alignTo(18 * word_size, 16);
+  // SCC1 can preserve sixteen live shadow GPRs and sixteen physical FPRs.
+  // FP aliases consume one slot with the enabled FLEN, matching spill_frame.
+  unsigned size = 16 * word_size;
+  if (subtarget.hasStdExtF())
+    size += 16 * std::max(word_size, subtarget.hasStdExtD() ? 8u : 4u);
+  return llvm::alignTo(size, 16);
 }
 
 class RISCVPrepareCallFrame : public llvm::MachineFunctionPass {
@@ -50,13 +89,13 @@ public:
   }
 
   bool runOnMachineFunction(llvm::MachineFunction &MF) override {
-    if (!needs_call_frame(MF))
+    if (!needs_signature_frame(MF) && !needs_dmr_frame(MF))
       return false;
     auto &frame = MF.getFrameInfo();
     if (frame.isFrameAddressTaken())
       return false;
-    // Late DMR instrumentation can move SP around calls. Reserve FP before
-    // register allocation; its fixed slot is allocated after CSI assignment.
+    // Reserve a stable base before register allocation. Both signature state
+    // and selective DMR call context receive fixed slots after CSI assignment.
     frame.setFrameAddressIsTaken(true);
     return true;
   }
@@ -77,16 +116,16 @@ llvm::FunctionPass *llvm::createRISCVPrepareCallFrame() {
 
 void llvm::reserveRISCVCompasCallFrame(llvm::MachineFunction &MF) {
   auto *info = MF.getInfo<llvm::RISCVMachineFunctionInfo>();
-  if (info->getCompasSignatureFrameIndex() < 0 || !needs_call_frame(MF))
+  const bool signature_frame =
+      info->getCompasSignatureFrameIndex() >= 0 && needs_signature_frame(MF);
+  const bool dmr_frame =
+      info->getCompasDmrCallFrameIndex() >= 0 && needs_dmr_frame(MF);
+  if (!signature_frame && !dmr_frame)
     return;
 
   auto &frame = MF.getFrameInfo();
   const unsigned word_size =
       MF.getSubtarget<llvm::RISCVSubtarget>().is64Bit() ? 8 : 4;
-  // CFCSS propagates both the runtime signature G and the adjustment D. RASM
-  // and RACFED need only their single runtime-signature register preserved.
-  const unsigned slot_size =
-      word_size * riscv_common::signatureRegisters(MF).size();
   uint64_t reserved = 0;
   for (int index = frame.getObjectIndexBegin(); index < 0; ++index) {
     const int64_t offset = frame.getObjectOffset(index);
@@ -99,15 +138,28 @@ void llvm::reserveRISCVCompasCallFrame(llvm::MachineFunction &MF) {
     uint64_t libcall_bytes = 0;
     for (const auto &saved : frame.getCalleeSavedInfo())
       if (saved.getFrameIdx() < 0)
-        libcall_bytes = std::max(
-            libcall_bytes,
-            static_cast<uint64_t>(-saved.getFrameIdx()) * word_size);
+        libcall_bytes =
+            std::max(libcall_bytes,
+                     static_cast<uint64_t>(-saved.getFrameIdx()) * word_size);
     reserved = std::max(reserved, llvm::alignTo(libcall_bytes, 16));
   }
   // Fixed objects remain FP-relative even when a realigned frame would address
   // ordinary local objects through SP. PEI includes this area in its layout.
-  const int64_t offset =
-      -static_cast<int64_t>(llvm::alignTo(reserved + slot_size, word_size));
-  info->setCompasSignatureFrameIndex(
-      frame.CreateFixedObject(slot_size, offset, false));
+  auto reserve = [&](unsigned slot_size, unsigned alignment) {
+    reserved = llvm::alignTo(reserved + slot_size, alignment);
+    return frame.CreateFixedObject(slot_size, -static_cast<int64_t>(reserved),
+                                   false);
+  };
+  if (signature_frame)
+    // CFCSS propagates both G and D; RASM/RACFED preserve one XLEN word.
+    info->setCompasSignatureFrameIndex(
+        reserve(word_size * riscv_common::signatureRegisters(MF).size(),
+                word_size));
+  if (dmr_frame) {
+    const unsigned alignment =
+        MF.getSubtarget<llvm::RISCVSubtarget>().hasStdExtD()
+            ? std::max(word_size, 8u)
+            : word_size;
+    info->setCompasDmrCallFrameIndex(reserve(dmr_frame_size(MF), alignment));
+  }
 }
