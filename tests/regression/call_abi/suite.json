@@ -40,6 +40,11 @@
       "functions": ["abi_stack_arguments", "abi_ten_args"]
     },
     {
+      "name": "ten_integer_arguments_caller_only",
+      "defines": ["TEST_CASE=4"],
+      "functions": ["abi_stack_arguments"]
+    },
+    {
       "name": "wide_live_values",
       "defines": ["TEST_CASE=5"],
       "functions": ["abi_wide_caller", "abi_wide_leaf"]
@@ -83,9 +88,19 @@
       "functions": ["abi_nested_stack_arguments"]
     },
     {
+      "name": "nested_stack_arguments_callee_only",
+      "defines": ["TEST_CASE=8"],
+      "functions": ["abi_ten_arg_middle", "abi_ten_args"]
+    },
+    {
       "name": "dynamic_stack_arguments",
       "defines": ["TEST_CASE=9"],
       "functions": ["abi_dynamic_stack_arguments", "abi_ten_args"]
+    },
+    {
+      "name": "dynamic_stack_arguments_caller_only",
+      "defines": ["TEST_CASE=9"],
+      "functions": ["abi_dynamic_stack_arguments"]
     },
     {
       "name": "realigned_live_values",

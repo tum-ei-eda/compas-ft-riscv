@@ -13,6 +13,7 @@ success or `17` on an oracle mismatch, and produces no output.
 |`nested_live_values` |Repeated nested calls retain values across multiple calls and stack frames.
 |`indirect_calls` |A volatile function pointer invokes two distinct targets, then restores the first target for the next invocation.
 |`ten_integer_arguments` |Ten word-sized arguments require argument passing on the stack as well as in registers.
+|`ten_integer_arguments_caller_only` |Only the caller is protected, checking that its preservation spills leave the unprotected callee's stack arguments at their ABI offsets.
 |`wide_live_values` |Arguments, return values and values live across a call contain nonzero upper 32 bits; RV32 also exercises register pairs.
 |`stack_alignment` |The caller and callee observe 16-byte stack alignment and the caller observes the same stack pointer after return.
 |`frame_pointer_calls` |Three protected functions have different frame-size requirements, retain FP-relative locals across repeated nested calls, and restore each caller's incoming frame pointer.
@@ -21,7 +22,9 @@ success or `17` on an oracle mismatch, and produces no output.
 |`indirect_stack_arguments` |Repeated ten-word calls use a volatile function pointer and different argument values while retaining the first result.
 |`nested_stack_arguments` |Both nested call boundaries pass ten words, keeping incoming stack arguments live across an outgoing call; all participating functions are selected.
 |`nested_stack_arguments_caller_only` |The same nested calls select only the outer caller, exercising the boundary to unprotected callees.
+|`nested_stack_arguments_callee_only` |An unprotected outer caller invokes the two protected nested callees, checking that entry wrappers preserve stack arguments and the caller's live values.
 |`dynamic_stack_arguments` |A large fixed frame and a runtime-sized local array keep values live across ten-word calls, exercising frame-pointer addressing and a moving stack pointer.
+|`dynamic_stack_arguments_caller_only` |Only the caller with the large fixed frame and VLA is protected, checking stable preservation slots while calling an unprotected ten-argument helper.
 |`realigned_live_values` |A caller with a 64-byte-aligned volatile array and twelve independent live values invokes an unprotected helper with register arguments, checking realigned spill slots separately from stack-passed arguments.
 |`signature_join_calls` |A protected caller invokes an unprotected helper in its entry block, in either branch before a join, and after the join; the helper explicitly overwrites both signature registers on RISC-V.
 |===
@@ -39,9 +42,11 @@ keep this case focused on frame-pointer preservation across calls.
 Post-call loads check that FP-relative locals remain accessible after each pair
 of calls. Each input is checked twice against an independent literal result.
 
-The stack-argument cases also check that control-flow signature preservation does
-not move the outgoing arguments from the ABI offsets observed by the callee. The
-dynamic-frame case uses a 1024-word volatile fixed array and a variable-length
+The stack-argument cases also check that DMR boundary wrappers and control-flow
+signature preservation do not move the outgoing arguments from the ABI offsets
+observed by the callee. Caller-only and callee-only selections exercise the two
+directions of the selective-hardening boundary with the same arithmetic oracle.
+The dynamic-frame case uses a 1024-word volatile fixed array and a variable-length
 volatile array. Its calls consume both stack-passed arguments and local values;
 the final result checks values retained in both arrays after the calls.
 The realigned-frame case keeps its local array indexed by a runtime value so it
