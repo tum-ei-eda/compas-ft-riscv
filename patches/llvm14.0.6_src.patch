@@ -139,8 +139,8 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/
  private:
    /// FrameIndex for start of varargs area
    int VarArgsFrameIndex = 0;
-+  /// Slot reserved before frame lowering for RACFED call preservation.
-+  int CompasRacfedFrameIndex = 0;
++  /// Slot reserved before frame lowering for COMPAS signature preservation.
++  int CompasSignatureFrameIndex = 0;
    /// Size of the save area used for varargs
    int VarArgsSaveSize = 0;
    /// FrameIndex used for transferring values between 64-bit FPRs and a pair
@@ -149,8 +149,8 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/
    int getVarArgsFrameIndex() const { return VarArgsFrameIndex; }
    void setVarArgsFrameIndex(int Index) { VarArgsFrameIndex = Index; }
 +
-+  int getCompasRacfedFrameIndex() const { return CompasRacfedFrameIndex; }
-+  void setCompasRacfedFrameIndex(int Index) { CompasRacfedFrameIndex = Index; }
++  int getCompasSignatureFrameIndex() const { return CompasSignatureFrameIndex; }
++  void setCompasSignatureFrameIndex(int Index) { CompasSignatureFrameIndex = Index; }
 
    unsigned getVarArgsSaveSize() const { return VarArgsSaveSize; }
    void setVarArgsSaveSize(int Size) { VarArgsSaveSize = Size; }

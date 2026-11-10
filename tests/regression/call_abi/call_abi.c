@@ -383,6 +383,55 @@ int main(void)
     return 42;
 }
 
+#elif TEST_CASE == 11
+volatile word abi_inputs[] = {1, 4, 7, 12};
+volatile word abi_signature_choices[] = {0, 1, 1, 0};
+volatile word abi_signature_calls;
+
+/* Unprotected callees may overwrite both caller-saved signature registers. */
+NOINLINE word abi_signature_clobber(word value)
+{
+#if defined(__riscv)
+    __asm__ volatile ("li t0, 123\n\tli t4, 456" : : : "t0", "t4", "memory");
+#endif
+    abi_signature_calls += 1;
+    return 5*value + 7;
+}
+
+NOINLINE word abi_signature_join_calls(word value, word choice)
+{
+    word first = abi_signature_clobber(value + 1);
+    word result;
+    if ((choice & 1UL) != 0) {
+        result = abi_signature_clobber(first + 3);
+        result += value ^ 0x15UL;
+    } else {
+        result = abi_signature_clobber(first ^ 0x35UL);
+        result ^= value + 0x27UL;
+    }
+    /* Both predecessors reach this join after a signature-clobbering call. */
+    volatile word joined = result;
+    word last = abi_signature_clobber(joined + 11);
+    return last + joined + value;
+}
+
+int main(void)
+{
+    /* Independent literals include both branch expressions and all three calls. */
+    const word expected[] = {945UL, 1260UL, 1719UL, 3596UL};
+    unsigned int round;
+    for (round = 0; round != 2; ++round) {
+        unsigned int index;
+        for (index = 0; index != 4; ++index) {
+            if (abi_signature_join_calls(abi_inputs[index],
+                                         abi_signature_choices[index]) !=
+                expected[index])
+                return 17;
+        }
+    }
+    return abi_signature_calls == 24UL ? 42 : 17;
+}
+
 #else
 #error "Unknown call ABI TEST_CASE"
 #endif

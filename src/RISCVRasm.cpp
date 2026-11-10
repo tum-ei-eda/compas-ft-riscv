@@ -16,17 +16,12 @@
 
 #include "RISCVRasm.h"
 
-#include "RISCVFrameLowering.h"
-#include "RISCVInstrInfo.h"
-#include "RISCVMachineFunctionInfo.h"
-#include "RISCVSubtarget.h"
 #include "common.h"
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
-#include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/Support/MathExtras.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 
 #include <algorithm>
 
@@ -513,77 +508,7 @@ short RISCVRasm::calculate_adjustment(
 }
 
 void RISCVRasm::save_restore_runtime_signature(llvm::MachineInstr *call_instr) {
-  // jumps are also considered as calls so filtering them out
-
-  assert(call_instr->isCall() && "Machine instruction is not a call!");
-
-  llvm::MachineBasicBlock::iterator insert{call_instr->getIterator()};
-  insert++;
-
-  // NOTE: stack would be used to pass args if they exceed arg regs hence
-  //       we shouldn't use stack for CFC signatures
-  // for G, we simply move the expected value back into G
-  llvm::BuildMI(*(call_instr->getParent()), insert, call_instr->getDebugLoc(),
-                TII_->get(llvm::RISCV::ADDI))
-      .addReg(kRTS, llvm::RegState::Define)
-      .addReg(riscv_common::k0)
-      .addImm(mbb_sigs_.at(call_instr->getParent()).first);
-}
-
-void RISCVRacfed::save_restore_runtime_signature(
-    llvm::MachineInstr *call_instr) {
-  assert(call_instr->isCall() && "Machine instruction is not a call!");
-
-  // The argument area is already populated at this late pass. Moving either
-  // stack pointer here would change the offsets observed by the callee. Use a
-  // real slot reserved before frame layout, and preserve the accumulated
-  // runtime value rather than replacing it with an expected constant.
-  const int frame_index = MF_->getInfo<llvm::RISCVMachineFunctionInfo>()
-                              ->getCompasRacfedFrameIndex();
-  if (frame_index >= 0)
-    llvm::report_fatal_error("COMPAS: RACFED call frame was not prepared");
-
-  const auto &subtarget = MF_->getSubtarget<llvm::RISCVSubtarget>();
-  const auto *tii = subtarget.getInstrInfo();
-  llvm::Register frame_reg;
-  const auto offset = subtarget.getFrameLowering()->getFrameIndexReference(
-      *MF_, frame_index, frame_reg);
-  if (offset.getScalable())
-    llvm::report_fatal_error(
-        "COMPAS: scalable RACFED frame offset unsupported");
-
-  auto *MBB = call_instr->getParent();
-  const auto DL = call_instr->getDebugLoc();
-  const riscv_common::ISAConfig isa_config{*MF_};
-  auto preserve = [&](llvm::MachineBasicBlock::iterator insert, bool restore) {
-    llvm::Register base = frame_reg;
-    int64_t displacement = offset.getFixed();
-    if (!llvm::isInt<12>(displacement)) {
-      // kC is reserved for signature checks, so address materialization does
-      // not clobber an argument, return value or an allocated live register.
-      tii->movImm(*MBB, insert, DL, kC, displacement);
-      llvm::BuildMI(*MBB, insert, DL, tii->get(llvm::RISCV::ADD))
-          .addReg(kC, llvm::RegState::Define)
-          .addReg(frame_reg)
-          .addReg(kC);
-      base = kC;
-      displacement = 0;
-    }
-    auto *memory = MF_->getMachineMemOperand(
-        llvm::MachinePointerInfo::getFixedStack(*MF_, frame_index),
-        restore ? llvm::MachineMemOperand::MOLoad
-                : llvm::MachineMemOperand::MOStore,
-        isa_config.word_length, llvm::Align(isa_config.word_length));
-    llvm::BuildMI(
-        *MBB, insert, DL,
-        tii->get(restore ? isa_config.load_opcode : isa_config.store_opcode))
-        .addReg(kRTS, restore ? llvm::RegState::Define : 0)
-        .addReg(base)
-        .addImm(displacement)
-        .addMemOperand(memory);
-  };
-  preserve(call_instr->getIterator(), false);
-  preserve(std::next(call_instr->getIterator()), true);
+  riscv_common::preserveSignatureAcrossCall(call_instr, {kRTS}, kC);
 }
 
 short RISCVRacfed::calculate_adjustment(

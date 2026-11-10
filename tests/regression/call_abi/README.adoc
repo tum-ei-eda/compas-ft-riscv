@@ -23,6 +23,7 @@ success or `17` on an oracle mismatch, and produces no output.
 |`nested_stack_arguments_caller_only` |The same nested calls select only the outer caller, exercising the boundary to unprotected callees.
 |`dynamic_stack_arguments` |A large fixed frame and a runtime-sized local array keep values live across ten-word calls, exercising frame-pointer addressing and a moving stack pointer.
 |`realigned_live_values` |A caller with a 64-byte-aligned volatile array and twelve independent live values invokes an unprotected helper with register arguments, checking realigned spill slots separately from stack-passed arguments.
+|`signature_join_calls` |A protected caller invokes an unprotected helper in its entry block, in either branch before a join, and after the join; the helper explicitly overwrites both signature registers on RISC-V.
 |===
 
 `volatile` inputs and `noinline` functions keep the calls dependent on runtime
@@ -46,6 +47,12 @@ the final result checks values retained in both arrays after the calls.
 The realigned-frame case keeps its local array indexed by a runtime value so it
 cannot shrink to a few scalars, and uses both call results in the independent
 live-value checks.
+
+The signature-join case exercises preservation of both the running signature and
+the CFCSS predecessor adjustment across calls. Its helper overwrites `t0` and
+`t4` explicitly on RISC-V, while native builds execute the same arithmetic and
+volatile call counter. Independent literal results check both paths twice; the
+counter also requires all 24 helper calls to execute.
 
 The manifest selects the participating functions explicitly and enables machine
 instruction verification. It exercises the unprotected configuration, each data

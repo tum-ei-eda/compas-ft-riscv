@@ -27,8 +27,7 @@
 namespace {
 
 bool needs_call_frame(const llvm::MachineFunction &MF) {
-  if (!riscv_common::inCSString(llvm::cl::enable_racfed,
-                              std::string{MF.getName()}))
+  if (riscv_common::signatureRegisters(MF).empty())
     return false;
 
   for (const auto &MBB : MF)
@@ -78,12 +77,16 @@ llvm::FunctionPass *llvm::createRISCVPrepareCallFrame() {
 
 void llvm::reserveRISCVCompasCallFrame(llvm::MachineFunction &MF) {
   auto *info = MF.getInfo<llvm::RISCVMachineFunctionInfo>();
-  if (info->getCompasRacfedFrameIndex() < 0 || !needs_call_frame(MF))
+  if (info->getCompasSignatureFrameIndex() < 0 || !needs_call_frame(MF))
     return;
 
   auto &frame = MF.getFrameInfo();
   const unsigned word_size =
       MF.getSubtarget<llvm::RISCVSubtarget>().is64Bit() ? 8 : 4;
+  // CFCSS propagates both the runtime signature G and the adjustment D. RASM
+  // and RACFED need only their single runtime-signature register preserved.
+  const unsigned slot_size =
+      word_size * riscv_common::signatureRegisters(MF).size();
   uint64_t reserved = 0;
   for (int index = frame.getObjectIndexBegin(); index < 0; ++index) {
     const int64_t offset = frame.getObjectOffset(index);
@@ -104,7 +107,7 @@ void llvm::reserveRISCVCompasCallFrame(llvm::MachineFunction &MF) {
   // Fixed objects remain FP-relative even when a realigned frame would address
   // ordinary local objects through SP. PEI includes this area in its layout.
   const int64_t offset =
-      -static_cast<int64_t>(llvm::alignTo(reserved + word_size, word_size));
-  info->setCompasRacfedFrameIndex(
-      frame.CreateFixedObject(word_size, offset, false));
+      -static_cast<int64_t>(llvm::alignTo(reserved + slot_size, word_size));
+  info->setCompasSignatureFrameIndex(
+      frame.CreateFixedObject(slot_size, offset, false));
 }

@@ -17,10 +17,15 @@
 #include "common.h"
 
 #include <algorithm>
+#include <iterator>
 #include <sstream>
 
+#include "RISCVFrameLowering.h"
+#include "RISCVInstrInfo.h"
+#include "RISCVMachineFunctionInfo.h"
 #include "RISCVSubtarget.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/Support/MathExtras.h"
 
 namespace {
@@ -133,6 +138,119 @@ riscv_common::RegType riscv_common::getRegType(llvm::Register r) {
   } else {
     assert(0 && "invalid register passed in");
   }
+}
+
+std::vector<llvm::Register>
+riscv_common::signatureRegisters(const llvm::MachineFunction &MF) {
+  const std::string name{MF.getName()};
+  if (inCSString(llvm::cl::enable_cfcss, name))
+    return {llvm::RISCV::X5, llvm::RISCV::X29};
+  if (inCSString(llvm::cl::enable_rasm, name) ||
+      inCSString(llvm::cl::enable_racfed, name))
+    return {llvm::RISCV::X5};
+  return {};
+}
+
+void riscv_common::preserveSignatureAcrossCall(
+    llvm::MachineInstr *call, const std::vector<llvm::Register> &regs,
+    llvm::Register scratch) {
+  assert(call->isCall() && !regs.empty() &&
+         "Expected a call with signature state");
+  auto *MBB = call->getParent();
+  auto *MF = MBB->getParent();
+  const int frame_index = MF->getInfo<llvm::RISCVMachineFunctionInfo>()
+                              ->getCompasSignatureFrameIndex();
+  if (frame_index >= 0)
+    llvm::report_fatal_error("COMPAS: signature call frame was not prepared");
+
+  const auto &subtarget = MF->getSubtarget<llvm::RISCVSubtarget>();
+  const auto *tii = subtarget.getInstrInfo();
+  const ISAConfig isa_config{*MF};
+  assert(regs.size() * isa_config.word_length <=
+             static_cast<uint64_t>(
+                 MF->getFrameInfo().getObjectSize(frame_index)) &&
+         "Signature frame is too small");
+  llvm::Register frame_reg;
+  const auto offset = subtarget.getFrameLowering()->getFrameIndexReference(
+      *MF, frame_index, frame_reg);
+  if (offset.getScalable())
+    llvm::report_fatal_error("COMPAS: scalable signature frame unsupported");
+
+  const auto DL = call->getDebugLoc();
+  const bool large_offset =
+      !llvm::isInt<12>(offset.getFixed()) ||
+      !llvm::isInt<12>(
+          offset.getFixed() +
+          static_cast<int64_t>((regs.size() - 1) * isa_config.word_length));
+  const bool scratch_is_state =
+      std::find(regs.begin(), regs.end(), scratch) != regs.end();
+
+  auto access = [&](llvm::MachineBasicBlock::iterator insert, bool restore,
+                    llvm::Register value, llvm::Register base,
+                    int64_t displacement, unsigned index) {
+    auto *memory = MF->getMachineMemOperand(
+        llvm::MachinePointerInfo::getFixedStack(*MF, frame_index,
+                                                index * isa_config.word_length),
+        restore ? llvm::MachineMemOperand::MOLoad
+                : llvm::MachineMemOperand::MOStore,
+        isa_config.word_length, llvm::Align(isa_config.word_length));
+    llvm::BuildMI(
+        *MBB, insert, DL,
+        tii->get(restore ? isa_config.load_opcode : isa_config.store_opcode))
+        .addReg(value, restore ? llvm::RegState::Define : 0)
+        .addReg(base)
+        .addImm(displacement)
+        .addMemOperand(memory);
+  };
+
+  auto preserve = [&](llvm::MachineBasicBlock::iterator insert, bool restore) {
+    llvm::Register base = frame_reg;
+    int64_t displacement = offset.getFixed();
+    llvm::Register buffer{0};
+    if (large_offset) {
+      if (!restore && scratch_is_state) {
+        // CFCSS owns both reserved registers. Temporarily spill the payload
+        // before borrowing D for address formation; restore SP before the call.
+        auto other =
+            std::find_if(regs.begin(), regs.end(),
+                         [&](llvm::Register r) { return r != scratch; });
+        assert(other != regs.end() && "No signature value buffer available");
+        buffer = *other;
+        saveRegs(regs, MBB, insert);
+      }
+      tii->movImm(*MBB, insert, DL, scratch, displacement);
+      llvm::BuildMI(*MBB, insert, DL, tii->get(llvm::RISCV::ADD))
+          .addReg(scratch, llvm::RegState::Define)
+          .addReg(frame_reg)
+          .addReg(scratch);
+      base = scratch;
+      displacement = 0;
+    }
+
+    for (unsigned i = 0; i != regs.size(); ++i) {
+      if (restore && large_offset && regs[i] == scratch)
+        continue; // Reload the address register last.
+      llvm::Register value = regs[i];
+      if (buffer) {
+        llvm::BuildMI(*MBB, insert, DL, tii->get(isa_config.load_opcode))
+            .addReg(buffer, llvm::RegState::Define)
+            .addReg(kSP)
+            .addImm(i * isa_config.word_length);
+        value = buffer;
+      }
+      access(insert, restore, value, base,
+             displacement + i * isa_config.word_length, i);
+    }
+    if (restore && large_offset && scratch_is_state) {
+      auto index = std::find(regs.begin(), regs.end(), scratch) - regs.begin();
+      access(insert, true, scratch, base,
+             displacement + index * isa_config.word_length, index);
+    }
+    if (buffer)
+      loadRegs(regs, MBB, insert);
+  };
+  preserve(call->getIterator(), false);
+  preserve(std::next(call->getIterator()), true);
 }
 
 void riscv_common::saveRegs(std::vector<llvm::Register> regs,
