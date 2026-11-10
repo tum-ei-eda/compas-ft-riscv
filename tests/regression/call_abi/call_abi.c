@@ -7,7 +7,15 @@
 typedef unsigned long word;
 typedef unsigned long long wide;
 
-#if TEST_CASE >= 1 && TEST_CASE <= 3
+#if TEST_CASE == 4 || (TEST_CASE >= 7 && TEST_CASE <= 9)
+NOINLINE word abi_ten_args(word a, word b, word c, word d, word e,
+                          word f, word g, word h, word i, word j)
+{
+    return a + 2*b + 3*c + 4*d + 5*e + 6*f + 7*g + 8*h + 9*i + 10*j;
+}
+#endif
+
+#if (TEST_CASE >= 1 && TEST_CASE <= 3) || TEST_CASE == 10
 NOINLINE word abi_leaf(word value)
 {
     return value * 3 + 5;
@@ -89,12 +97,6 @@ int main(void)
 
 #elif TEST_CASE == 4
 volatile word abi_inputs[] = {1, 7};
-
-NOINLINE word abi_ten_args(word a, word b, word c, word d, word e,
-                          word f, word g, word h, word i, word j)
-{
-    return a + 2*b + 3*c + 4*d + 5*e + 6*f + 7*g + 8*h + 9*i + 10*j;
-}
 
 NOINLINE word abi_stack_arguments(word value)
 {
@@ -234,6 +236,149 @@ int main(void)
             if (abi_frame_top(abi_inputs[index]) != expected[index])
                 return 17;
         }
+    }
+    return 42;
+}
+
+#elif TEST_CASE == 7
+volatile word abi_inputs[] = {2, 11, 19};
+word (*volatile abi_ten_arg_target)(word, word, word, word, word,
+                                  word, word, word, word, word) = abi_ten_args;
+
+NOINLINE word abi_indirect_stack_arguments(word value)
+{
+    word first = abi_ten_arg_target(value, value + 1, value + 2, value + 3,
+                                   value + 4, value + 5, value + 6, value + 7,
+                                   value + 8, value + 9);
+    word second = abi_ten_arg_target(value + 3, value + 4, value + 5, value + 6,
+                                    value + 7, value + 8, value + 9, value + 10,
+                                    value + 11, value + 12);
+    return first + 2*second + (value ^ 0x3cUL);
+}
+
+int main(void)
+{
+    /* Each pair contributes 165*x + 1320, plus the independent live sentinel. */
+    const word expected[] = {1712UL, 3190UL, 4502UL};
+    unsigned int index;
+    for (index = 0; index != 3; ++index) {
+        if (abi_indirect_stack_arguments(abi_inputs[index]) != expected[index])
+            return 17;
+    }
+    return 42;
+}
+
+#elif TEST_CASE == 8
+volatile word abi_inputs[] = {1, 7, 13};
+
+NOINLINE word abi_ten_arg_middle(word a, word b, word c, word d, word e,
+                                word f, word g, word h, word i, word j)
+{
+    word result = abi_ten_args(j, i, h, g, f, e, d, c, b, a);
+    /* Both incoming stack arguments must survive the outgoing ten-arg call. */
+    return result + 3*i + 7*j;
+}
+
+NOINLINE word abi_nested_stack_arguments(word value)
+{
+    word first = abi_ten_arg_middle(value, value + 1, value + 2, value + 3,
+                                   value + 4, value + 5, value + 6, value + 7,
+                                   value + 8, value + 9);
+    word second = abi_ten_arg_middle(value + 2, value + 3, value + 4, value + 5,
+                                    value + 6, value + 7, value + 8, value + 9,
+                                    value + 10, value + 11);
+    return first + 2*second + (value ^ 0x6bUL);
+}
+
+int main(void)
+{
+    /* Each middle call returns 65*x + 252; the pair gives 195*x + 1016. */
+    const word expected[] = {1317UL, 2489UL, 3653UL};
+    unsigned int index;
+    for (index = 0; index != 3; ++index) {
+        if (abi_nested_stack_arguments(abi_inputs[index]) != expected[index])
+            return 17;
+    }
+    return 42;
+}
+
+#elif TEST_CASE == 9
+volatile word abi_inputs[] = {1, 7, 13};
+
+NOINLINE word abi_dynamic_stack_arguments(word value)
+{
+    /* A large fixed frame and VLA require frame-index expansion and stable FP. */
+    volatile word spill[1024];
+    word fixed_index = (value & 511UL) + 1;
+    word count = (value & 7UL) + 11;
+    volatile word dynamic[count];
+    spill[0] = value ^ 0x1234UL;
+    spill[1023] = value + 0x4321UL;
+    /* Runtime indexing prevents splitting the fixed array into small slots. */
+    spill[fixed_index] = value + 0x77UL;
+    dynamic[0] = value + 17;
+    dynamic[count - 1] = value ^ 0x5aUL;
+    word first = abi_ten_args(value, value + 1, value + 2, value + 3,
+                             value + 4, value + 5, value + 6, value + 7,
+                             value + 8, value + 9);
+    word second = abi_ten_args(dynamic[0], dynamic[count - 1], value + 2,
+                              value + 3, value + 4, value + 5, value + 6,
+                              value + 7, value + 8, value + 9);
+    return first + second + spill[0] + spill[1023] + spill[fixed_index] +
+           dynamic[0] + dynamic[count - 1];
+}
+
+int main(void)
+{
+    /* 111*x + 17996 + (x ^ 0x1234) + 3*(x ^ 0x5a), evaluated independently. */
+    const word expected[] = {23041UL, 23711UL, 24365UL};
+    unsigned int index;
+    for (index = 0; index != 3; ++index) {
+        if (abi_dynamic_stack_arguments(abi_inputs[index]) != expected[index])
+            return 17;
+    }
+    return 42;
+}
+
+#elif TEST_CASE == 10
+volatile word abi_inputs[] = {3, 17, 29};
+
+NOINLINE word abi_realigned_live_values(word value)
+{
+    volatile word spill[32] __attribute__((aligned(64)));
+    word index = value & 15UL;
+    spill[index] = value + 0x11UL;
+    spill[index + 16] = value ^ 0x123UL;
+    /* Separate volatile loads keep enough independent values to force spills. */
+    word a = spill[index] + 1;
+    word b = spill[index + 16] + 2;
+    word c = spill[index] + 3;
+    word d = spill[index + 16] + 4;
+    word e = spill[index] + 5;
+    word f = spill[index + 16] + 6;
+    word g = spill[index] + 7;
+    word h = spill[index + 16] + 8;
+    word i = spill[index] + 9;
+    word j = spill[index + 16] + 10;
+    word k = spill[index] + 11;
+    word l = spill[index + 16] + 12;
+    /* Register arguments isolate realigned spill slots from outgoing stack args. */
+    word first = abi_leaf(value + 1);
+    word second = abi_leaf(value + 2);
+    return (a ^ first) + 2*(b ^ second) + 3*(c ^ first) + 4*(d ^ second) +
+           5*(e ^ first) + 6*(f ^ second) + 7*(g ^ first) + 8*(h ^ second) +
+           9*(i ^ first) + 10*(j ^ second) + 11*(k ^ first) + 12*(l ^ second) +
+           spill[index] + spill[index + 16];
+}
+
+int main(void)
+{
+    /* Weighted XORs of x+17+odd or (x^291)+even with 3*x+8 or 3*x+11. */
+    const word expected[] = {13826UL, 11998UL, 16510UL};
+    unsigned int index;
+    for (index = 0; index != 3; ++index) {
+        if (abi_realigned_live_values(abi_inputs[index]) != expected[index])
+            return 17;
     }
     return 42;
 }

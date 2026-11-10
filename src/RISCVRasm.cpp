@@ -16,12 +16,17 @@
 
 #include "RISCVRasm.h"
 
+#include "RISCVFrameLowering.h"
+#include "RISCVInstrInfo.h"
+#include "RISCVMachineFunctionInfo.h"
 #include "RISCVSubtarget.h"
 #include "common.h"
 #include "llvm/CodeGen/CommandFlags.h"
-#include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
+#include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 
@@ -527,43 +532,58 @@ void RISCVRasm::save_restore_runtime_signature(llvm::MachineInstr *call_instr) {
 
 void RISCVRacfed::save_restore_runtime_signature(
     llvm::MachineInstr *call_instr) {
-  // We must use stack to store the runtime signature.
-  // Restoring the runtime signature from compile time values here would
-  // make all runtime signature updates up to this call useless.
-  // something else. The alternative to check signatures before a
-  // returning call with the expected gradual, then calling+destroying
-  // run time signature, after return restoring run time signature with
-  // expected gradual after call would make the restore-move signature
-  // instruction a possible entry for an intra-block and inter-block
-  // (onto instr.) error. With the stack solution we have at least the
-  // safety that the full stack push-call-pop must be intra-block
-  // faulted. This is just another argument for implementing some form
-  // of far-away gradually carrying signature
-  // TODO: make sure that this does not interfere with function calls
-  // that use stack to pass arguments. To solve this we must make sure
-  // that we first push the signature before arguments such that the
-  // callee on restoring parameters from stack in own scope does not pop
-  // runtime instead of parameters.
-
   assert(call_instr->isCall() && "Machine instruction is not a call!");
 
-  llvm::MachineBasicBlock::iterator insert{call_instr->getIterator()};
-  if (!is_func_dmr(fname_)) {
-    riscv_common::saveRegs({kRTS}, call_instr->getParent(), insert);
-    insert++;
-    riscv_common::loadRegs({kRTS}, call_instr->getParent(), insert);
-  } else {
-    llvm::outs() << "> DMR compliant runtime signature stacking for mi["
-                 << call_instr << "]" << *call_instr << "\n";
-    // in case the calling function is also a DMR we need to make sure
-    // that both stack and shadow stack are used. Currently we do not
-    // support DMR+RACFED calling DMR without RACFED or RASM
-    riscv_common::saveRegs({kRTS}, call_instr->getParent(), insert,
-                           P2S_.at(riscv_common::kSP));
-    insert++;
-    riscv_common::loadRegs({kRTS}, call_instr->getParent(), insert,
-                           P2S_.at(riscv_common::kSP));
-  }
+  // The argument area is already populated at this late pass. Moving either
+  // stack pointer here would change the offsets observed by the callee. Use a
+  // real slot reserved before frame layout, and preserve the accumulated
+  // runtime value rather than replacing it with an expected constant.
+  const int frame_index = MF_->getInfo<llvm::RISCVMachineFunctionInfo>()
+                              ->getCompasRacfedFrameIndex();
+  if (frame_index >= 0)
+    llvm::report_fatal_error("COMPAS: RACFED call frame was not prepared");
+
+  const auto &subtarget = MF_->getSubtarget<llvm::RISCVSubtarget>();
+  const auto *tii = subtarget.getInstrInfo();
+  llvm::Register frame_reg;
+  const auto offset = subtarget.getFrameLowering()->getFrameIndexReference(
+      *MF_, frame_index, frame_reg);
+  if (offset.getScalable())
+    llvm::report_fatal_error(
+        "COMPAS: scalable RACFED frame offset unsupported");
+
+  auto *MBB = call_instr->getParent();
+  const auto DL = call_instr->getDebugLoc();
+  const riscv_common::ISAConfig isa_config{*MF_};
+  auto preserve = [&](llvm::MachineBasicBlock::iterator insert, bool restore) {
+    llvm::Register base = frame_reg;
+    int64_t displacement = offset.getFixed();
+    if (!llvm::isInt<12>(displacement)) {
+      // kC is reserved for signature checks, so address materialization does
+      // not clobber an argument, return value or an allocated live register.
+      tii->movImm(*MBB, insert, DL, kC, displacement);
+      llvm::BuildMI(*MBB, insert, DL, tii->get(llvm::RISCV::ADD))
+          .addReg(kC, llvm::RegState::Define)
+          .addReg(frame_reg)
+          .addReg(kC);
+      base = kC;
+      displacement = 0;
+    }
+    auto *memory = MF_->getMachineMemOperand(
+        llvm::MachinePointerInfo::getFixedStack(*MF_, frame_index),
+        restore ? llvm::MachineMemOperand::MOLoad
+                : llvm::MachineMemOperand::MOStore,
+        isa_config.word_length, llvm::Align(isa_config.word_length));
+    llvm::BuildMI(
+        *MBB, insert, DL,
+        tii->get(restore ? isa_config.load_opcode : isa_config.store_opcode))
+        .addReg(kRTS, restore ? llvm::RegState::Define : 0)
+        .addReg(base)
+        .addImm(displacement)
+        .addMemOperand(memory);
+  };
+  preserve(call_instr->getIterator(), false);
+  preserve(std::next(call_instr->getIterator()), true);
 }
 
 short RISCVRacfed::calculate_adjustment(
