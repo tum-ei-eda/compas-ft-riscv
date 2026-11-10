@@ -1,0 +1,17 @@
+{
+  "name": "crc_control_flow",
+  "adapter": "freestanding",
+  "architectures": ["rv32", "rv64"],
+  "modes": ["none", "EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
+  "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+  "schedules": ["cgs"],
+  "verify_machineinstrs": true,
+  "sources": ["../../apps/crc/crc.c", "crc_control_flow.c"],
+  "functions": ["crcSlow"],
+  "expected": {"exit": 42, "stdout": ""},
+  "cases": [
+    {
+      "name": "slow_crc_boundaries"
+    }
+  ]
+}

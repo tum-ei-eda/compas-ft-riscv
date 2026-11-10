@@ -97,9 +97,6 @@ protected:
   calculate_adjustment(const llvm::MachineBasicBlock *source_bb,
                        const llvm::MachineBasicBlock *target_bb) override;
 
-  virtual void
-  save_restore_runtime_signature(llvm::MachineInstr *call_instr) override;
-
   virtual void generate_intrablock_signature_updates() override;
 
 private:

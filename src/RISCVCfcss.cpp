@@ -95,11 +95,11 @@ void RISCVCfcss::init() {
     mbb_info_[&MBB].d = mbb_info_[PBB].s ^ mbb_info_[&MBB].s;
   }
 
-  // setting G to entry-BB signature at start of MF_
-  llvm::BuildMI(MF_->front(), std::begin(MF_->front()),
-                MF_->front().front().getDebugLoc(),
-                TII_->get(llvm::RISCV::ADDI))
-      .addReg(kG)
+  auto insert = MF_->front().begin();
+  const auto DL = insert->getDebugLoc();
+  // G starts at the entry signature.
+  llvm::BuildMI(MF_->front(), insert, DL, TII_->get(llvm::RISCV::ADDI))
+      .addReg(kG, llvm::RegState::Define)
       .addReg(riscv_common::k0)
       .addImm(mbb_info_[&MF_->front()].s);
 }
@@ -208,61 +208,27 @@ void RISCVCfcss::harden() {
     }
   }
 
-  // in case we call another function then G,D regs would be corrupted
-  // as we use t0,t1 RISCV regs hence
+  // D is initially dead, but a call can precede its first adjustment. Insert
+  // this definition after constructing fan-in updates so it executes before
+  // any entry-block adjustment rather than overwriting one.
+  llvm::BuildMI(MF_->front(), MF_->front().begin(),
+                MF_->front().front().getDebugLoc(),
+                TII_->get(llvm::RISCV::ADDI))
+      .addReg(kD, llvm::RegState::Define)
+      .addReg(riscv_common::k0)
+      .addImm(0);
+
+  // Both G (t0) and D (t4) are caller-saved. Preserve their actual runtime
+  // values: reconstructing constants here would erase an existing mismatch.
   for (auto &MBB : *MF_) {
     for (auto &MI : MBB) {
-      if (MI.isCall()) {
-        if (TII_->isTailCall(MI)) {
-          continue;
-        }
-
-        // jumps are also considered as calls so filtering them out
-        if (MI.getOperand(0).isReg() &&
-            MI.getOperand(0).getReg() == llvm::RISCV::X0) {
-          continue;
-        }
-
-        llvm::MachineBasicBlock::iterator insert{MI.getIterator()};
-        insert++;
-
-        // NOTE: stack can be used to pass args if they exceed arg regs hence
-        //       we shouldn't use stack for CFC signatures
-        // for G, we simply move the expected value back into G
-        llvm::BuildMI(MBB, insert, MI.getDebugLoc(),
-                      TII_->get(llvm::RISCV::ADDI))
-            .addReg(kG)
-            .addReg(riscv_common::k0)
-            .addImm(mbb_info_[&MBB].s);
-        // for D, we clone the instruction that is already at the start of the
-        // block
-        bool check_block_passed{false};
-        for (auto &MI2 : MBB) {
-          if (MBB.pred_empty()) {
-            check_block_passed = true;
-          }
-
-          if (!check_block_passed) {
-            if (MI2.getOpcode() == llvm::RISCV::BNE &&
-                MI2.getOperand(0).getReg() == kG &&
-                MI2.getOperand(1).getReg() == kD) {
-              check_block_passed = true;
-            }
-            continue;
-          }
-
-          if (MI2.getOperand(0).isReg() && MI2.getOperand(0).getReg() == kD &&
-              MI2.getOpcode() == llvm::RISCV::ADDI &&
-              MI2.getOperand(1).isReg() &&
-              MI2.getOperand(1).getReg() == riscv_common::k0) {
-            auto si{MF_->CloneMachineInstr(&MI2)};
-            MBB.insertAfter(&MI, si);
-            break;
-          } else if (&MI2 == &MI) {
-            break;
-          }
-        }
-      }
+      if (!MI.isCall() || TII_->isTailCall(MI))
+        continue;
+      // LLVM also describes no-link jumps as calls.
+      if (MI.getNumOperands() && MI.getOperand(0).isReg() &&
+          MI.getOperand(0).getReg() == llvm::RISCV::X0)
+        continue;
+      riscv_common::preserveSignatureAcrossCall(&MI, {kG, kD}, kD);
     }
   }
 }

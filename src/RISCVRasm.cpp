@@ -16,12 +16,12 @@
 
 #include "RISCVRasm.h"
 
-#include "RISCVSubtarget.h"
 #include "common.h"
 #include "llvm/CodeGen/CommandFlags.h"
-#include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
+#include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 
 #include <algorithm>
 
@@ -508,62 +508,7 @@ short RISCVRasm::calculate_adjustment(
 }
 
 void RISCVRasm::save_restore_runtime_signature(llvm::MachineInstr *call_instr) {
-  // jumps are also considered as calls so filtering them out
-
-  assert(call_instr->isCall() && "Machine instruction is not a call!");
-
-  llvm::MachineBasicBlock::iterator insert{call_instr->getIterator()};
-  insert++;
-
-  // NOTE: stack would be used to pass args if they exceed arg regs hence
-  //       we shouldn't use stack for CFC signatures
-  // for G, we simply move the expected value back into G
-  llvm::BuildMI(*(call_instr->getParent()), insert, call_instr->getDebugLoc(),
-                TII_->get(llvm::RISCV::ADDI))
-      .addReg(kRTS, llvm::RegState::Define)
-      .addReg(riscv_common::k0)
-      .addImm(mbb_sigs_.at(call_instr->getParent()).first);
-}
-
-void RISCVRacfed::save_restore_runtime_signature(
-    llvm::MachineInstr *call_instr) {
-  // We must use stack to store the runtime signature.
-  // Restoring the runtime signature from compile time values here would
-  // make all runtime signature updates up to this call useless.
-  // something else. The alternative to check signatures before a
-  // returning call with the expected gradual, then calling+destroying
-  // run time signature, after return restoring run time signature with
-  // expected gradual after call would make the restore-move signature
-  // instruction a possible entry for an intra-block and inter-block
-  // (onto instr.) error. With the stack solution we have at least the
-  // safety that the full stack push-call-pop must be intra-block
-  // faulted. This is just another argument for implementing some form
-  // of far-away gradually carrying signature
-  // TODO: make sure that this does not interfere with function calls
-  // that use stack to pass arguments. To solve this we must make sure
-  // that we first push the signature before arguments such that the
-  // callee on restoring parameters from stack in own scope does not pop
-  // runtime instead of parameters.
-
-  assert(call_instr->isCall() && "Machine instruction is not a call!");
-
-  llvm::MachineBasicBlock::iterator insert{call_instr->getIterator()};
-  if (!is_func_dmr(fname_)) {
-    riscv_common::saveRegs({kRTS}, call_instr->getParent(), insert);
-    insert++;
-    riscv_common::loadRegs({kRTS}, call_instr->getParent(), insert);
-  } else {
-    llvm::outs() << "> DMR compliant runtime signature stacking for mi["
-                 << call_instr << "]" << *call_instr << "\n";
-    // in case the calling function is also a DMR we need to make sure
-    // that both stack and shadow stack are used. Currently we do not
-    // support DMR+RACFED calling DMR without RACFED or RASM
-    riscv_common::saveRegs({kRTS}, call_instr->getParent(), insert,
-                           P2S_.at(riscv_common::kSP));
-    insert++;
-    riscv_common::loadRegs({kRTS}, call_instr->getParent(), insert,
-                           P2S_.at(riscv_common::kSP));
-  }
+  riscv_common::preserveSignatureAcrossCall(call_instr, {kRTS}, kC);
 }
 
 short RISCVRacfed::calculate_adjustment(

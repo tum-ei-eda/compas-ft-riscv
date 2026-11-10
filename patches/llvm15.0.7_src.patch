@@ -96,7 +96,7 @@ index e6140edc8403..fa49a7b510c1 100644
  namespace llvm {
  class RISCVRegisterBankInfo;
  class RISCVSubtarget;
-@@ -68,6 +99,12 @@ void initializeRISCVRedundantCopyEliminationPass(PassRegistry &);
+@@ -68,6 +99,15 @@ void initializeRISCVRedundantCopyEliminationPass(PassRegistry &);
  InstructionSelector *createRISCVInstructionSelector(const RISCVTargetMachine &,
                                                      RISCVSubtarget &,
                                                      RISCVRegisterBankInfo &);
@@ -107,9 +107,53 @@ index e6140edc8403..fa49a7b510c1 100644
 +FunctionPass *createRISCVRasm();
 +FunctionPass *createRISCVRacfed();
 +FunctionPass *createRISCVDmr();
++FunctionPass *createRISCVPrepareCallFrame();
++class MachineFunction;
++void reserveRISCVCompasCallFrame(MachineFunction &);
 +} // namespace llvm
  
  #endif
+diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp b/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp
+--- a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp
++++ b/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp
+@@ -11,6 +11,7 @@
+ //===----------------------------------------------------------------------===//
+
+ #include "RISCVFrameLowering.h"
++#include "RISCV.h"
+ #include "RISCVMachineFunctionInfo.h"
+ #include "RISCVSubtarget.h"
+ #include "llvm/CodeGen/MachineFrameInfo.h"
+@@ -998,6 +999,7 @@
+
+ void RISCVFrameLowering::processFunctionBeforeFrameFinalized(
+     MachineFunction &MF, RegScavenger *RS) const {
++  reserveRISCVCompasCallFrame(MF);
+   const RISCVRegisterInfo *RegInfo =
+       MF.getSubtarget<RISCVSubtarget>().getRegisterInfo();
+   MachineFrameInfo &MFI = MF.getFrameInfo();
+diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
+--- a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
++++ b/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
+@@ -48,6 +48,8 @@
+ private:
+   /// FrameIndex for start of varargs area
+   int VarArgsFrameIndex = 0;
++  /// Slot reserved before frame lowering for COMPAS signature preservation.
++  int CompasSignatureFrameIndex = 0;
+   /// Size of the save area used for varargs
+   int VarArgsSaveSize = 0;
+   /// FrameIndex used for transferring values between 64-bit FPRs and a pair
+@@ -74,6 +76,9 @@
+
+   int getVarArgsFrameIndex() const { return VarArgsFrameIndex; }
+   void setVarArgsFrameIndex(int Index) { VarArgsFrameIndex = Index; }
++
++  int getCompasSignatureFrameIndex() const { return CompasSignatureFrameIndex; }
++  void setCompasSignatureFrameIndex(int Index) { CompasSignatureFrameIndex = Index; }
+
+   unsigned getVarArgsSaveSize() const { return VarArgsSaveSize; }
+   void setVarArgsSaveSize(int Size) { VarArgsSaveSize = Size; }
 diff --git a/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp b/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
 index 0c9219076498..ca13459d1214 100644
 --- a/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
@@ -219,10 +263,9 @@ index 0c9219076498..ca13459d1214 100644
    return Reserved;
  }
 diff --git a/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp b/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
-index 50fcb00e6c63..a03eae44c339 100644
 --- a/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
 +++ b/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
-@@ -246,6 +246,11 @@ void RISCVPassConfig::addPreEmitPass2() {
+@@ -246,6 +246,11 @@
    // possibility for other passes to break the requirements for forward
    // progress in the LR/SC block.
    addPass(createRISCVExpandAtomicPseudoPass());
@@ -232,5 +275,13 @@ index 50fcb00e6c63..a03eae44c339 100644
 +  addPass(createRISCVRasm());
 +  addPass(createRISCVRacfed());
  }
- 
+
  void RISCVPassConfig::addMachineSSAOptimization() {
+@@ -256,6 +261,7 @@
+ }
+
+ void RISCVPassConfig::addPreRegAlloc() {
++  addPass(createRISCVPrepareCallFrame());
+   if (TM->getOptLevel() != CodeGenOpt::None)
+     addPass(createRISCVMergeBaseOffsetOptPass());
+   addPass(createRISCVInsertVSETVLIPass());

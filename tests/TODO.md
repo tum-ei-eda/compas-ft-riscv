@@ -4,6 +4,8 @@ These items track compiler work for later. Keep the functional checks and their 
 
 Run the commands below from the repository root after [configuring the tools](README.adoc#running-tests). Select `COMPAS_LLVM_ROOT`, and any `COMPAS_CLANG` or `COMPAS_LLC` overrides, for the compiler combination being investigated. Validation with the LLVM 16.0.6 backend used the Clang 13.0.1 frontend; it does not establish results for a Clang 16 frontend.
 
+Recorded matrix counts describe the original EDDI and RSM investigations before their branches were combined. The combined call ABI suite retains both sets of cases; those historical counts do not describe its expanded matrix.
+
 ## Stack arguments and instruction scheduling
 
 - [ ] Correct the fault-free stack argument and scheduling failures tracked by [issue #14](https://github.com/tum-ei-eda/compas-ft-riscv/issues/14).
@@ -29,13 +31,13 @@ Paired revalidation on the current EDDI stack-tracking branch gives **48 functio
 
 - [ ] Update the stale stack-argument failure allowances after reviewing the stack-tracking correction.
 
-## CRC: truncated output with CFCSS combinations
+## CRC and CFCSS: conditional-branch split successors
 
-- [ ] Investigate why `NZDC+NEMESIS` and `NZDC+NEMESEC` combined with `CFCSS` terminate before completing CRC.
+- [x] Correct the truncated CRC output with `NZDC+NEMESIS`/`NZDC+NEMESEC` and `CFCSS`.
 
-Both failures use RV64 (`rv64gc`), coarse-grained scheduling and all four functions (`main`, `crcInit`, `crcSlow`, `crcFast`) selected for both DMR and CFP. They were observed with the LLVM 16.0.6 backend and Clang 13.0.1 frontend. The process returns status `0` after printing only the initial check-value banner. The [independent CRC oracle](apps/crc/expected.stdout) requires four lines, including the computed slow and fast CRC values and the completion line.
+NEMESIS and NEMESEC split a block containing a conditional branch followed by an unconditional jump. LLVM transfers all successors to the split tail, including the edge taken by the conditional left in the original block. Retaining that false edge made CFCSS treat the tail as a predecessor of two fan-in targets and emit conflicting, unreachable D adjustments after its jumps. The correction retains the tail's taken edge only when its remaining instructions can reach it, while restoring the original conditional edge. Real branch targets, fallthroughs and fault-trap instructions are preserved.
 
-The full CRC matrix with these function selections, six DMR selections (`none` and the five supported modes) and four CFP selections (`none`, `CFCSS`, `RASM`, `RACFED`) produced **22 PASS and 2 FAIL**. The root cause has not been investigated and no issue or known-failure allowance has been added. Keep these configurations as `FAIL` while investigation is deferred.
+On LLVM16 with the Clang13 frontend, selecting `crcSlow` previously stopped output after the initial banner for both combinations. Spike's host status was zero, but the [independent CRC oracle](apps/crc/expected.stdout) requires all four output lines. With the correction, every subset of `main`, `crcInit`, `crcSlow`, `crcFast`, including the empty selection, passes on LLVM13 and LLVM16: **48 PASS per backend**, comprising 32 protected executions and sixteen references, all with complete output. LLVM13 already passed these CRC selections before the correction.
 
 ```sh
 python3 tests/apps/run.py \
@@ -43,7 +45,14 @@ python3 tests/apps/run.py \
   --mode NZDC+NEMESIS --mode NZDC+NEMESEC --cfp CFCSS \
   --functions 'main,crcInit,crcSlow,crcFast' \
   --cfp-functions 'main,crcInit,crcSlow,crcFast' \
-  --build-dir build/tests-todo-crc-cfcss
+  --build-dir build/tests-crc-cfcss
+```
+
+The [CRC control-flow regression](regression/crc_control_flow/README.adoc) compiles the existing application kernel with a freestanding wrapper, checking repeated negative, empty and positive input lengths against independent CRC literals on RV32/RV64. Its full matrix has **48 functional PASS per backend**, resolving four LLVM16 NEMESIS/NEMESEC+CFCSS failures; LLVM13 remains at 48 passes. Separate verification remains **6 PASS / 42 ERROR** per backend. No functional or verifier regressions or new failure allowances were introduced.
+
+```sh
+python3 tests/regression/run.py --case 'crc_control_flow/*' \
+  --build-dir build/tests-crc-control-flow
 ```
 
 ## CRC: LLVM 13 EDDI backend assertion
@@ -61,23 +70,18 @@ python3 tests/apps/run.py \
   --build-dir build/tests-todo-crc-llvm13
 ```
 
-## Control-flow combinations: fault-free signature failures
+## Control-flow combinations: split-branch signature failures
 
-- [ ] Investigate the failing combinations in the [control-flow suite](regression/control_flow/README.adoc).
+- [x] Correct the CFCSS failures caused by false split-tail successors in the [control-flow suite](regression/control_flow/README.adoc).
 
-All six native oracles pass at `-O1` and `-O2`, and all RV32/RV64 unprotected references return `42`. The following protected configurations instead reach target exit `-256`, with empty stdout and host status zero. Scheduling is `cgs`, and the selected functions are declared per case in the manifest.
-
-| Cases | DMR | CFP | Architecture | Backend |
-| --- | --- | --- | --- | --- |
-| `edges` | `NZDC+NEMESIS`, `NZDC+NEMESEC` | `CFCSS` | RV32, RV64 | LLVM 13.0.1, 16.0.6 |
-| `short_circuit` | `EDDI` | `RACFED` | RV32, RV64 | LLVM 13.0.1, 16.0.6 |
-| `break_continue` | `NZDC+NEMESIS`, `NZDC+NEMESEC` | `CFCSS` | RV64 | LLVM 13.0.1 only |
-
-The 288-execution matrix per backend has **280 functional PASS / 8 FAIL** on LLVM13 and **282 functional PASS / 6 FAIL** on LLVM16. No new runtime-failure allowances have been added. The cause of each signature failure remains to be investigated.
+The same successor correction resolves `edges` with `NZDC+NEMESIS`/`NZDC+NEMESEC` and CFCSS on both architectures and backends, plus `break_continue` with those combinations on RV64/LLVM13. A paired run of `control_flow` and `multi_function` with both branch-duplication modes, all four CFP selections and RV32/RV64 now has **180 functional PASS per backend**. Before the correction, LLVM13 had 174 passes and six failures, while LLVM16 had 176 passes and four failures. All previously passing configurations remain passing. Separate verification remains **20 PASS / 160 ERROR** per backend, with no changed verifier outcomes.
 
 ```sh
-python3 tests/regression/run.py --case 'control_flow/*' \
-  --no-verify-machineinstrs --build-dir build/tests-todo-control-flow
+python3 tests/regression/run.py \
+  --case 'control_flow/*' --case 'multi_function/*' \
+  --mode NZDC+NEMESIS --mode NZDC+NEMESEC \
+  --cfp none --cfp CFCSS --cfp RASM --cfp RACFED \
+  --build-dir build/tests-control-flow-splits
 ```
 
 ## EDDI: incoming frame-pointer preservation
@@ -94,39 +98,85 @@ python3 tests/regression/run.py --case 'call_abi/frame_pointer_calls*' \
   --build-dir build/tests-eddi-frame-pointer
 ```
 
-The new cases' full 144-configuration `cgs` matrix has **142 functional PASS / 2 FAIL** on LLVM13 and **132 functional PASS / 12 FAIL** on LLVM16. Paired checks resolve sixteen and fourteen failures respectively, with no new functional or verifier failures. Verification still reports **18 overall PASS / 126 ERROR** on each backend; functional results are retained separately. These remaining runtime failures are deferred:
+Before the RSM preservation changes, the new cases' full 144-configuration `cgs` matrix had **142 functional PASS / 2 FAIL** on LLVM13 and **132 functional PASS / 12 FAIL** on LLVM16. Paired checks resolve sixteen and fourteen failures respectively, with no new functional or verifier failures. Verification still reports **18 overall PASS / 126 ERROR** on each backend; functional results are retained separately. That investigation recorded these remaining runtime failures:
 
 | Cases | DMR | CFP | Backend | Observation |
 | --- | --- | --- | --- | --- |
-| `frame_pointer_calls_caller_only` | `EDDI` | `RACFED` | LLVM13, LLVM16 | RV32/RV64 target exit `-256`; the separate RSM preservation correction is not included in this branch. |
-| `frame_pointer_calls_callee_only` | Every non-`none` mode | `CFCSS` | LLVM16 | RV32/RV64 target exit `-512`; the separate CFCSS preservation correction is not included in this branch. |
+| `frame_pointer_calls_caller_only` | `EDDI` | `RACFED` | LLVM13, LLVM16 | RV32/RV64 target exit `-256`; observed before the RSM preservation correction. |
+| `frame_pointer_calls_callee_only` | Every non-`none` mode | `CFCSS` | LLVM16 | RV32/RV64 target exit `-512`; observed before the CFCSS preservation correction. |
 
-Private builds combining this EDDI change with the RSM branch pass all thirty tested functional profiles per backend: `nested_live_values`, `stack_alignment` and the three new FP cases, with EDDI and CFCSS/RASM on RV32/RV64, including unprotected references. Existing machine-verifier failures remain.
+Earlier private builds combining this EDDI change with the RSM branch passed all thirty tested functional profiles per backend: `nested_live_values`, `stack_alignment` and the three new FP cases, with EDDI and CFCSS/RASM on RV32/RV64, including unprotected references. Existing machine-verifier failures remain.
 
-## Call ABI combinations: live values and stack-passed arguments
+## Call ABI: signature preservation and remaining DMR failures
 
-- [ ] Investigate the failing combinations in the [call ABI suite](regression/call_abi/README.adoc).
+- [x] Preserve RACFED's runtime signature without shifting outgoing stack arguments.
+- [x] Preserve actual RASM and CFCSS runtime state across returning calls instead of assigning expected constants.
+- [ ] Correct the remaining DMR call-boundary and frame failures in the [call ABI suite](regression/call_abi/README.adoc).
 
-The original eight cases cover six source scenarios. All six native scenario oracles pass at `-O1` and `-O2`; all sixteen unprotected RV32/RV64 references pass, including real stack-alignment checks. Their outcomes remain unchanged by the incoming-FP correction. The following failures reproduce with both LLVM 13.0.1 and LLVM 16.0.6 backends using `cgs` and the manifest's selected functions.
+All three signature schemes now reserve fixed FP-relative slots before frame layout and preserve their actual runtime state immediately around returning calls: one XLEN word for RASM/RACFED, two for CFCSS's G and D. The stack pointers and outgoing argument offsets are unchanged at the call. These slots remain stable across stack realignment and DMR's separate pushes. Standard DMR call wrappers exclude the signature registers from their outer spills/restores so they cannot overwrite the state restored by CFP. CFCSS initializes D before any entry-block adjustment, making calls before its first adjustment safe.
 
-| Cases | DMR | CFP | Architecture | Observed target exit |
-| --- | --- | --- | --- | --- |
-| `caller_only`, `caller_and_callee`, `nested_live_values`, `indirect_calls`, `wide_live_values`, `stack_alignment` | `EDDI` | `RACFED` | RV32, RV64 | `-256` |
-| `ten_integer_arguments` | `none`, `SWIFT`, `NZDC`, `NZDC+NEMESIS`, `NZDC+NEMESEC` | `RACFED` | RV32, RV64 | `17` (the argument/result oracle failed) |
-| `ten_integer_arguments` | `EDDI` | `CFCSS`, `RASM`, `RACFED` | RV32, RV64 | `-512` |
+Before the rebase, the RSM suite contained fourteen protection cases over eleven source scenarios, including repeated indirect stack-argument calls, nested calls, a large frame with a VLA, realigned live values, and `signature_join_calls`. All eleven native oracles pass with GCC and Clang at `-O1` and `-O2`; all 28 unprotected RV32/RV64 references pass. All 28 CFP-only configurations per scheme pass execution on both backends; RASM and RACFED also pass machine verification, while CFCSS still reports metadata/CFG errors. The new `signature_join_calls` case passes all 48 functional configurations per backend, including calls to a helper that clobbers the caller-saved signature registers and paths requiring CFCSS fan-in adjustments. A separate RACFED variadic-call smoke check passes on both architectures/backends with a live `va_list` across a call, checking that its signature slot does not overlap the register-varargs save area.
 
-Each backend's original 384-execution matrix has **356 functional PASS / 28 FAIL** and no build or simulator setup errors when run without the optional verifier. These failures remain `FAIL`. The stack-argument mismatch is distinct from the existing local-stack-pointer cases: the ninth and tenth integer arguments actually travel on the call stack. The three additional FP cases and their remaining failures are recorded above.
+The rebased manifest also retains main's three forced-frame-pointer protection cases, for seventeen cases over twelve source scenarios in total.
+
+Revalidation of the combined suite with the LLVM 13.0.1 and 16.0.6 backends, Clang 13.0.1 frontend, RV32/RV64, `cgs`, DMR `none`/`EDDI` and all four CFP selections gives **228 PASS / 36 FAIL / 8 build ERROR per backend**. All 48 `frame_pointer_calls*` configurations pass. Compared with the original RSM branch's 224 shared configurations, twelve failures become passes on each backend with no new failures. The remaining EDDI failures are unchanged: `ten_integer_arguments` and `indirect_stack_arguments` with CFP enabled, `nested_stack_arguments` and `realigned_live_values` with every CFP selection (target `-512`), and `nested_stack_arguments_caller_only` with every CFP selection (target `17`). The eight `dynamic_stack_arguments` EDDI build assertions also remain unchanged. No failure allowances were added.
+
+```sh
+python3 tests/regression/run.py --case 'call_abi/*' \
+  --mode none --mode EDDI \
+  --cfp none --cfp CFCSS --cfp RASM --cfp RACFED \
+  --no-verify-machineinstrs --build-dir build/tests-rebased-call-abi
+```
+
+CFP-only RASM/RACFED revalidation passes all **102 functional and verifier configurations per backend**, including references. All 48 native GCC/Clang `-O1`/`-O2` scenario checks pass. The combined CFCSS control-flow/CRC smoke also passes all 42 configurations per backend with `NZDC+NEMESIS`/`NZDC+NEMESEC`; separate verifier debt remains documented below.
+
+
+Before combining the branches, the full 672-configuration matrix per backend had **584 functional PASS / 80 FAIL / 8 build ERROR**. With machine verification enabled, the overall results are **84 PASS / 588 ERROR**, retaining functional outcomes separately. That investigation recorded these failures on both architectures and backends with `cgs`:
+
+| Cases | DMR | CFP | Observation |
+| --- | --- | --- | --- |
+| `nested_live_values`, `stack_alignment` | `EDDI` | `CFCSS`, `RASM`, `RACFED` | Target exit `-512`. EDDI compares distinct primary/shadow frame addresses while protecting a callee-saved FP store. The eight CFCSS/RASM configurations passed before their preservation correction required FP; the same RACFED combinations already failed. |
+| `ten_integer_arguments`, `indirect_stack_arguments` | `EDDI` | `CFCSS`, `RASM`, `RACFED` | Target exit `-512`. |
+| `nested_stack_arguments`, `realigned_live_values` | `EDDI` | Every selection, including `none` | Target exit `-512`. |
+| `nested_stack_arguments_caller_only` | Every non-`none` mode | Every selection, including `none` | Target exit `17`: incorrect argument/result values across the protected-to-unprotected boundary. |
+| `dynamic_stack_arguments` | `EDDI` | Every selection, including `none` | Backend assertion in `MachineOperand::setImm()`; the same eight build errors reproduce with the pre-correction compilers. |
+
+DMR's own call wrappers still use `saveRegs`/`loadRegs` to move SP after outgoing arguments have been stored. The caller-only nested case exposes that broader ABI problem without CFP enabled. These failures are distinct from the local-stack-pointer tracking cases in issue #14. Keep their runtime results as `FAIL` and build/verifier failures as `ERROR`; no new allowances have been added.
+
+- [x] Correct EDDI's equality check of primary/shadow frame addresses before callee-saved FP stores.
+
+Forcing only the LLVM IR `"frame-pointer"="all"` attribute with the pre-correction LLVM16 compiler reproduces `-512` in both cases on RV32/RV64, with CFP disabled as well as with CFCSS/RASM: all twelve configurations fail, while their ordinary-FP baselines return `42`. Single-instruction traces identify `bne s0,t6` before the FP store in `abi_nested_middle` or `abi_stack_callee`; the primary/shadow frame addresses correctly differ by `0x30`. Removing only that comparison from the new emitted assembly diagnostically makes all eight newly failing configurations pass while preserving the RTS save/restore. Main's incoming-FP preservation correction, retained by this rebase and described above, addresses that comparison.
 
 ```sh
 python3 tests/regression/run.py --case 'call_abi/*' \
   --no-verify-machineinstrs --build-dir build/tests-todo-call-abi
 ```
 
+For the corrected signature-preservation configurations, retain the separate verifier:
+
+```sh
+python3 tests/regression/run.py --case 'call_abi/*' \
+  --mode none --cfp CFCSS --cfp RASM --cfp RACFED --verify-machineinstrs \
+  --build-dir build/tests-signature-call-abi
+```
+
+Across the full CFP-only regression matrix, all 414 matched configurations retain their functional and verifier outcomes before/after the RASM/CFCSS preservation correction. LLVM16 has **414 functional PASS / 306 overall PASS / 108 verifier ERROR**. LLVM13 has **390 functional PASS / 24 build ERROR**, with **290 overall PASS / 124 overall ERROR**. These counts force machine verification for every suite, including `stack_args`; the CFCSS metadata errors and LLVM13 PC-relative build errors remain.
+
+```sh
+python3 tests/regression/run.py \
+  --mode none --cfp CFCSS --cfp RASM --cfp RACFED --verify-machineinstrs \
+  --build-dir build/tests-signature-cfp
+```
+
+- [ ] Make signature instrumentation aware of `+save-restore` prologue/epilogue helpers.
+
+Compiler-generated `__riscv_save_*` calls execute before FP setup and can clobber G/RTS in t0. They need prologue-aware initialization and instrumentation; ordinary body-call preservation cannot safely access its FP-relative slot there. This is separate from preservation across ordinary returning calls.
+
 ## Remaining machine-instruction and CFG verification errors
 
 - [ ] Correct the metadata and CFG violations reported by LLVM's machine verifier on the new suites.
 
-The control-flow matrix reports verifier errors for every enabled DMR mode with every CFP selection, and for CFP-only `CFCSS`, on both architectures and both tested backends: **252 verifier errors / 36 verifier passes** per backend. The LLVM16 call ABI matrix likewise reports **336 verifier errors / 48 verifier passes**. The two runtime oracle failures with CFP-only `RACFED` still fail even though their machine verification passes.
+The control-flow matrix reports verifier errors for every enabled DMR mode with every CFP selection, and for CFP-only `CFCSS`, on both architectures and both tested backends: **252 verifier errors / 36 verifier passes** per backend. The fourteen-case call ABI matrix reports **588 overall ERROR / 84 PASS** per backend, including eight preexisting EDDI build errors. CFP-only RASM and RACFED pass all call ABI runtime and verifier checks; CFCSS and the remaining DMR configurations still require metadata and CFG repairs.
 
 Diagnostics include explicit definitions marked as uses, undefined physical registers, ordinary instructions after terminators, missing or unexpected CFG successors, duplicate successor/predecessor entries and missing `mayStore` flags. These are observed diagnostics; they do not establish a single common root cause. Existing fixes for destination flags and signature-block normalization do not cover every instruction path exercised by these cases.
 
@@ -153,20 +203,17 @@ python3 tests/regression/run.py --case call_abi/stack_alignment \
 
 ## Multiple functions: signature state and protection boundaries
 
-- [ ] Investigate the failing combinations in the [multiple-function suite](regression/multi_function/README.adoc).
+- [x] Preserve actual CFCSS G/D state across calls without an outer DMR restore overwriting it.
+- [ ] Correct the remaining machine-instruction metadata and CFG errors in the [multiple-function suite](regression/multi_function/README.adoc).
 
-Each case compiles all definitions in one translation unit and one `llc` invocation, with an unprotected helper between protected definitions. Native `-O1`/`-O2` oracles and every unprotected reference pass. The following `cgs` configurations fail on both RV32 and RV64 with both LLVM13 and LLVM16 backends:
+Each case compiles all definitions in one translation unit and one `llc` invocation, with an unprotected helper between protected definitions. Native `-O1`/`-O2` oracles and every unprotected reference pass. The paired CFCSS/RASM rerun passes all **104 functional configurations per backend**, with all six DMR selections and both architectures. This resolves the thirty CFCSS runtime failures in `all_shapes`, `alternating_functions` and `callees_only` (all five enabled DMR modes on RV32/RV64).
 
-| Cases | DMR | CFP | Observed target exit |
-| --- | --- | --- | --- |
-| `all_shapes`, `alternating_functions`, `callees_only` | Every non-`none` DMR mode | `CFCSS` | `-512` |
-| `all_shapes`, `alternating_functions`, `caller_only` | `EDDI` | `RACFED` | `-256` |
-
-Each backend's 192-execution matrix has **156 functional PASS / 36 FAIL**. The separate verifier reports **168 ERROR / 24 PASS**, including configurations whose functional behavior passes. Diagnostics include incorrect definition flags, undefined registers, invalid CFG successors, instructions after terminators, missing `mayStore` and expected-register-operand errors. These observations do not establish whether a runtime failure comes from retained pass state or the interaction between protection schemes.
+Functional correctness does not resolve the separate verifier failures. Diagnostics include incorrect definition flags, undefined registers, invalid CFG successors, instructions after terminators, missing `mayStore` and expected-register-operand errors. Keep those errors separate from the corrected call-state preservation behavior.
 
 ```sh
 python3 tests/regression/run.py --case 'multi_function/*' \
-  --no-verify-machineinstrs --build-dir build/tests-todo-multi-function
+  --cfp CFCSS --cfp RASM --no-verify-machineinstrs \
+  --build-dir build/tests-todo-multi-function
 ```
 
 ## Hard-float calls: assembly errors, dataflow failures and missing shadow mappings
@@ -217,11 +264,9 @@ There are 82 assertion failures and 72 relocation/link errors. LLVM16 builds all
 | Backend / model | Cases | DMR | CFP | Architecture | Target exit |
 | --- | --- | --- | --- | --- | --- |
 | LLVM13 / `medany` | `array_offsets`, `address_helpers`, `branch_bases` | Every non-`none` mode | `none` | RV32, RV64 | `-512` |
-| LLVM13 / `medlow` | `address_helpers` | `EDDI` | `RACFED` | RV32, RV64 | `-256` |
-| LLVM16 / both models | `address_helpers` | `EDDI` | `RACFED` | RV32, RV64 | `-256` |
 | LLVM16 / both models | `branch_bases` | `EDDI` | `CFCSS`, `RASM`, `RACFED` | RV32, RV64 | `-512` |
 
-Each backend's matrix contains 384 configurations. LLVM13 has **198 functional PASS / 32 FAIL / 154 build ERROR**; LLVM16 has **368 functional PASS / 16 FAIL**. Separate verification reports **32 PASS / 198 ERROR** on built LLVM13 configurations and **48 PASS / 336 ERROR** on LLVM16. Failed LLVM13 builds cannot run the verifier. The failures remain visible, with no new allowances or compiler fixes.
+Each original matrix contains 384 configurations. After the RACFED call-preservation correction, targeted revalidation makes `address_helpers` with EDDI/RACFED pass on RV32/RV64: `medlow` on both backends and `medany` on LLVM16. Updating the original functional totals with those rechecked profiles gives **200 PASS / 30 FAIL / 154 build ERROR** for LLVM13 and **372 PASS / 12 FAIL** for LLVM16. The LLVM13 `medany` build errors and LLVM16 `branch_bases` EDDI/RACFED runtime failures reproduce unchanged. Original separate verification reported **32 PASS / 198 ERROR** on built LLVM13 configurations and **48 PASS / 336 ERROR** on LLVM16; failed builds cannot run the verifier. No new failure allowances have been added.
 
 ```sh
 python3 tests/regression/run.py --case 'pc_relative/*' \

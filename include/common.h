@@ -57,6 +57,13 @@ const unsigned kTP{llvm::RISCV::X4};
 const unsigned kFP{llvm::RISCV::X8};
 
 RegType getRegType(llvm::Register);
+// Runtime control-flow state owned by the selected signature scheme.
+std::vector<llvm::Register> signatureRegisters(const llvm::MachineFunction &MF);
+// Preserve actual signature state in the preallocated fixed frame, without
+// moving the outgoing argument area at the call. Scratch must be reserved.
+void preserveSignatureAcrossCall(llvm::MachineInstr *call,
+                                 const std::vector<llvm::Register> &regs,
+                                 llvm::Register scratch);
 // save registers in the vector one by one onto the stack and do this
 // at the instruction point pointed to by iterator
 void saveRegs(std::vector<llvm::Register>, llvm::MachineBasicBlock*,

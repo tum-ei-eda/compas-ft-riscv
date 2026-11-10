@@ -1,0 +1,31 @@
+= CRC control-flow regression
+
+This freestanding case compiles the existing
+link:../../apps/crc/crc.c[application CRC source] with a small independent oracle.
+Only `crcSlow` is selected for hardening. The wrapper runs without C library I/O
+or Spike, checking the same kernel on RV32 and RV64 with QEMU user mode.
+
+`slow_crc_boundaries` calls the kernel with volatile lengths `-1, 0, 1, 3, 9`
+over `"123456789"`, then repeats the sequence. Negative and empty lengths leave
+the initial remainder unchanged; positive lengths exercise nested byte/bit loops,
+the backedges and the common return. The fixed CRC-CCITT results are:
+
+[cols="1,1,1",options="header"]
+|===
+|Length |Message prefix |Expected CRC
+|`-1`, `0` |No bytes processed |`0xffff`
+|`1` |`"1"` |`0xc782`
+|`3` |`"123"` |`0x5bce`
+|`9` |`"123456789"` |`0x29b1`
+|===
+
+Success returns `42` with no output; a result mismatch returns `17`. The manifest
+enables all DMR/CFP combinations with coarse-grained scheduling and requests the
+separate machine-instruction verifier. These are functional checks without fault
+injection. The application CRC test remains responsible for complete printed
+output, `crcInit` and `crcFast`.
+
+[source,sh]
+----
+python3 tests/regression/run.py --case 'crc_control_flow/*'
+----

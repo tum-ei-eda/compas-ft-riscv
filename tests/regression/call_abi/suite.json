@@ -66,6 +66,36 @@
       "defines": ["TEST_CASE=12"],
       "frame_pointer": true,
       "functions": ["abi_frame_middle", "abi_frame_leaf"]
+    },
+    {
+      "name": "indirect_stack_arguments",
+      "defines": ["TEST_CASE=7"],
+      "functions": ["abi_indirect_stack_arguments", "abi_ten_args"]
+    },
+    {
+      "name": "nested_stack_arguments",
+      "defines": ["TEST_CASE=8"],
+      "functions": ["abi_nested_stack_arguments", "abi_ten_arg_middle", "abi_ten_args"]
+    },
+    {
+      "name": "nested_stack_arguments_caller_only",
+      "defines": ["TEST_CASE=8"],
+      "functions": ["abi_nested_stack_arguments"]
+    },
+    {
+      "name": "dynamic_stack_arguments",
+      "defines": ["TEST_CASE=9"],
+      "functions": ["abi_dynamic_stack_arguments", "abi_ten_args"]
+    },
+    {
+      "name": "realigned_live_values",
+      "defines": ["TEST_CASE=10"],
+      "functions": ["abi_realigned_live_values"]
+    },
+    {
+      "name": "signature_join_calls",
+      "defines": ["TEST_CASE=11"],
+      "functions": ["abi_signature_join_calls"]
     }
   ]
 }

@@ -30,7 +30,6 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/Support/ErrorHandling.h"
 
-#include "RISCVRasm.h"
 #include "MCTargetDesc/RISCVBaseInfo.h"
 
 #define SWITCH_VOLATILE
@@ -60,6 +59,49 @@ bool savesIncomingFramePointer(const llvm::MachineInstr &MI,
     }
   }
   return false;
+}
+
+bool reachesBlock(llvm::MachineBasicBlock &MBB,
+                  const llvm::MachineBasicBlock *target) {
+  for (const auto &MI : MBB) {
+    const bool no_link_jump = MI.getOpcode() == llvm::RISCV::JAL &&
+                              MI.getNumOperands() >= 2 &&
+                              MI.getOperand(0).isReg() &&
+                              MI.getOperand(0).getReg() == llvm::RISCV::X0;
+    if (MI.isConditionalBranch() || MI.isUnconditionalBranch() ||
+        no_link_jump) {
+      for (const auto &operand : MI.operands())
+        if (operand.isMBB() && operand.getMBB() == target)
+          return true;
+      if (!MI.isConditionalBranch())
+        // Later trap jumps are unreachable on this path.
+        return false;
+    } else if (MI.isIndirectBranch() ||
+               MI.getOpcode() == llvm::TargetOpcode::INLINEASM_BR) {
+      return true; // Keep an existing edge when its target cannot be resolved.
+    } else if (MI.isReturn() || (MI.isBarrier() && !MI.isCall())) {
+      return false;
+    }
+  }
+  return MBB.getNextNode() == target;
+}
+
+llvm::MachineBasicBlock *splitConditionalBranch(llvm::MachineInstr &branch) {
+  auto *source = branch.getParent();
+  auto *taken = branch.getOperand(2).getMBB();
+  auto *tail = source->splitAt(branch);
+  assert(tail != source &&
+         "Conditional branch has no fallthrough instructions");
+
+  // splitAt transfers all successors to the tail, including the edge taken
+  // by the conditional left in source. Retain that edge in the tail only if
+  // its remaining instructions can actually reach it. False edges otherwise
+  // make CFCSS generate conflicting predecessor adjustments.
+  if (tail->isSuccessor(taken) && !reachesBlock(*tail, taken))
+    tail->removeSuccessor(taken, true);
+  if (!source->isSuccessor(taken))
+    source->addSuccessor(taken);
+  return tail;
 }
 
 } // namespace
@@ -1321,16 +1363,10 @@ void RISCVDmr::updateSelectiveCalls() {
                                   // of a non-DMR one
           }
 
-          // if the caller is also protected with RACFED we need to be careful
-          // with preserving the runtime signature register S. Since it has to
-          // be stacked, but all push and pop instructions are protected with
-          // intra-block signature updates, we need to stack the runtime
-          // signature register as near as possible to the function call itself
-          // which is handled by the RACFED pass
-          if (riscv_common::inCSString(llvm::cl::enable_racfed,
-                                       std::string{MF_->getName()})) {
-            spill_regs.erase(RISCVRacfed::get_runtime_signature_reg());
-          }
+          // The CFP pass preserves its actual runtime state immediately
+          // around the call. An outer DMR restore must not overwrite it.
+          for (const auto reg : riscv_common::signatureRegisters(*MF_))
+            spill_regs.erase(reg);
 
           std::vector<llvm::Register> sregs(spill_regs.begin(),
                                             spill_regs.end());
@@ -1445,16 +1481,10 @@ void RISCVDmr::protectCalls() {
       regs_need_preservation.clear();
     }
 
-    // if the caller is also protected with RACFED we need to be careful
-    // with preserving the runtime signature register S. Since it has to
-    // be stacked, but all push and pop instructions are protected with
-    // intra-block signature updates, we need to stack the runtime
-    // signature register as near as possible to the function call itself
-    // which is handled by the RACFED pass
-    if (riscv_common::inCSString(llvm::cl::enable_racfed,
-                                 std::string{MF_->getName()})) {
-      regs_need_preservation.erase(RISCVRacfed::get_runtime_signature_reg());
-    }
+    // The CFP pass preserves its actual runtime state immediately around
+    // the call. An outer DMR restore must not overwrite it.
+    for (const auto reg : riscv_common::signatureRegisters(*MF_))
+      regs_need_preservation.erase(reg);
 
     std::vector<llvm::Register> stacked_regs{regs_need_preservation.begin(),
                                              regs_need_preservation.end()};
@@ -1809,15 +1839,7 @@ void RISCVDmr::protectBranches() {
           // with conditional branch. Solution: splice BB here at conditional!
           llvm::outs() << "No fallthrough successor found for MBB[" << MBB
                        << "]: " << *MBB << "\n";
-          MBB->splitAt(*MI); // we split the the MBB at the conditional branch,
-                             // because we need real CFG conform basic block
-                             // traversal for hardening
-          nottaken_BB = MBB->getFallThrough(); // now MBB has the correct
-                                               // implicit fallthrough on not
-                                               // taking the conditional branch
-          MBB->addSuccessor(
-              taken_BB); // due to split the conditional branch is still active
-                         // but the taken not a registered successor
+          nottaken_BB = splitConditionalBranch(*MI);
         }
         assert(nottaken_BB != nullptr && taken_BB != nullptr &&
                "Conditional branch is odd!");
@@ -1906,15 +1928,7 @@ void RISCVDmr::protectBranches() {
           // with conditional branch. Solution: splice BB here at conditional!
           llvm::outs() << "No fallthrough successor found for MBB[" << MBB
                        << "]: " << *MBB << "\n";
-          MBB->splitAt(*MI); // we split the the MBB at the conditional branch,
-                             // because we need real CFG conform basic block
-                             // traversal for hardening
-          nottaken_BB = MBB->getFallThrough(); // now MBB has the correct
-                                               // implicit fallthrough on not
-                                               // taking the conditional branch
-          MBB->addSuccessor(
-              taken_BB); // due to split the conditional branch is still active
-                         // but the taken not a registered successor
+          nottaken_BB = splitConditionalBranch(*MI);
         }
         assert(nottaken_BB && "this branch has no fallthrough!");
 
