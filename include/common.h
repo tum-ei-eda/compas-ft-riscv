@@ -17,11 +17,18 @@
 #pragma once
 
 #include <map>
+#include <set>
 
 #include "RISCV.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 
 namespace riscv_common {
+// Composable instruction provenance classes selected on CFP function names.
+enum class RsmCategory : unsigned { Original = 1, Dmr = 2, Balance = 4 };
+constexpr unsigned kRsmAll = 7;
+unsigned getRsmInstructionMask(const llvm::MachineFunction &MF,
+                               const std::string &selection);
+
 // ISA-wise settings
 struct ISAConfig {
   // default initialized for riscv32
@@ -74,8 +81,11 @@ bool usesPointerProvenance(const llvm::MachineFunction &MF);
 unsigned incomingPointerDeltaSlots(const llvm::MachineFunction &MF);
 unsigned pointerProvenanceSlots(const llvm::MachineFunction &MF);
 // Finalize emitted instrumentation without changing instruction order or
-// assigning signatures to the continuation blocks introduced here.
-void normalizeControlFlow(llvm::MachineFunction &MF);
+// assigning signatures to the continuation blocks introduced here. An optional
+// selection splits only monitored conditionals before RSM region assignment.
+void normalizeControlFlow(
+    llvm::MachineFunction &MF,
+    const std::set<const llvm::MachineInstr *> *selected_branches = nullptr);
 // Runtime control-flow state owned by the selected signature scheme.
 std::vector<llvm::Register> signatureRegisters(const std::string &name);
 std::vector<llvm::Register> signatureRegisters(const llvm::MachineFunction &MF);

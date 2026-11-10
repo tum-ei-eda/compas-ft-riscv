@@ -15,12 +15,12 @@
  */
 
 #include "common.h"
+#include "RISCVRsm.h"
 
 #include <algorithm>
 #include <iterator>
 #include <map>
 #include <set>
-#include <sstream>
 
 #include "RISCVFrameLowering.h"
 #include "RISCVInstrInfo.h"
@@ -41,6 +41,50 @@
 #endif
 
 namespace {
+
+bool parseRsmMask(llvm::StringRef expression, unsigned &mask,
+                  std::string &error) {
+  mask = 0;
+  if (expression == "all") {
+    mask = riscv_common::kRsmAll;
+    return true;
+  }
+  while (!expression.empty()) {
+    const auto token = expression.split('+');
+    unsigned bit = 0;
+    if (token.first == "orig")
+      bit = static_cast<unsigned>(riscv_common::RsmCategory::Original);
+    else if (token.first == "dmr")
+      bit = static_cast<unsigned>(riscv_common::RsmCategory::Dmr);
+    else if (token.first == "balance")
+      bit = static_cast<unsigned>(riscv_common::RsmCategory::Balance);
+    else {
+      error = "expected orig, dmr, balance, their '+' combinations, or all";
+      return false;
+    }
+    if (mask & bit) {
+      error = "duplicate instruction category in RSM selection";
+      return false;
+    }
+    mask |= bit;
+    if (token.second.empty() && expression.contains('+')) {
+      error = "empty instruction category in RSM selection";
+      return false;
+    }
+    expression = token.second;
+  }
+  if (!mask) {
+    error = "empty RSM instruction selection";
+    return false;
+  }
+  return true;
+}
+
+llvm::StringRef selectionName(llvm::StringRef entry) {
+  const auto colon = entry.rfind(':');
+  return (colon == llvm::StringRef::npos ? entry : entry.take_front(colon)).trim();
+}
+
 
 void remove_operand(llvm::MachineInstr &MI, unsigned index) {
 #if LLVM_VERSION_MAJOR < 15
@@ -166,7 +210,9 @@ SpillFrame spill_frame(const std::vector<llvm::Register> &regs,
 
 } // namespace
 
-void riscv_common::normalizeControlFlow(llvm::MachineFunction &MF) {
+void riscv_common::normalizeControlFlow(
+    llvm::MachineFunction &MF,
+    const std::set<const llvm::MachineInstr *> *selected_branches) {
   if (MF.empty())
     return;
   const auto *tii = MF.getSubtarget().getInstrInfo();
@@ -205,17 +251,27 @@ void riscv_common::normalizeControlFlow(llvm::MachineFunction &MF) {
     }
   }
 
+  // Selected RSM regions split only monitored conditionals. Final cleanup
+  // splits every terminator while retaining main's complete CFG/PHI repair.
+  auto &rsm_info = rsmFunctionInfo(MF);
   // A label changes no emitted instruction order. Split after each terminator
   // so checks have ordinary fallthrough blocks. Also retain instructions after
   // barriers: unreachable trap jumps deliberately detect skipped branches.
   for (auto &MBB : MF) {
     for (auto &MI : MBB) {
+      if (selected_branches &&
+          (!MI.isConditionalBranch() || !selected_branches->count(&MI)))
+        continue;
       if (frameHelper(MI) == FrameHelper::Save ||
           (!MI.isTerminator() && !MI.isBarrier()) ||
           std::next(MI.getIterator()) == MBB.end())
         continue;
       auto *continuation = MBB.splitAt(MI, false);
       origins.emplace(continuation, origins.at(&MBB));
+      if (rsm_info.duplicate_blocks.count(&MBB))
+        rsm_info.duplicate_blocks.insert(continuation);
+      if (rsm_info.error_blocks.count(&MBB))
+        rsm_info.error_blocks.insert(continuation);
       break;
     }
   }
@@ -380,17 +436,39 @@ riscv_common::pointerProvenanceSlots(const llvm::MachineFunction &MF) {
          (usesDmrBasePointer(MF) ? 2 : 0);
 }
 
-bool riscv_common::inCSString(std::string cs_string, std::string x) {
-  std::istringstream iss{cs_string};
-  std::string f{};
-  if (cs_string == "-1")
-    return true;
-  while (std::getline(iss, f, ',')) {
-    if (x.compare(f) == 0) {
-      return true;
+unsigned riscv_common::getRsmInstructionMask(
+    const llvm::MachineFunction &MF, const std::string &selection) {
+  unsigned mask = kRsmAll;
+  llvm::StringRef remaining(selection);
+  while (!remaining.empty()) {
+    const auto item = remaining.split(',');
+    const auto entry = item.first.trim();
+    const auto name = selectionName(entry);
+    if (name == "-1" || name == MF.getName()) {
+      const auto colon = entry.rfind(':');
+      mask = kRsmAll;
+      if (colon != llvm::StringRef::npos) {
+        std::string error;
+        // RsmSelectionParser rejects invalid suffixes before running passes.
+        const bool valid = parseRsmMask(entry.drop_front(colon + 1), mask, error);
+        assert(valid && "invalid RSM instruction selection reached a pass");
+        (void)valid;
+      }
     }
+    remaining = item.second;
   }
+  return mask;
+}
 
+bool riscv_common::inCSString(std::string cs_string, std::string x) {
+  llvm::StringRef remaining(cs_string);
+  while (!remaining.empty()) {
+    const auto item = remaining.split(',');
+    const auto name = selectionName(item.first);
+    if (name == "-1" || name == x)
+      return true;
+    remaining = item.second;
+  }
   return false;
 }
 

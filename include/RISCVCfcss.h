@@ -16,10 +16,12 @@
 
 #pragma once
 
+#include <memory>
 #include <set>
 
 #include "RISCV.h"
 #include "RISCVDmr.h"
+#include "RISCVRsm.h"
 #include "common.h"
 
 class RISCVCfcss : public RISCVDmr {
@@ -46,6 +48,7 @@ private:
   llvm::MachineBasicBlock *cf_err_bb_{nullptr};
   // map each MBB to its info
   std::map<llvm::MachineBasicBlock *, MBBInfo> mbb_info_{};
+  std::unique_ptr<riscv_common::RsmRegions> regions_;
 
   // for initialization purposes
   void init() override;

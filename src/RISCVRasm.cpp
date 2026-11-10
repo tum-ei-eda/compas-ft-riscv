@@ -72,6 +72,8 @@ bool RISCVRasm::runOnMachineFunction(llvm::MachineFunction &MF) {
 
   llvm::outs() << "Running RASM pass on " << MF_->getName() << "\n";
 
+  regions_ = std::make_unique<riscv_common::RsmRegions>(
+      *MF_, llvm::cl::enable_rasm.getValue());
   init();
   harden();
 
@@ -120,7 +122,6 @@ void RISCVRasm::harden() {
   // Step 4: Calculate traversal adjustment values for non-trivial
   // instructions
   generate_traversal_adjustments();
-  normalize_control_flow();
 
   /*
     for (auto &MBB : *MF_) {
@@ -423,6 +424,8 @@ void RISCVRasm::generate_signatures() {
       err_bbs_.emplace(&MBB);
       continue;
     }
+    if (regions_->isTransparent(&MBB))
+      continue;
 
     short y = 0;
     while (1) {
@@ -461,6 +464,8 @@ void RISCVRasm::generate_signature_checks() {
       // itself
       continue;
     }
+    if (regions_->isTransparent(&MBB))
+      continue;
 
     if (MBB.pred_empty()) {
       // for entryBB we dont check RTS
@@ -526,7 +531,7 @@ void RISCVRasm::generate_traversal_adjustments() {
                   "non-trivial instructions on "
                << MF_->getName() << "\n";
   for (auto &MBB : *MF_) {
-    if (err_bbs_.find(&MBB) != err_bbs_.end())
+    if (err_bbs_.find(&MBB) != err_bbs_.end() || regions_->isTransparent(&MBB))
       continue;
 
     // Visit only instructions present before traversal instrumentation. In
@@ -542,7 +547,8 @@ void RISCVRasm::generate_traversal_adjustments() {
     short carried_adjustment = 0;
     bool falls_through = true;
     for (auto *MI : instructions) {
-      auto *target = direct_branch_target(*MI);
+      auto *physical_branch_target = direct_branch_target(*MI);
+      auto *target = regions_->resolve(physical_branch_target);
       const auto helper = riscv_common::frameHelper(*MI);
       if (helper == riscv_common::FrameHelper::Save)
         continue; // RTS starts after this helper, before FP setup.
@@ -560,12 +566,16 @@ void RISCVRasm::generate_traversal_adjustments() {
       }
 
       if (MI->isConditionalBranch()) {
-        assert(target && "conditional branch has no local target!");
+        assert(physical_branch_target &&
+               "conditional branch has no local target!");
         // Error checks leave the normal path's signature untouched. Its
         // adjustment belongs at the eventual normal transfer, including an
         // implicit fallthrough after a final error check.
         if (branches_to_errbbs(MI))
           continue;
+        // Unselected instructions still connect signed regions. Keep their
+        // normal transfer arithmetic so each legal target receives its state.
+        assert(target && "monitored branch has no normal destination!");
 
         const auto target_adjustment = calculate_adjustment(&MBB, target);
         const short adjustment = target_adjustment - carried_adjustment;
@@ -584,6 +594,7 @@ void RISCVRasm::generate_traversal_adjustments() {
         // instructions following an unconditional transfer are unreachable
         // on the fault-free path.
         if (!branches_to_errbbs(MI)) {
+          assert(target && "normal jump has no normal destination!");
           const short adjustment =
               calculate_adjustment(&MBB, target) - carried_adjustment;
           assert_imm(adjustment);
@@ -632,7 +643,8 @@ void RISCVRasm::generate_traversal_adjustments() {
 
     if (!falls_through)
       continue;
-    auto *target = MBB.getFallThrough();
+    auto *physical_target = MBB.getFallThrough();
+    auto *target = regions_->resolve(physical_target);
     if (!target || err_bbs_.find(target) != err_bbs_.end())
       continue;
 
@@ -641,7 +653,8 @@ void RISCVRasm::generate_traversal_adjustments() {
     assert_imm(adjustment);
     // Preserve the existing one-instruction optimization when the layout
     // successor can only be entered by this fallthrough edge.
-    if (target->pred_size() == 1) {
+    if (target == physical_target &&
+        regions_->predecessors(target).size() == 1) {
       const short merged_adjustment = adjustment - mbb_sigs_.at(target).second;
       assert_imm(merged_adjustment);
       mbb_signature_arbr_instrs_.at(target)->getOperand(2).setImm(
@@ -654,14 +667,6 @@ void RISCVRasm::generate_traversal_adjustments() {
           .addImm(adjustment);
     }
   }
-}
-
-void RISCVRasm::normalize_control_flow() {
-  // Signature calculations use the original application blocks. Only split
-  // them after all updates have been emitted: doing this earlier would assign
-  // extra signatures and change the protection scheme. A split adds a label,
-  // without changing the order of the emitted instructions.
-  riscv_common::normalizeControlFlow(*MF_);
 }
 
 // ------------------------------------------- RACFED --------------------------
@@ -678,6 +683,8 @@ bool RISCVRacfed::runOnMachineFunction(llvm::MachineFunction &MF) {
 
   llvm::outs() << "Running RACFED pass on " << MF_->getName() << "\n";
 
+  regions_ = std::make_unique<riscv_common::RsmRegions>(
+      *MF_, llvm::cl::enable_racfed.getValue());
   init();
 
   llvm::outs() << "Running RACFED harden() on " << MF_->getName() << "\n";
@@ -696,7 +703,8 @@ void RISCVRacfed::init() {
 
 void RISCVRasm::generate_intrablock_signature_updates() {
   for (auto &MBB : *MF_) {
-    if (MBB.succ_size() == 1 && &MBB == *MBB.succ_begin()) {
+    if (regions_->isTransparent(&MBB) ||
+        (MBB.succ_size() == 1 && &MBB == *MBB.succ_begin())) {
       continue;
     }
     mbb_sum_ii_sigs_[&MBB] = 0; // force to 0 -> RASM has no intra block updates
@@ -712,7 +720,8 @@ void RISCVRacfed::generate_intrablock_signature_updates() {
     // there could be err-BBs from other passes
     // the convention is if a BB keeps jumping to itself then this is also
     // an error-BB
-    if (MBB.succ_size() == 1 && &MBB == *MBB.succ_begin()) {
+    if (regions_->isTransparent(&MBB) ||
+        (MBB.succ_size() == 1 && &MBB == *MBB.succ_begin())) {
       continue;
     }
     llvm::outs() << "> mbb[" << &MBB << "] {X=" << mbb_sigs_.at(&MBB).first
@@ -733,12 +742,13 @@ void RISCVRacfed::generate_intrablock_signature_updates() {
                    << "back?: " << (&MI == &(MBB.back())) << "mback["
                    << &(MBB.instr_back()) << "]" << MBB.instr_back() << "\n";
 
-      if (riscv_common::frameHelper(MI) != riscv_common::FrameHelper::None ||
+      if (!regions_->monitorsInstruction(MI) ||
+          riscv_common::frameHelper(MI) != riscv_common::FrameHelper::None ||
           MI.isMetaInstruction() || // metadata emits no monitored instruction
           (MI.isBranch() && !MI.isConditionalBranch()) ||
           is_local_unconditional_jump(MI) ||
           (MI.isConditionalBranch() &&
-           !branches_to_errbbs(&MI)) || // ignore pre-branch updates
+           !branches_to_errbbs(&MI)) || // normal branches use traversal updates
           //((&MI == &(MBB.instr_back()) ) && MI.isConditionalBranch() &&
           // branches_to_errbbs(
           //     &MI)) || // ignore DMR not taken/fallthrough duplicate
@@ -830,5 +840,4 @@ void RISCVRacfed::harden() {
   // Step 4: Calculate traversal adjustment values for non-trivial
   // instructions
   generate_traversal_adjustments();
-  normalize_control_flow();
 }

@@ -53,24 +53,72 @@ index 3e4c3c62a34d..fd8e27e1209d 100644
  add_subdirectory(TargetInfo)
 +add_subdirectory(compas-ft-riscv)
 diff --git a/llvm/lib/Target/RISCV/RISCV.h b/llvm/lib/Target/RISCV/RISCV.h
-index e6140edc8403..fa49a7b510c1 100644
 --- a/llvm/lib/Target/RISCV/RISCV.h
 +++ b/llvm/lib/Target/RISCV/RISCV.h
-@@ -15,8 +15,40 @@
+@@ -15,7 +15,88 @@
  #define LLVM_LIB_TARGET_RISCV_RISCV_H
 
  #include "MCTargetDesc/RISCVBaseInfo.h"
 +#include "llvm/Support/CommandLine.h"
  #include "llvm/Target/TargetMachine.h"
-
++
++namespace riscv_common {
++// Validate optional instruction-category suffixes on CFP function selections.
++class RsmSelectionParser : public llvm::cl::parser<std::string> {
++public:
++  explicit RsmSelectionParser(llvm::cl::Option &O)
++      : llvm::cl::parser<std::string>(O) {}
++  bool parse(llvm::cl::Option &O, llvm::StringRef, llvm::StringRef Arg,
++             std::string &Value) {
++    auto remaining = Arg;
++    while (!remaining.empty()) {
++      const auto item = remaining.split(',');
++      const auto entry = item.first.trim();
++      const auto colon = entry.rfind(':');
++      const auto name =
++          (colon == llvm::StringRef::npos ? entry : entry.take_front(colon)).trim();
++      if (name.empty())
++        return O.error("expected a function name or -1");
++      if (colon != llvm::StringRef::npos) {
++        auto expression = entry.drop_front(colon + 1);
++        if (expression.empty())
++          return O.error("empty RSM instruction selection");
++        if (expression != "all") {
++          unsigned seen = 0;
++          while (!expression.empty()) {
++            const auto token = expression.split('+');
++            const unsigned bit = token.first == "orig" ? 1
++                               : token.first == "dmr" ? 2
++                               : token.first == "balance" ? 4 : 0;
++            if (!bit)
++              return O.error("expected orig, dmr, balance, '+' combinations, or all");
++            if (seen & bit)
++              return O.error("duplicate instruction category in RSM selection");
++            seen |= bit;
++            if (expression.endswith("+"))
++              return O.error("empty instruction category in RSM selection");
++            expression = token.second;
++          }
++        }
++      }
++      if (remaining.endswith(","))
++        return O.error("empty function in RSM selection");
++      remaining = item.second;
++    }
++    Value = Arg.str();
++    return false;
++  }
++};
++}
++
 +namespace llvm::cl {
 +inline opt<bool> reserve_rf{"RRF", desc("reserve half of RegFiles"),
 +                            value_desc("pass")};
-+inline opt<std::string> enable_cfcss{"CFCSS", desc("CFCSS pass for CFP"),
++inline opt<std::string, false, riscv_common::RsmSelectionParser> enable_cfcss{"CFCSS", desc("CFCSS pass for CFP"),
 +                                     value_desc("pass")};
-+inline opt<std::string> enable_rasm{"RASM", desc("RASM pass for CFP"),
++inline opt<std::string, false, riscv_common::RsmSelectionParser> enable_rasm{"RASM", desc("RASM pass for CFP"),
 +                                    value_desc("pass")};
-+inline opt<std::string> enable_racfed{"RACFED", desc("RACFED pass for CFP"),
++inline opt<std::string, false, riscv_common::RsmSelectionParser> enable_racfed{"RACFED", desc("RACFED pass for CFP"),
 +                                    value_desc("pass")};
 +inline opt<std::string> enable_nzdc{"NZDC", desc("NZDC pass for DFP"),
 +                                    value_desc("pass")};
@@ -93,11 +141,10 @@ index e6140edc8403..fa49a7b510c1 100644
 +bool isDmrFunction(const std::string &);
 +}
 +
-+
+
  namespace llvm {
  class RISCVRegisterBankInfo;
- class RISCVSubtarget;
-@@ -68,6 +100,16 @@ void initializeRISCVRedundantCopyEliminationPass(PassRegistry &);
+@@ -68,6 +149,16 @@
  InstructionSelector *createRISCVInstructionSelector(const RISCVTargetMachine &,
                                                      RISCVSubtarget &,
                                                      RISCVRegisterBankInfo &);
@@ -451,7 +498,7 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMCInstLower.cpp b/llvm/lib/Target/RISCV/
 diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
 --- a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
 +++ b/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
-@@ -13,10 +13,15 @@
+@@ -13,10 +13,20 @@
  #ifndef LLVM_LIB_TARGET_RISCV_RISCVMACHINEFUNCTIONINFO_H
  #define LLVM_LIB_TARGET_RISCV_RISCVMACHINEFUNCTIONINFO_H
 
@@ -464,11 +511,20 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/
  #include "llvm/CodeGen/MachineFrameInfo.h"
  #include "llvm/CodeGen/MachineFunction.h"
 +#include <cstdint>
++#include <memory>
++
++namespace riscv_common {
++struct RsmFunctionInfo;
++}
 
  namespace llvm {
 
-@@ -48,6 +53,19 @@
+@@ -46,8 +56,23 @@
+ /// and contains private RISCV-specific information for each MachineFunction.
+ class RISCVMachineFunctionInfo : public MachineFunctionInfo {
  private:
++  /// Instruction provenance shared by the COMPAS machine passes.
++  std::shared_ptr<riscv_common::RsmFunctionInfo> CompasRsmInfo;
    /// FrameIndex for start of varargs area
    int VarArgsFrameIndex = 0;
 +  /// Slot reserved before frame lowering for COMPAS signature preservation.
@@ -487,10 +543,26 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/
    /// Size of the save area used for varargs
    int VarArgsSaveSize = 0;
    /// FrameIndex used for transferring values between 64-bit FPRs and a pair
-@@ -75,6 +93,47 @@
+@@ -65,6 +90,14 @@
+   unsigned CalleeSavedStackSize = 0;
+
+ public:
++  const std::shared_ptr<riscv_common::RsmFunctionInfo> &getCompasRsmInfo() const {
++    return CompasRsmInfo;
++  }
++  void setCompasRsmInfo(
++      const std::shared_ptr<riscv_common::RsmFunctionInfo> &Info) {
++    CompasRsmInfo = Info;
++  }
++
+   RISCVMachineFunctionInfo(const MachineFunction &MF) {}
+
+   MachineFunctionInfo *
+@@ -74,6 +107,47 @@
+
    int getVarArgsFrameIndex() const { return VarArgsFrameIndex; }
    void setVarArgsFrameIndex(int Index) { VarArgsFrameIndex = Index; }
-
++
 +  int getCompasSignatureFrameIndex() const { return CompasSignatureFrameIndex; }
 +  void setCompasSignatureFrameIndex(int Index) { CompasSignatureFrameIndex = Index; }
 +  int getCompasDmrCallFrameIndex() const { return CompasDmrCallFrameIndex; }
@@ -531,11 +603,10 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/
 +  void setCompasUnsupportedPointerArgs(bool Unsupported = true) {
 +    CompasUnsupportedPointerArgs = Unsupported;
 +  }
-+
+
    unsigned getVarArgsSaveSize() const { return VarArgsSaveSize; }
    void setVarArgsSaveSize(int Size) { VarArgsSaveSize = Size; }
-
-@@ -89,9 +148,13 @@
+@@ -89,9 +163,13 @@
    void setLibCallStackSize(unsigned Size) { LibCallStackSize = Size; }
 
    bool useSaveRestoreLibCalls(const MachineFunction &MF) const {
@@ -549,7 +620,6 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/
             VarArgsSaveSize == 0 && !MF.getFrameInfo().hasTailCall() &&
             !MF.getFunction().hasFnAttribute("interrupt");
    }
-
 diff --git a/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp b/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
 --- a/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
 +++ b/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp

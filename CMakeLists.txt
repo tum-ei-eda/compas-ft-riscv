@@ -9,6 +9,7 @@ add_llvm_library(Sihft
     src/RISCVCfcss.cpp
     src/RISCVPrepareCallFrame.cpp
     src/RISCVRasm.cpp
+    src/RISCVRsm.cpp
     src/RISCVDmr.cpp
 )
 target_include_directories(Sihft
