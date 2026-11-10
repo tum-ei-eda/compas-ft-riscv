@@ -126,6 +126,16 @@
       "functions": ["abi_realigned_live_values"]
     },
     {
+      "name": "realigned_entry_residues",
+      "defines": ["TEST_CASE=13"],
+      "functions": ["abi_realigned_live_values"]
+    },
+    {
+      "name": "realigned_entry_residues_protected_leaf",
+      "defines": ["TEST_CASE=13"],
+      "functions": ["abi_realigned_live_values", "abi_leaf", "abi_array_alignment"]
+    },
+    {
       "name": "signature_join_calls",
       "defines": ["TEST_CASE=11"],
       "functions": ["abi_signature_join_calls"]

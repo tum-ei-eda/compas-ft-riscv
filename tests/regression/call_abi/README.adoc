@@ -29,6 +29,8 @@ success or `17` on an oracle mismatch, and produces no output.
 |`dynamic_stack_arguments` |A large fixed frame and a runtime-sized local array keep values live across ten-word calls, exercising frame-pointer addressing and a moving stack pointer.
 |`dynamic_stack_arguments_caller_only` |Only the caller with the large fixed frame and VLA is protected, checking stable preservation slots while calling an unprotected ten-argument helper.
 |`realigned_live_values` |A caller with a 64-byte-aligned volatile array and twelve independent live values invokes an unprotected helper with register arguments, checking realigned spill slots separately from stack-passed arguments.
+|`realigned_entry_residues` |An unprotected caller varies runtime stack padding to cover all four ABI-valid entry-SP residues modulo 64, repeatedly invokes the protected realigned function, and checks its returned SP and padding contents.
+|`realigned_entry_residues_protected_leaf` |The same entry residues also protect the nested arithmetic and array-alignment helpers, checking both the ordinary-to-protected and protected-to-protected boundaries.
 |`signature_join_calls` |A protected caller invokes an unprotected helper in its entry block, in either branch before a join, and after the join; the helper explicitly overwrites both signature registers on RISC-V.
 |===
 
@@ -60,6 +62,25 @@ the final result checks values retained in both arrays after the calls.
 The realigned-frame case keeps its local array indexed by a runtime value so it
 cannot shrink to a few scalars, and uses both call results in the independent
 live-value checks.
+The entry-residue variants reuse that function and its three literal results.
+An unprotected wrapper allocates runtime padding of 16, 32, 48 and 64 bytes after
+ABI rounding, calls the function, and checks the same SP before and after return.
+The target run requires all four residues modulo 64 to occur; the wrapper's
+volatile padding must also survive every call. Each combination of input and
+padding executes twice. A noinline helper checks the array's actual address for
+64-byte alignment. One variant selects every helper called by the realigned
+function, avoiding selective-call preservation slots in that function. The
+other selects only the realigned function. Both keep the VLA and inline SP probe
+unprotected.
+
+EDDI must keep the realigned primary and shadow frames disjoint with enough
+padding for alignment rounding. Spilled frame addresses retain their known
+primary-to-shadow offset; ordinary scalar stores still require equal values.
+An ordinary caller checks return values, ABI-preserved registers and control
+state after a protected call. Discarded caller-clobbered temporaries fall outside
+that return contract. Incoming stack arguments in realigned callees, protected
+VLAs, large frame adjustments and save/restore libcalls remain separate
+follow-ups in link:../../TODO.md[the test TODO].
 
 The signature-join case exercises preservation of both the running signature and
 the CFCSS predecessor adjustment across calls. Its helper overwrites `t0` and

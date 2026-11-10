@@ -15,10 +15,25 @@ NOINLINE word abi_ten_args(word a, word b, word c, word d, word e,
 }
 #endif
 
-#if (TEST_CASE >= 1 && TEST_CASE <= 3) || TEST_CASE == 10
+#if (TEST_CASE >= 1 && TEST_CASE <= 3) || TEST_CASE == 10 || TEST_CASE == 13
 NOINLINE word abi_leaf(word value)
 {
     return value * 3 + 5;
+}
+#endif
+
+#if TEST_CASE == 6 || TEST_CASE == 13
+/* Intentionally unprotected: inspect SP without duplicating inline assembly. */
+NOINLINE word abi_stack_pointer(void)
+{
+#if defined(__riscv)
+    word pointer;
+    __asm__ volatile ("mv %0, sp" : "=r" (pointer) : : "memory");
+    return pointer;
+#else
+    /* Host builds check the arithmetic; RISC-V runs check the actual SP. */
+    return 0;
+#endif
 }
 #endif
 
@@ -138,19 +153,6 @@ int main(void)
 
 #elif TEST_CASE == 6
 volatile word abi_inputs[] = {3, 21};
-
-/* Intentionally unprotected: inspect SP without asking COMPAS to duplicate asm. */
-NOINLINE word abi_stack_pointer(void)
-{
-#if defined(__riscv)
-    word pointer;
-    __asm__ volatile ("mv %0, sp" : "=r" (pointer) : : "memory");
-    return pointer;
-#else
-    /* Host smoke builds check the arithmetic; the RISC-V runs check real SP. */
-    return 0;
-#endif
-}
 
 NOINLINE word abi_stack_callee(word first, word second)
 {
@@ -340,13 +342,25 @@ int main(void)
     return 42;
 }
 
-#elif TEST_CASE == 10
+#elif TEST_CASE == 10 || TEST_CASE == 13
 volatile word abi_inputs[] = {3, 17, 29};
+
+#if TEST_CASE == 13
+NOINLINE word abi_array_alignment(const volatile word *array)
+{
+    return (word)array & 63UL;
+}
+#endif
 
 NOINLINE word abi_realigned_live_values(word value)
 {
     volatile word spill[32] __attribute__((aligned(64)));
     word index = value & 15UL;
+#if TEST_CASE == 13
+    /* The helper observes the actual address instead of folding known alignment. */
+    if (abi_array_alignment(spill) != 0)
+        return 0;
+#endif
     spill[index] = value + 0x11UL;
     spill[index + 16] = value ^ 0x123UL;
     /* Separate volatile loads keep enough independent values to force spills. */
@@ -371,15 +385,57 @@ NOINLINE word abi_realigned_live_values(word value)
            spill[index] + spill[index + 16];
 }
 
+#if TEST_CASE == 13
+volatile word abi_realigned_residues;
+
+/* Keep the moving stack and its SP probe outside the protected selection. */
+NOINLINE word abi_realigned_entry(word value, word pad_words)
+{
+    volatile word padding[pad_words];
+    padding[0] = 0x12345UL;
+    padding[pad_words - 1] = 0x6789UL;
+    word before = abi_stack_pointer();
+    word result = abi_realigned_live_values(value);
+    word after = abi_stack_pointer();
+    if ((before & 15UL) != 0 || before != after ||
+        padding[0] != 0x12345UL || padding[pad_words - 1] != 0x6789UL)
+        return 0;
+    abi_realigned_residues |= 1UL << ((before & 63UL) >> 4);
+    return result;
+}
+#endif
+
 int main(void)
 {
     /* Weighted XORs of x+17+odd or (x^291)+even with 3*x+8 or 3*x+11. */
     const word expected[] = {13826UL, 11998UL, 16510UL};
+#if TEST_CASE == 13
+    unsigned int round;
+    for (round = 0; round != 2; ++round) {
+        unsigned int residue;
+        for (residue = 0; residue != 4; ++residue) {
+            /* After ABI rounding, these allocate 16, 32, 48 and 64 bytes. */
+            word pad_words = 2 + residue * (16 / sizeof(word));
+            unsigned int index;
+            for (index = 0; index != 3; ++index) {
+                if (abi_realigned_entry(abi_inputs[index], pad_words) !=
+                    expected[index])
+                    return 17;
+            }
+        }
+    }
+#if defined(__riscv)
+    /* Require every 16-byte-aligned entry residue modulo 64 to execute. */
+    if (abi_realigned_residues != 15UL)
+        return 17;
+#endif
+#else
     unsigned int index;
     for (index = 0; index != 3; ++index) {
         if (abi_realigned_live_values(abi_inputs[index]) != expected[index])
             return 17;
     }
+#endif
     return 42;
 }
 

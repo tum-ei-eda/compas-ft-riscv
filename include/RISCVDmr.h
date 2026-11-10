@@ -284,6 +284,7 @@ protected:
   std::set<llvm::MachineInstr *> branches_{};
   std::set<llvm::MachineInstr *> loads_{};
   std::set<llvm::MachineInstr *> shadow_loads_{};
+  std::set<llvm::MachineInstr *> frame_address_stores_{};
   std::map<llvm::MCSymbol *, llvm::MCSymbol *> shadow_pcrel_symbols_{};
   std::set<llvm::MachineBasicBlock *> exit_bbs_{};
   llvm::MachineBasicBlock *entry_bb_{nullptr};
@@ -297,6 +298,8 @@ protected:
   std::string fname_{};
   bool use_shadow_for_stack_ops_{true};
   int frame_size_{0};
+  // EDDI's frame separation includes padding around stack realignment.
+  int shadow_frame_offset_{0};
 
   virtual void init();
   void analyze_function();
@@ -305,6 +308,7 @@ protected:
   void updateSelectiveCalls();
   void duplicateInstructions();
   void preparePCRelativeAddresses();
+  void checkFrameAddress(llvm::MachineInstr *, llvm::Register);
   void protectStores();
   void protectLoads();
   void protectCalls();

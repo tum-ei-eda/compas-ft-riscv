@@ -18,23 +18,14 @@ python3 tests/regression/run.py --case 'stack_args/*' \
   --no-verify-machineinstrs --build-dir build/tests-todo-stack
 ```
 
-## EDDI: realigned, large and dynamic frames
+## EDDI: large and dynamic frames
 
-- [ ] Correct `call_abi/realigned_live_values` with EDDI.
 - [ ] Correct EDDI's large/dynamic frame handling in `dynamic_stack_arguments` and `dynamic_stack_arguments_caller_only`.
 
-The current twenty-three-case `cgs` [call-ABI matrix](regression/call_abi/README.adoc) leaves these failures on both backends and architectures, with every CFP selection:
-
-| Cases | Remaining result per backend |
-| --- | --- |
-| `realigned_live_values` | Eight runtime failures, target `-512`. |
-| `dynamic_stack_arguments`, `dynamic_stack_arguments_caller_only` | Sixteen build errors, including the existing `MachineOperand::setImm()` assertion. |
-
-Ordinary incoming stack arguments, incoming FP preservation and returning selective-call argument placement are covered by passing regressions. Large incoming argument offsets with a small callee frame also pass; that does not establish support for a large EDDI frame.
+Both scenarios still produce sixteen build errors per backend across RV32/RV64 and all CFP selections in the [call-ABI suite](regression/call_abi/README.adoc). Variable-sized EDDI frames are explicitly diagnosed as unsupported before transformation; the earlier investigation encountered `MachineOperand::setImm()` assertions or incorrect execution instead. Realigned-frame support requires one encodable fixed allocation, without save/restore libcalls or incoming stack-argument loads. Large incoming argument offsets with a small callee frame do not establish support for a large EDDI frame.
 
 ```sh
-python3 tests/regression/run.py \
-  --case call_abi/realigned_live_values --case 'call_abi/dynamic_stack_arguments*' \
+python3 tests/regression/run.py --case 'call_abi/dynamic_stack_arguments*' \
   --mode EDDI --cfp none --cfp CFCSS --cfp RASM --cfp RACFED \
   --no-verify-machineinstrs --build-dir build/tests-todo-eddi-frames
 ```
@@ -47,7 +38,7 @@ python3 tests/regression/run.py \
 
 The first item concerns legacy `saveRegs`/`loadRegs` paths that still move SP. Duplicated calls need distinct outer and argument/result snapshots with positional return-to-shadow reloads. Late tail wrappers run after the original epilogue restores FP and need earlier conversion or another preservation plan.
 
-For the balance-check issue, a RACFED-protected caller without DMR can invoke a DMR-protected callee while its evolving RTS in `t0` differs from ordinary shadow `t4`, causing target `-512`. Large RASM signature-slot offsets can expose the same comparison when address formation borrows `t4`. LLVM13's large-offset DMR-bank MIR probe also hits an assembly-printer assertion, leaving that validation incomplete.
+For the balance-check issue, a RACFED-protected caller without DMR can invoke a DMR-protected callee while its evolving RTS in `t0` differs from ordinary shadow `t4`, causing target `-512`. Returning EDDI calls now exclude discarded caller-clobbered temporaries; CFP ownership still needs review for other DMR modes and preservation paths. Large RASM signature-slot offsets can expose the same comparison when address formation borrows `t4`. LLVM13's large-offset DMR-bank MIR probe also hits an assembly-printer assertion, leaving that validation incomplete.
 
 Compiler-generated `__riscv_save_*` calls execute before FP setup and can clobber G/RTS in `t0`. Signature initialization and preservation must account for their prologue placement.
 
@@ -113,7 +104,6 @@ python3 tests/regression/run.py --case 'hard_float/*' \
 ## PC-relative addresses
 
 - [ ] Correct LLVM13 `medany` backend assertions, relocation errors and runtime failures.
-- [ ] Correct LLVM16 `branch_bases` with EDDI and CFP.
 
 The [PC-relative suite](regression/pc_relative/README.adoc) disables relaxation and covers both architectures and code models. Current EDDI `cgs` checks retain:
 
@@ -122,7 +112,6 @@ The [PC-relative suite](regression/pc_relative/README.adoc) disables relaxation 
 | LLVM13 / `medany` | `global_read_write`, every CFP; `branch_bases`, enabled CFP | `!NodePtr->isKnownSentinel()` backend assertion. |
 | LLVM13 / `medany` | `array_offsets`, `address_helpers`, enabled CFP | `%pcrel_lo missing matching %pcrel_hi` linker error. |
 | LLVM13 / `medany` | `array_offsets`, `address_helpers`, `branch_bases`, CFP `none` | Target `-512`. |
-| LLVM16 / both models | `branch_bases`, CFCSS/RASM/RACFED | Target `-512`. |
 
 Earlier all-mode runs also found LLVM13 CFP-only and other DMR selections affected by the assertions/relocation errors; revalidate those when changing address or signature emission.
 
