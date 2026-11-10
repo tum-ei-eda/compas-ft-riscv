@@ -61,6 +61,49 @@ bool savesIncomingFramePointer(const llvm::MachineInstr &MI,
   return false;
 }
 
+bool reachesBlock(llvm::MachineBasicBlock &MBB,
+                  const llvm::MachineBasicBlock *target) {
+  for (const auto &MI : MBB) {
+    const bool no_link_jump = MI.getOpcode() == llvm::RISCV::JAL &&
+                              MI.getNumOperands() >= 2 &&
+                              MI.getOperand(0).isReg() &&
+                              MI.getOperand(0).getReg() == llvm::RISCV::X0;
+    if (MI.isConditionalBranch() || MI.isUnconditionalBranch() ||
+        no_link_jump) {
+      for (const auto &operand : MI.operands())
+        if (operand.isMBB() && operand.getMBB() == target)
+          return true;
+      if (!MI.isConditionalBranch())
+        // Later trap jumps are unreachable on this path.
+        return false;
+    } else if (MI.isIndirectBranch() ||
+               MI.getOpcode() == llvm::TargetOpcode::INLINEASM_BR) {
+      return true; // Keep an existing edge when its target cannot be resolved.
+    } else if (MI.isReturn() || (MI.isBarrier() && !MI.isCall())) {
+      return false;
+    }
+  }
+  return MBB.getNextNode() == target;
+}
+
+llvm::MachineBasicBlock *splitConditionalBranch(llvm::MachineInstr &branch) {
+  auto *source = branch.getParent();
+  auto *taken = branch.getOperand(2).getMBB();
+  auto *tail = source->splitAt(branch);
+  assert(tail != source &&
+         "Conditional branch has no fallthrough instructions");
+
+  // splitAt transfers all successors to the tail, including the edge taken
+  // by the conditional left in source. Retain that edge in the tail only if
+  // its remaining instructions can actually reach it. False edges otherwise
+  // make CFCSS generate conflicting predecessor adjustments.
+  if (tail->isSuccessor(taken) && !reachesBlock(*tail, taken))
+    tail->removeSuccessor(taken, true);
+  if (!source->isSuccessor(taken))
+    source->addSuccessor(taken);
+  return tail;
+}
+
 } // namespace
 
 llvm::FunctionPass *llvm::createRISCVDmr() { return new RISCVDmr(); }
@@ -1796,15 +1839,7 @@ void RISCVDmr::protectBranches() {
           // with conditional branch. Solution: splice BB here at conditional!
           llvm::outs() << "No fallthrough successor found for MBB[" << MBB
                        << "]: " << *MBB << "\n";
-          MBB->splitAt(*MI); // we split the the MBB at the conditional branch,
-                             // because we need real CFG conform basic block
-                             // traversal for hardening
-          nottaken_BB = MBB->getFallThrough(); // now MBB has the correct
-                                               // implicit fallthrough on not
-                                               // taking the conditional branch
-          MBB->addSuccessor(
-              taken_BB); // due to split the conditional branch is still active
-                         // but the taken not a registered successor
+          nottaken_BB = splitConditionalBranch(*MI);
         }
         assert(nottaken_BB != nullptr && taken_BB != nullptr &&
                "Conditional branch is odd!");
@@ -1893,15 +1928,7 @@ void RISCVDmr::protectBranches() {
           // with conditional branch. Solution: splice BB here at conditional!
           llvm::outs() << "No fallthrough successor found for MBB[" << MBB
                        << "]: " << *MBB << "\n";
-          MBB->splitAt(*MI); // we split the the MBB at the conditional branch,
-                             // because we need real CFG conform basic block
-                             // traversal for hardening
-          nottaken_BB = MBB->getFallThrough(); // now MBB has the correct
-                                               // implicit fallthrough on not
-                                               // taking the conditional branch
-          MBB->addSuccessor(
-              taken_BB); // due to split the conditional branch is still active
-                         // but the taken not a registered successor
+          nottaken_BB = splitConditionalBranch(*MI);
         }
         assert(nottaken_BB && "this branch has no fallthrough!");
 
