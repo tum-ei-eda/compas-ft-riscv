@@ -82,6 +82,13 @@ Forwarding pointers from another EDDI frame, spilling pointer values to memory,
 and transporting pointer bits through floating-point registers require additional
 provenance tracking and remain unsupported by this analysis.
 
+Before a callee establishes its own frame pointer, the incoming \texttt{s0}
+and its shadow belong to the caller. EDDI preserves both independently in the
+callee-saved spill slots, without requiring their values to be equal: they can
+point into separate caller frames whose size is unknown to the callee. The
+exception is identified from the saved-register spill metadata. Ordinary data
+stores, including values held in \texttt{s0}, retain their value checks.
+
 \subsubsection{Example}
 For the sake of example, assume we want to protect the \texttt{crc} program from the MiBench suite. The
 compiled program is to run on the RISCV spike simulator. The C project contains the following C files:

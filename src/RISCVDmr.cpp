@@ -21,8 +21,11 @@
 #include "RISCVSubtarget.h"
 #include "common.h"
 #include "llvm/CodeGen/CommandFlags.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
+#include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -32,6 +35,34 @@
 
 #define SWITCH_VOLATILE
 // #define DBG
+
+namespace {
+
+bool savesIncomingFramePointer(const llvm::MachineInstr &MI,
+                               unsigned store_opcode) {
+  if (MI.getOpcode() != store_opcode ||
+      MI.getOperand(0).getReg() != riscv_common::kFP)
+    return false;
+
+  // CSI stores are not consistently marked FrameSetup. Match the actual
+  // spill object instead, so ordinary stores of s0 retain their value checks.
+  const auto &frame = MI.getParent()->getParent()->getFrameInfo();
+  for (const auto &saved : frame.getCalleeSavedInfo()) {
+    if (saved.getReg() != riscv_common::kFP)
+      continue;
+    for (const auto *memory : MI.memoperands()) {
+      const auto *slot =
+          llvm::dyn_cast_or_null<llvm::FixedStackPseudoSourceValue>(
+              memory->getPseudoValue());
+      if (slot && slot->getFrameIndex() == saved.getFrameIdx() &&
+          memory->getOffset() == 0)
+        return true;
+    }
+  }
+  return false;
+}
+
+} // namespace
 
 llvm::FunctionPass *llvm::createRISCVDmr() { return new RISCVDmr(); }
 
@@ -916,11 +947,15 @@ void RISCVDmr::protectStores() {
     for (const auto &MI : stores_) {
       auto data_operand{MI->getOperand(0).getReg()};
       if (riscv_common::getRegType(data_operand) == riscv_common::RegType::I) {
-        llvm::BuildMI(*MI->getParent(), MI->getIterator(), MI->getDebugLoc(),
-                      TII_->get(llvm::RISCV::BNE))
-            .addReg(data_operand)
-            .addReg(P2S_.at(data_operand))
-            .addMBB(err_bb_);
+        // An incoming s0 is opaque caller context. Its shadow can point into
+        // the caller's separate frame, whose size is unknown here. Preserve
+        // both values verbatim; equality is only valid for ordinary data.
+        if (!savesIncomingFramePointer(*MI, isa_config_.store_opcode))
+          llvm::BuildMI(*MI->getParent(), MI->getIterator(), MI->getDebugLoc(),
+                        TII_->get(llvm::RISCV::BNE))
+              .addReg(data_operand)
+              .addReg(P2S_.at(data_operand))
+              .addMBB(err_bb_);
       } else {
         syncFPRegs(MI->getParent(), MI->getIterator(), data_operand,
                    P2S_.at(data_operand));

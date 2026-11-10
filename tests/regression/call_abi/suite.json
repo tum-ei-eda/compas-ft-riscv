@@ -48,6 +48,24 @@
       "name": "stack_alignment",
       "defines": ["TEST_CASE=6"],
       "functions": ["abi_stack_caller", "abi_stack_callee"]
+    },
+    {
+      "name": "frame_pointer_calls",
+      "defines": ["TEST_CASE=12"],
+      "frame_pointer": true,
+      "functions": ["abi_frame_top", "abi_frame_middle", "abi_frame_leaf"]
+    },
+    {
+      "name": "frame_pointer_calls_caller_only",
+      "defines": ["TEST_CASE=12"],
+      "frame_pointer": true,
+      "functions": ["abi_frame_top"]
+    },
+    {
+      "name": "frame_pointer_calls_callee_only",
+      "defines": ["TEST_CASE=12"],
+      "frame_pointer": true,
+      "functions": ["abi_frame_middle", "abi_frame_leaf"]
     }
   ]
 }

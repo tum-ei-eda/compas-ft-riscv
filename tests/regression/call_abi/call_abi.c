@@ -180,6 +180,64 @@ int main(void)
            abi_stack_caller(abi_inputs[1]) == 0x1277UL ? 42 : 17;
 }
 
+#elif TEST_CASE == 12
+volatile word abi_inputs[] = {1, 4, 13, 29};
+
+NOINLINE word abi_frame_leaf(word value)
+{
+    volatile word spill[3];
+    spill[0] = value + 3;
+    spill[1] = value ^ 0x35UL;
+    spill[2] = value + 11;
+    return 3*spill[0] + spill[1] + 2*spill[2];
+}
+
+NOINLINE word abi_frame_middle(word value)
+{
+    volatile word spill[5];
+    spill[0] = value ^ 0x123UL;
+    spill[1] = value + 9;
+    spill[2] = value + 13;
+    spill[3] = value ^ 0x27UL;
+    spill[4] = value + 17;
+    word first = abi_frame_leaf(value + 1);
+    word second = abi_frame_leaf(value + 4);
+    /* Access FP-relative locals after both calls. */
+    return first + 2*second + spill[0] + spill[1] + 2*spill[2] +
+           3*spill[3] + spill[4];
+}
+
+NOINLINE word abi_frame_top(word value)
+{
+    volatile word spill[7];
+    spill[0] = value + 0x27UL;
+    spill[1] = value ^ 0x456UL;
+    spill[2] = value + 23;
+    spill[3] = value ^ 0x67UL;
+    spill[4] = value + 31;
+    spill[5] = value ^ 0x89UL;
+    spill[6] = value + 43;
+    word first = abi_frame_middle(value + 2);
+    word second = abi_frame_middle(value + 5);
+    return first + 3*second + spill[0] + spill[1] + 2*spill[2] +
+           3*spill[3] + 4*spill[4] + 5*spill[5] + 6*spill[6];
+}
+
+int main(void)
+{
+    /* Nested weighted sums, evaluated independently for each volatile input. */
+    const word expected[] = {5985UL, 6415UL, 7049UL, 7881UL};
+    unsigned int round;
+    for (round = 0; round != 2; ++round) {
+        unsigned int index;
+        for (index = 0; index != 4; ++index) {
+            if (abi_frame_top(abi_inputs[index]) != expected[index])
+                return 17;
+        }
+    }
+    return 42;
+}
+
 #else
 #error "Unknown call ABI TEST_CASE"
 #endif
