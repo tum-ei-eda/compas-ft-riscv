@@ -47,6 +47,8 @@ options is provided in Table~\ref{tab:sihft-options}.
  
   -SWIFT=foo,bar  & SWIFT transformation 
   on \textit{foo,bar}\\ & functions  \\
+
+  -EDDI=foo,bar & EDDI transformation on \textit{foo,bar} functions \\
   
   -RASM=foo,bar   & RASM transformation 
   on \textit{foo,bar}\\ & functions  \\
@@ -56,7 +58,7 @@ options is provided in Table~\ref{tab:sihft-options}.
   
   -CFCSS=foo,bar  & CFCSS transformation on \textit{foo,bar} functions \\
   
-  -FGS            & use fine-grain scheduling for NZDC code                  \\
+  -FGS=foo,bar    & use fine-grain scheduling on \textit{foo,bar} functions \\
   -REPAIR         & REPAIR transformation on NZDC code                   \\
   \hline
  \end{tabular}
@@ -64,6 +66,21 @@ options is provided in Table~\ref{tab:sihft-options}.
 
 The final step in code generation is to use \texttt{gcc} for RISCV architectures to assemble and link the
 assembly code for a particular RISCV processor.
+
+\subsubsection{Stack pointer arguments}
+EDDI allocates separate primary and shadow stack frames. For call arguments
+derived from the current frame, the argument check compares the shadow address
+with the primary address plus the original frame size. The analysis follows
+register values across basic blocks and preserves value checks for scalar
+arguments loaded from stack memory. SWIFT uses one stack and checks its argument
+values directly. Both instruction schedules retain these checks.
+
+Address tracking covers copies and full-width addition and subtraction in integer
+registers. Mixed stack and non-stack provenance, or unsupported arithmetic on a
+tracked stack address, produces a compilation error at the affected call.
+Forwarding pointers from another EDDI frame, spilling pointer values to memory,
+and transporting pointer bits through floating-point registers require additional
+provenance tracking and remain unsupported by this analysis.
 
 \subsubsection{Example}
 For the sake of example, assume we want to protect the \texttt{crc} program from the MiBench suite. The
