@@ -4,15 +4,18 @@ Keep open compiler work here and remove resolved entries once regression coverag
 
 Run commands from the repository root after [configuring the tools](README.adoc#running-tests). Results below cover LLVM 13.0.1 and 16.0.6 backends with the Clang 13.0.1 frontend unless stated otherwise. A target error exit such as `-512` can be hidden by a zero host status. Only explicitly matching manifest runtime failures are `XFAIL`; build and verifier failures remain `ERROR`.
 
-## Stack-pointer arguments: issue #14
+## Remaining inherited-pointer limitations: issue #14
 
-- [ ] Extend inherited-pointer tracking beyond ordinary register formals and private full-word spills.
+Ordinary register- and stack-passed pointer formals and private full-word spills are supported. The [`stack_args`](regression/stack_args/suite.json) regressions pass; the remaining extensions related to [issue #14](https://github.com/tum-ei-eda/compas-ft-riscv/issues/14) are:
 
-In [`stack_args`](regression/stack_args/suite.json) ([issue #14](https://github.com/tum-ei-eda/compas-ft-riscv/issues/14)), stack-passed/byval pointer formals and inherited-pointer tail calls are explicitly unsupported; pointer returns and reloads from arbitrary memory are not tracked. Tracking pointer merges currently requires pointer-typed IR PHI/select candidates, supported affine pointer operations and encodable FP-relative metadata stores. Integer-encoded pointer merges and nonlinear operations on runtime origins remain unsupported.
+- [ ] Support byval/byref and other indirect pointer formals, which are explicitly rejected.
+- [ ] Support inherited-pointer tail calls, which are explicitly rejected.
+- [ ] Track pointer returns and pointer reloads from arbitrary memory.
+- [ ] Extend pointer merges beyond pointer-typed IR PHI/select candidates, supported affine operations and encodable FP-relative metadata stores. Integer-encoded pointer merges and nonlinear operations on runtime origins remain unsupported.
 
 ```sh
 python3 tests/regression/run.py --case 'stack_args/*' \
-  --mode EDDI --mode SWIFT --schedule cgs --schedule fgs --cfp none \
+  --schedule cgs --schedule fgs --cfp none \
   --verify-machineinstrs --build-dir build/tests-todo-stack
 ```
 

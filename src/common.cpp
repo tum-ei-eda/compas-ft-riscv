@@ -348,6 +348,14 @@ bool riscv_common::usesPointerProvenance(const llvm::MachineFunction &MF) {
 }
 
 unsigned
+riscv_common::incomingPointerDeltaSlots(const llvm::MachineFunction &MF) {
+  const auto *info = MF.getInfo<llvm::RISCVMachineFunctionInfo>();
+  const auto stack = info->getCompasIncomingStackPointerOffsets();
+  return info->getCompasIncomingPointerRegs().size() + stack.size() +
+         !stack.empty();
+}
+
+unsigned
 riscv_common::pointerProvenanceSlots(const llvm::MachineFunction &MF) {
   if (!usesPointerProvenance(MF))
     return 0;

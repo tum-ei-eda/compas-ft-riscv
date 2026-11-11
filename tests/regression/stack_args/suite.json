@@ -104,6 +104,94 @@
       "defines": ["TEST_CASE=3"],
       "functions": ["mixed_pair_sink", "mixed_pointer_origins", "mixed_pointer_caller"],
       "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "stack_pointer_formals",
+      "sources": ["stack_pointer_formals.c"],
+      "defines": ["TEST_CASE=1"],
+      "modes": ["EDDI"],
+      "functions": ["stack_pair_leaf", "stack_pair_middle", "stack_pair_owner"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "stack_pointer_formals_caller_only",
+      "sources": ["stack_pointer_formals.c"],
+      "defines": ["TEST_CASE=1"],
+      "modes": ["EDDI"],
+      "functions": ["stack_pair_owner"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "stack_pointer_formals_callee_only",
+      "sources": ["stack_pointer_formals.c"],
+      "defines": ["TEST_CASE=1"],
+      "modes": ["EDDI"],
+      "functions": ["stack_pair_leaf", "stack_pair_middle"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "split_pointer_formals",
+      "sources": ["stack_pointer_formals.c"],
+      "defines": ["TEST_CASE=2"],
+      "modes": ["EDDI"],
+      "functions": ["split_pair_leaf", "split_pair_middle", "split_pair_owner"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "split_pointer_formals_caller_only",
+      "sources": ["stack_pointer_formals.c"],
+      "defines": ["TEST_CASE=2"],
+      "modes": ["EDDI"],
+      "functions": ["split_pair_owner"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "split_pointer_formals_callee_only",
+      "sources": ["stack_pointer_formals.c"],
+      "defines": ["TEST_CASE=2"],
+      "modes": ["EDDI"],
+      "functions": ["split_pair_leaf", "split_pair_middle"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "wide_pointer_formals",
+      "sources": ["stack_pointer_formals.c"],
+      "defines": ["TEST_CASE=3"],
+      "modes": ["EDDI"],
+      "functions": ["wide_pair_leaf", "wide_pair_middle", "wide_pair_owner"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "stack_pointer_formals_dynamic",
+      "sources": ["stack_pointer_formals.c"],
+      "defines": ["TEST_CASE=1", "STACK_DYNAMIC=1"],
+      "modes": ["EDDI"],
+      "functions": ["stack_pair_leaf", "stack_pair_middle", "stack_pair_owner"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "stack_pointer_formals_realigned_dynamic",
+      "sources": ["stack_pointer_formals.c"],
+      "defines": ["TEST_CASE=1", "STACK_DYNAMIC=64"],
+      "modes": ["EDDI"],
+      "functions": ["stack_pair_leaf", "stack_pair_middle", "stack_pair_owner"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "many_stack_pointer_formals",
+      "sources": ["many_stack_pointer_formals.c"],
+      "defines": [],
+      "modes": ["EDDI"],
+      "functions": ["many_stack_pointer_sink", "many_stack_pointer_owner"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "many_dynamic_pointer_formals",
+      "sources": ["many_stack_pointer_formals.c"],
+      "defines": ["MANY_DYNAMIC=1"],
+      "modes": ["EDDI"],
+      "functions": ["many_stack_pointer_sink", "many_stack_pointer_owner"],
+      "expected": {"exit": 42, "stdout": ""}
     }
   ]
 }

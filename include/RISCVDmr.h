@@ -288,9 +288,18 @@ protected:
   std::set<llvm::MachineInstr *> loads_{};
   std::set<llvm::MachineInstr *> shadow_loads_{};
   struct PointerOrigin {
-    enum class Kind { Frame, Incoming, Runtime, Equal, Scalar, Constant, Context };
+    enum class Kind {
+      Frame,
+      Incoming,
+      IncomingStack,
+      Runtime,
+      Equal,
+      Scalar,
+      Constant,
+      Context
+    };
     Kind kind{Kind::Frame};
-    // Incoming register or runtime metadata slot, depending on kind.
+    // Incoming register, incoming stack-formal ordinal, or runtime slot.
     unsigned index{0};
     bool operator==(const PointerOrigin &other) const {
       return kind == other.kind && index == other.index;

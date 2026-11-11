@@ -19,6 +19,17 @@ The manifest runs EDDI and SWIFT with coarse- and fine-grained scheduling.
 |`forwarded_frames` |Two pointers and a scalar traverse repeated nested calls, distinct local frames, constant pointer offsets and a scalar branch join.
 |`forwarded_frames_frame_pointer` |The same nested calls force FP, covering stable frame addressing independently of control-flow protection.
 |`forwarded_wide` |A 64-bit tag and scalar precede an inherited pointer, checking its actual ABI register after arguments split differently on RV32 and RV64.
+|`stack_pointer_formals` |Eight XLEN scalar arguments force two ordinary pointer formals into stack argument slots nine and ten, across nested protected calls.
+|`stack_pointer_formals_caller_only` |The same stack arguments cross from a protected owner into ordinary helpers.
+|`stack_pointer_formals_callee_only` |Ordinary callers pass local and global pointers to protected helpers without allocating shadow pointees.
+|`split_pointer_formals` |Seven XLEN scalars put one pointer in `a7` and the other on the stack, retaining independent pointer origins across nested calls.
+|`split_pointer_formals_caller_only` |Only the owner of the register/stack pointer pair is protected.
+|`split_pointer_formals_callee_only` |Only the nested register/stack pointer helpers are protected.
+|`wide_pointer_formals` |Six XLEN scalars and a 64-bit tag put both pointers on the stack on RV32, and split them between `a7` and the stack on RV64.
+|`stack_pointer_formals_dynamic` |The middle helper retains a runtime-sized local array across nested calls while preserving two inherited stack pointer formals.
+|`stack_pointer_formals_realigned_dynamic` |The same combination requires 64-byte VLA realignment and a separate primary/shadow base-pointer pair.
+|`many_stack_pointer_formals` |A local pointer follows 544 XLEN scalars, requiring materialized addresses for its outgoing stack slot on RV32 and RV64.
+|`many_dynamic_pointer_formals` |The same large outgoing argument area follows a runtime-sized local array whose weighted checksum remains live after the call.
 |`mixed_pointer` |A control-flow merge selects global or local storage inside one function.
 |`mixed_pointer_loop` |A loop selects global or local array elements, or retains its previous pointer across a backedge, before the same helper call.
 |`mixed_pointer_origins` |Independent pointer joins select between two inherited roots, the helper's own local storage and globals across nested calls with distinct frames.
@@ -37,9 +48,11 @@ entry snapshot of each primary-to-shadow address difference. The caller checks
 the pair before entry; later forwarding checks use the saved difference for that
 pointer, even when the forwarding function has a different frame size. A fault
 between the caller's validation and the entry capture falls outside this check.
-Pointer parameters passed on the stack or indirectly, and pointer provenance
-that the pass cannot represent, require separate support or an explicit
-diagnostic. These cases do not establish detection coverage for those paths.
+Ordinary full-XLEN pointer parameters passed in stack argument slots receive
+independent snapshots as well. Indirect and `byval` parameters, and pointer
+provenance that the pass cannot represent, require separate support or an
+explicit diagnostic. These cases do not establish detection coverage for those
+paths.
 
 The inner and middle helpers retain volatile arrays of three and seven integers
 across two calls, while the local caller owns two eight-element arrays. Incoming
@@ -53,6 +66,50 @@ The wide-argument case keeps nonzero high and low halves of its tag in the
 result. With the default ABIs, the pointer is passed in `a3` on RV32 and `a2`
 on RV64. Separate local and global callers exercise the same forwarding helper;
 each result is checked twice against a literal oracle.
+
+The pointer-formal fixtures are EDDI-only. Both pointer arguments are full
+XLEN values on RV32 and RV64; no hidden aggregate or `byval` argument changes
+their ABI locations. Eight `unsigned long` scalar arguments place pointers in
+incoming slots zero and one above the caller's stack pointer. Removing the
+eighth scalar puts the first pointer in `a7` and the second in incoming slot
+zero. The scalar values contribute independently to the result, preventing a
+shifted argument area from silently passing the oracle.
+
+Each shape calls the same middle helper with local/global, global/local,
+local/local and global/global pairs. The middle and leaf helpers own volatile
+arrays of seven and three integers, while the owner retains two ten-element
+arrays. The middle reuses both incoming pointers after two nested calls with
+swapped pointers and different offsets. Three volatile inputs run twice;
+literal result tables cover every call and every array access stays in bounds.
+Selecting both helpers and the owner exercises independent primary/shadow local
+banks. The caller-only and callee-only selections also check ordinary ABI
+boundaries, where unprotected helpers or callers use the primary pointees.
+
+The wide-prefix shape uses the same prototype on both architectures. Its
+64-bit tag occupies `a6`/`a7` on RV32 and only `a6` on RV64, so the same pointer
+formals have different ABI locations. Both nonzero halves of the tag contribute
+to the checksum, and nested calls change them independently. This checks actual
+argument locations after splitting wide scalars rather than guessing them from
+the source parameter index.
+
+The dynamic variants replace the middle helper's fixed seven-element array
+with a runtime-sized array of seven to ten integers. The realigned variant
+additionally requires 64-byte alignment. The weighted checksum includes every
+element after the nested calls; all incoming pointers remain live as well.
+These cases combine immutable entry-pointer snapshots with dynamic call-area
+and, where needed, base-pointer preservation contexts.
+
+The many-argument case places its pointer at incoming byte offset `2144` on
+RV32 and `4288` on RV64. These offsets exceed the signed 12-bit displacement of
+ordinary stores. The outgoing store therefore uses an address materialized in
+a temporary register instead of a literal SP-relative slot. Its pointer value
+must retain the local-frame relationship when checking primary and shadow
+arguments. The first and last scalar arguments also contribute to the literal
+oracle, `1 + 544 + input + 10`.
+Its dynamic variant additionally retains every element of a runtime-sized
+array across the call, combining materialized outgoing addresses with runtime
+stack separation. The post-call weighted checksum has independent literal
+oracles for three different allocation sizes.
 
 The mixed-pointer cases share one fixture. The original case retains its
 literal `12`/`8` oracle. The loop case runs all three selector phases twice for

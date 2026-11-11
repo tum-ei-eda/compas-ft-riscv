@@ -307,7 +307,7 @@ diff --git a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp b/llvm/lib/Target/RISCV
    default:
      report_fatal_error("unimplemented operand");
    case ISD::GlobalAddress:
-@@ -7685,6 +7711,32 @@
+@@ -7685,6 +7711,35 @@
      analyzeInputArgs(MF, CCInfo, Ins, /*IsRet=*/false,
                       CallConv == CallingConv::Fast ? CC_RISCV_FastCC
                                                     : CC_RISCV);
@@ -326,14 +326,17 @@ diff --git a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp b/llvm/lib/Target/RISCV
 +    const bool OrdinaryPointer =
 +        CallConv == CallingConv::C && Input.PartOffset == 0 &&
 +        !Input.Flags.isByVal() && !Input.Flags.isByRef() &&
-+        !Input.Flags.isInAlloca() && VA.isRegLoc() &&
++        !Input.Flags.isInAlloca() &&
 +        VA.getLocInfo() == CCValAssign::Full && VA.getValVT() == XLenVT &&
 +        VA.getLocVT() == XLenVT &&
 +        DAG.getDataLayout().getPointerSizeInBits(
-+            Arg.getType()->getPointerAddressSpace()) == Subtarget.getXLen() &&
-+        VA.getLocReg() >= RISCV::X10 && VA.getLocReg() <= RISCV::X17;
-+    if (OrdinaryPointer)
++            Arg.getType()->getPointerAddressSpace()) == Subtarget.getXLen();
++    if (OrdinaryPointer && VA.isRegLoc() &&
++        VA.getLocReg() >= RISCV::X10 && VA.getLocReg() <= RISCV::X17)
 +      CompasInfo->addCompasIncomingPointerReg(VA.getLocReg());
++    else if (OrdinaryPointer && VA.isMemLoc() &&
++             VA.getLocMemOffset() >= 0)
++      CompasInfo->addCompasIncomingStackPointerOffset(VA.getLocMemOffset());
 +    else
 +      CompasInfo->setCompasUnsupportedPointerArgs();
 +  }
@@ -356,7 +359,7 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMCInstLower.cpp b/llvm/lib/Target/RISCV/
 diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
 --- a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
 +++ b/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
-@@ -14,6 +14,9 @@
+@@ -14,8 +14,12 @@
  #define LLVM_LIB_TARGET_RISCV_RISCVMACHINEFUNCTIONINFO_H
 
  #include "RISCVSubtarget.h"
@@ -365,8 +368,11 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/
 +#include "llvm/MC/MCRegister.h"
  #include "llvm/CodeGen/MachineFrameInfo.h"
  #include "llvm/CodeGen/MachineFunction.h"
++#include <cstdint>
 
-@@ -25,6 +28,17 @@
+ namespace llvm {
+
+@@ -25,6 +29,19 @@
  private:
    /// FrameIndex for start of varargs area
    int VarArgsFrameIndex = 0;
@@ -378,13 +384,15 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/
 +  int CompasIncomingShadowSPFrameIndex = 0;
 +  /// Physical locations of ordinary full-width incoming pointer arguments.
 +  SmallVector<MCPhysReg, 4> CompasIncomingPointerRegs;
-+  /// One XLEN shadow-minus-primary delta per incoming pointer register.
++  /// Incoming-SP-relative locations of ordinary full-width pointers.
++  SmallVector<int64_t, 4> CompasIncomingStackPointerOffsets;
++  /// One XLEN delta per incoming register, then stack pointer formal.
 +  int CompasPointerDeltaFrameIndex = 0;
 +  bool CompasUnsupportedPointerArgs = false;
    /// Size of the save area used for varargs
    int VarArgsSaveSize = 0;
    /// FrameIndex used for transferring values between 64-bit FPRs and a pair
-@@ -44,6 +58,38 @@
+@@ -44,6 +61,47 @@
 
    int getVarArgsFrameIndex() const { return VarArgsFrameIndex; }
    void setVarArgsFrameIndex(int Index) { VarArgsFrameIndex = Index; }
@@ -407,6 +415,15 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/
 +      if (Existing == Reg)
 +        return;
 +    CompasIncomingPointerRegs.push_back(Reg);
++  }
++  ArrayRef<int64_t> getCompasIncomingStackPointerOffsets() const {
++    return CompasIncomingStackPointerOffsets;
++  }
++  void addCompasIncomingStackPointerOffset(int64_t Offset) {
++    for (int64_t Existing : CompasIncomingStackPointerOffsets)
++      if (Existing == Offset)
++        return;
++    CompasIncomingStackPointerOffsets.push_back(Offset);
 +  }
 +  int getCompasPointerDeltaFrameIndex() const {
 +    return CompasPointerDeltaFrameIndex;

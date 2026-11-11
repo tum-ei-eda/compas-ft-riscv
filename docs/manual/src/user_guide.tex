@@ -105,10 +105,13 @@ retain these checks.
 
 Address tracking covers copies and full-width addition and subtraction in integer
 registers, supported pointer merges, and exact full-word private spill slots.
-Ordinary pointer parameters passed in integer argument registers retain an
-immutable incoming separation when forwarded through other EDDI functions.
+Ordinary pointer parameters passed in integer argument registers or full-word
+ABI stack slots retain an immutable incoming separation when forwarded through
+other EDDI functions. Each stack formal is identified by its actual ABI offset,
+including when wide scalar arguments change its location between RV32 and RV64.
+Entry capture reads the primary and shadow argument banks independently.
 Checks use the propagated expectation rather than measuring the pointer pair
-being checked. Stack-passed or by-value pointer parameters, inherited-pointer
+being checked. Indirect or by-value pointer parameters, inherited-pointer
 tail calls, pointer returns, arbitrary memory reloads, and pointer bits transported
 through floating-point registers remain outside this tracking contract.
 

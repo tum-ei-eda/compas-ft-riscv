@@ -67,6 +67,9 @@ bool usesEddiBasePointer(const llvm::MachineFunction &MF);
 // variable frames reserve three outgoing-call words, plus two BP words when
 // realigned fixed locals need a stable base independent of the moving SP.
 bool usesPointerProvenance(const llvm::MachineFunction &MF);
+// Entry bank: immutable register/stack formal deltas, plus one word preserving
+// the actual shadow RA while the two incoming stack banks are read.
+unsigned incomingPointerDeltaSlots(const llvm::MachineFunction &MF);
 unsigned pointerProvenanceSlots(const llvm::MachineFunction &MF);
 // Finalize emitted instrumentation without changing instruction order or
 // assigning signatures to the continuation blocks introduced here.
