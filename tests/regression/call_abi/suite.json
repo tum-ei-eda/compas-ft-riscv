@@ -141,6 +141,32 @@
       "functions": ["abi_dynamic_small_frame"]
     },
     {
+      "name": "libcall_stack_arguments",
+      "defines": ["TEST_CASE=16"],
+      "modes": ["EDDI", "SWIFT"],
+      "functions": ["abi_libcall_stack_arguments"],
+      "expected": {
+        "exit": 42,
+        "stdout": "BCDEFGHIJK\n[bdfhjlnprt]\nHIJKLMNOPQ\n[hjlnprtvxz]\nNOPQRSTUVW\n[nprtvxzbdf]\nBCDEFGHIJK\n[bdfhjlnprt]\nHIJKLMNOPQ\n[hjlnprtvxz]\nNOPQRSTUVW\n[nprtvxzbdf]\n"
+      }
+    },
+    {
+      "name": "libcall_dynamic_stack_arguments",
+      "defines": ["TEST_CASE=17"],
+      "modes": ["EDDI", "SWIFT"],
+      "functions": ["abi_libcall_dynamic_stack_arguments"],
+      "expected": {
+        "exit": 42,
+        "stdout": "BCDEFGHIJK\n[bdfhjlnprt]\nHIJKLMNOPQ\n[hjlnprtvxz]\nNOPQRSTUVW\n[nprtvxzbdf]\nBCDEFGHIJK\n[bdfhjlnprt]\nHIJKLMNOPQ\n[hjlnprtvxz]\nNOPQRSTUVW\n[nprtvxzbdf]\n"
+      }
+    },
+    {
+      "name": "duplicated_libcall",
+      "defines": ["TEST_CASE=18"],
+      "modes": ["EDDI", "SWIFT"],
+      "functions": ["abi_duplicated_libcall"]
+    },
+    {
       "name": "realigned_live_values",
       "defines": ["TEST_CASE=10"],
       "functions": ["abi_realigned_live_values"]

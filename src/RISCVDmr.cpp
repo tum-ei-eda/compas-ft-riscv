@@ -2633,150 +2633,95 @@ void RISCVDmr::protectCalls() {
         }
       }};
 
-  // live shadows involving t0-t6, a0-a7 can be corrupted by lib-calls hence
-  // preserving them across func call
-  for (auto MI : lib_calls_) {
-    // filtering out tail calls in case they are to be duplicated
-    if (config_.pslc == ProtectStrategyLibCall::LC1 && TII_->isTailCall(*MI)) {
-      // TODO: stacking wont work here so need to make this a normal call
-      // followed by a return
-      continue;
-    }
+  // Both calls use the original outgoing ABI area. Keep the caller snapshot
+  // separate from the first call's results; neither snapshot may move SP.
+  for (auto *MI : lib_calls_) {
+    if (config_.pslc == ProtectStrategyLibCall::LC1 && TII_->isTailCall(*MI))
+      continue; // Late tail preservation remains a separate calling contract.
 
-    auto ret_regs{getRetRegs(MI)};
-    auto MBB{MI->getParent()};
-    auto called_func_name{getCalledFuncName(MI)};
-    llvm::MachineBasicBlock::iterator insert{MI->getIterator()};
-    insert++;
+    const auto ret_regs = getRetRegs(MI);
+    const auto arg_regs = getArgRegs(MI);
+    auto *MBB = MI->getParent();
+    const auto after = std::next(MI->getIterator());
+    const auto callee = getCalledFuncName(MI);
+    const auto &subtarget = MF_->getSubtarget<llvm::RISCVSubtarget>();
+    const bool eddi = riscv_common::inCSString(llvm::cl::enable_eddi, fname_);
+    auto clobbered = [&](llvm::Register reg) {
+      for (const auto &operand : MI->operands())
+        if (operand.isRegMask() && operand.clobbersPhysReg(reg))
+          return true;
+      return false;
+    };
 
-    RegSetType regs_need_preservation{};
-    for (unsigned r = llvm::RISCV::X3; r <= llvm::RISCV::X31; ++r) {
-      if (!riscv_common::setmapContains(callee_saved_regs_, r)) {
-        regs_need_preservation.emplace(r);
-      }
+    RegSetType preserved;
+    if (!eddi)
+      // Complete-bank boundary checks also observe discarded primary GPRs.
+      for (unsigned reg = llvm::RISCV::X3; reg <= llvm::RISCV::X31; ++reg)
+        if (!callee_saved_regs_.count(reg))
+          preserved.insert(reg);
+    for (const auto &pair : P2S_)
+      if ((riscv_common::getRegType(pair.first) == riscv_common::RegType::I ||
+           isFullWidthFPRegister(pair.first, subtarget)) &&
+          clobbered(pair.second))
+        preserved.insert(pair.second);
+    // The compiler already preserves live primaries around an ordinary ABI
+    // call. Only its actual result registers must survive the outer reload.
+    for (auto iterator = preserved.begin(); iterator != preserved.end();) {
+      bool result = false;
+      for (const auto reg : ret_regs)
+        result |= TRI_->regsOverlap(*iterator, reg);
+      if (result)
+        iterator = preserved.erase(iterator);
+      else
+        ++iterator;
     }
-    // ret-regs would be changed after func call hence dont need to stack them
-    if (riscv_common::setmapContains(ret_regs, llvm::RISCV::X10)) {
-      regs_need_preservation.erase(llvm::RISCV::X10);
-    }
-    if (riscv_common::setmapContains(ret_regs, llvm::RISCV::X11)) {
-      regs_need_preservation.erase(llvm::RISCV::X11);
-    }
-
-    if (llvm::cl::enable_repair) {
-      regs_need_preservation.clear();
-    }
-
-    // The CFP pass preserves its actual runtime state immediately around
-    // the call. An outer DMR restore must not overwrite it.
+    if (llvm::cl::enable_repair)
+      preserved.clear();
     for (const auto reg : riscv_common::signatureRegisters(*MF_))
-      regs_need_preservation.erase(reg);
+      preserved.erase(reg);
+    const std::vector<llvm::Register> caller_regs(preserved.begin(),
+                                                  preserved.end());
+    riscv_common::saveCallRegs(caller_regs, MBB, MI->getIterator());
 
-    std::vector<llvm::Register> stacked_regs{regs_need_preservation.begin(),
-                                             regs_need_preservation.end()};
-
-    // TODO: stacking regs before a libcall could be dangerous when the
-    //       args-struct elements preceede the no of arg regs -> rest is
-    //       in stack which could be corrupted
-    if (use_shadow_for_stack_ops_) {
-      riscv_common::saveRegs(stacked_regs, MBB, MI->getIterator(),
-                             P2S_.at(riscv_common::kSP));
-      riscv_common::loadRegs(stacked_regs, MBB, insert,
-                             P2S_.at(riscv_common::kSP));
-    } else {
-      riscv_common::saveRegs(stacked_regs, MBB, MI->getIterator());
-      riscv_common::loadRegs(stacked_regs, MBB, insert);
-    }
-
-    if (config_.pslc == ProtectStrategyLibCall::LC0) {
-      handleLibCallLC0(MI, insert);
-    } else if (config_.pslc == ProtectStrategyLibCall::LC1) {
-      auto arg_regs{getArgRegs(MI)};
-      auto ret_regs{getRetRegs(MI)};
-      auto MBB{MI->getParent()};
-      auto DLL{MI->getDebugLoc()};
-      llvm::MachineBasicBlock::iterator insert2{MI->getIterator()};
-      insert2++;
-
-      auto called_func_name{getCalledFuncName(MI)};
-      // TODO: do we need to stack stuff that is live and could be corrupted by
-      // func call hierarchy
-
-      if (knownLibcalls2Duplicable_.at(called_func_name)) {
-        if (ret_regs.size() == 0) {
-          llvm::outs() << "\tNOTE: is it really worth duplicating "
-                       << getCalledFuncName(MI) << "??\n";
-        }
-
-        // TODO: stacking regs before a libcall could be dangerous when the
-        //       args-struct elements preceede the no of arg regs -> rest is
-        //       in stack which could be corrupted
-
-        // stacking the ret_regs
-        // regs_to_spill.clear();
-        std::vector<llvm::Register> regs_to_spill{};
-        for (const auto &r : ret_regs) {
-          regs_to_spill.emplace_back(r);
-        }
-
-        // stacking the arg regs
-        for (const auto &r : arg_regs) {
-          if (std::find(regs_to_spill.begin(), regs_to_spill.end(), r) ==
-              regs_to_spill.end()) {
-            regs_to_spill.emplace_back(r);
-          }
-        }
-        if (use_shadow_for_stack_ops_) {
-          riscv_common::saveRegs(regs_to_spill, MBB, insert2,
-                                 P2S_.at(riscv_common::kSP));
-        } else {
-          riscv_common::saveRegs(regs_to_spill, MBB, insert2);
-        }
-
-        // // moving in shadow arg values into primary ones for 2nd call
-        for (const auto &r : arg_regs) {
-          moveIntoShadow(MBB, insert2, P2S_.at(r), r);
-        }
-
-        // inserting in the duplicated call
-        MBB->insert(insert2, MF_->CloneMachineInstr(MI));
-
-        // recovering the primary arg regs back after 2nd call
-        std::vector<llvm::Register> regs_to_reload{};
-        for (auto &r : regs_to_spill) {
-          if (riscv_common::setmapContains(ret_regs, r)) {
-            regs_to_reload.emplace_back(P2S_.at(r));
-          } else {
-            regs_to_reload.emplace_back(r);
-          }
-        }
-        if (use_shadow_for_stack_ops_) {
-          riscv_common::loadRegs(regs_to_reload, MBB, insert2,
-                                 P2S_.at(riscv_common::kSP));
-        } else {
-          riscv_common::loadRegs(regs_to_reload, MBB, insert2);
-        }
-      } else {
-        auto arg_regs{getArgRegs(MI)};
-        // these calls cant be duplicated hence handling them LC2 style
-
-        for (auto &r : arg_regs) {
-          if (riscv_common::getRegType(r) == riscv_common::RegType::I) {
+    if (config_.pslc == ProtectStrategyLibCall::LC0 ||
+        (config_.pslc == ProtectStrategyLibCall::LC1 &&
+         !knownLibcalls2Duplicable_.at(callee))) {
+      if (config_.pslc != ProtectStrategyLibCall::LC0)
+        for (const auto reg : arg_regs) {
+          if (riscv_common::getRegType(reg) == riscv_common::RegType::I)
             llvm::BuildMI(*MBB, MI->getIterator(), MI->getDebugLoc(),
                           TII_->get(llvm::RISCV::BNE))
-                .addReg(r)
-                .addReg(P2S_.at(r))
+                .addReg(reg)
+                .addReg(P2S_.at(reg))
                 .addMBB(err_bb_);
-          } else {
-            syncFPRegs(MI->getParent(), MI->getIterator(), r, P2S_.at(r));
-          }
+          else
+            syncFPRegs(MBB, MI->getIterator(), reg, P2S_.at(reg));
         }
-
-        handleLibCallLC0(MI, insert);
-      }
-    } else {
-      assert(0 && "this protect-strategy for libcalls is not supported yet");
+      riscv_common::loadCallRegs(caller_regs, MBB, after);
+      handleLibCallLC0(MI, after);
+      continue;
     }
+    if (config_.pslc != ProtectStrategyLibCall::LC1)
+      llvm::report_fatal_error("COMPAS: unsupported libcall strategy");
+
+    // Ordinary calls leave non-result arguments undefined in their regmask.
+    // Save only defined results, using exactly the same layout when reloading.
+    const std::vector<llvm::Register> results(ret_regs.begin(), ret_regs.end());
+    riscv_common::saveCallRegs(results, MBB, after,
+                              riscv_common::CallFrameBank::Libcall);
+    // The first call can clobber shadow arguments, especially caller-clobbered
+    // FPRs. Recover their pre-call values before making the duplicate call.
+    riscv_common::loadCallRegs(caller_regs, MBB, after);
+    for (const auto reg : arg_regs)
+      moveIntoShadow(MBB, after, P2S_.at(reg), reg);
+    MBB->insert(after, MF_->CloneMachineInstr(MI));
+    riscv_common::loadCallRegs(caller_regs, MBB, after);
+    // Retain the original result in primary and the independent result in
+    // shadow. Copy the duplicate before reloading the first call's result.
+    for (const auto reg : ret_regs)
+      moveIntoShadow(MBB, after, reg, P2S_.at(reg));
+    riscv_common::loadCallRegs(results, MBB, after,
+                              riscv_common::CallFrameBank::Libcall);
   }
 
   // ----------

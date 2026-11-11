@@ -430,6 +430,176 @@ int main(void)
     return 42;
 }
 
+#elif TEST_CASE == 16 || TEST_CASE == 17
+volatile word abi_inputs[] = {1, 7, 13};
+volatile word abi_libcall_counts[] = {3, 8, 17};
+
+/* Keep a real variadic printf signature while avoiding a libc dependency.
+ * This shim implements the literal characters and %c conversions used below. */
+NOINLINE int abi_test_printf(const char *format, ...) __asm__("printf");
+
+NOINLINE long abi_libcall_write(const char *buffer, word length)
+{
+#if defined(__riscv)
+    register word descriptor __asm__("a0") = 1;
+    register word address __asm__("a1") = (word)buffer;
+    register word count __asm__("a2") = length;
+    register word number __asm__("a7") = 64;
+    __asm__ volatile ("ecall" : "+r" (descriptor)
+                      : "r" (address), "r" (count), "r" (number) : "memory");
+    return (long)descriptor;
+#else
+    extern long write(int, const void *, word);
+    return write(1, buffer, length);
+#endif
+}
+
+NOINLINE int abi_test_printf(const char *format, ...)
+{
+    char output[32];
+    word length = 0;
+    __builtin_va_list arguments;
+    __builtin_va_start(arguments, format);
+    while (*format != '\0') {
+        if (*format == '%') {
+            ++format;
+            if (*format != 'c') {
+                __builtin_va_end(arguments);
+                return -1;
+            }
+            output[length++] = (unsigned char)__builtin_va_arg(arguments, int);
+        } else {
+            output[length++] = *format;
+        }
+        ++format;
+    }
+    __builtin_va_end(arguments);
+    return abi_libcall_write(output, length) == (long)length ? (int)length : -1;
+}
+
+#if TEST_CASE == 16
+#define ABI_LIBCALL_CALLER abi_libcall_stack_arguments
+#else
+#define ABI_LIBCALL_CALLER abi_libcall_dynamic_stack_arguments
+#endif
+
+NOINLINE word ABI_LIBCALL_CALLER(word value, word count)
+{
+    volatile word fixed[7];
+#if TEST_CASE == 16
+    volatile word scratch[9];
+    count = 9;
+#else
+    volatile word scratch[count];
+#endif
+    word index;
+    for (index = 0; index != 7; ++index)
+        fixed[index] = value + 3*index + 5;
+    for (index = 0; index != count; ++index)
+        scratch[index] = value + 5*index + 7;
+    word live = value ^ 0x1357UL;
+    int first = abi_test_printf("%c%c%c%c%c%c%c%c%c%c\n",
+        (int)('A' + value % 26), (int)('A' + (value + 1) % 26),
+        (int)('A' + (value + 2) % 26), (int)('A' + (value + 3) % 26),
+        (int)('A' + (value + 4) % 26), (int)('A' + (value + 5) % 26),
+        (int)('A' + (value + 6) % 26), (int)('A' + (value + 7) % 26),
+        (int)('A' + (value + 8) % 26), (int)('A' + (value + 9) % 26));
+    int second = abi_test_printf("[%c%c%c%c%c%c%c%c%c%c]\n",
+        (int)('a' + value % 26), (int)('a' + (value + 2) % 26),
+        (int)('a' + (value + 4) % 26), (int)('a' + (value + 6) % 26),
+        (int)('a' + (value + 8) % 26), (int)('a' + (value + 10) % 26),
+        (int)('a' + (value + 12) % 26), (int)('a' + (value + 14) % 26),
+        (int)('a' + (value + 16) % 26), (int)('a' + (value + 18) % 26));
+    word result = first + 3*second + live;
+    for (index = 0; index != 7; ++index)
+        result += (index + 1) * fixed[index];
+    for (index = 0; index != count; ++index)
+        result += (index + 1) * scratch[index];
+    return result;
+}
+
+int main(void)
+{
+    /* 50 + (28*x+476) + (x^4951)
+     * + (x+7)*n*(n+1)/2 + 5*n*(n-1)*(n+1)/3. */
+#if TEST_CASE == 16
+    const word expected[] = {7064UL, 7496UL, 7944UL};
+#else
+    const word expected[] = {5592UL, 7010UL, 17064UL};
+#endif
+    unsigned int round;
+    for (round = 0; round != 2; ++round) {
+        unsigned int index;
+        for (index = 0; index != 3; ++index) {
+            if (ABI_LIBCALL_CALLER(abi_inputs[index],
+                                   abi_libcall_counts[index]) != expected[index])
+                return 17;
+        }
+    }
+    return 42;
+}
+
+#elif TEST_CASE == 18
+volatile word abi_inputs[] = {1, 7, 13};
+const unsigned char abi_memcmp_reference[13] =
+    {5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35, 38, 41};
+
+NOINLINE int abi_test_memcmp(const void *left, const void *right, word count)
+    __asm__("memcmp");
+
+NOINLINE int abi_test_memcmp(const void *left, const void *right, word count)
+{
+    const volatile unsigned char *a = left;
+    const volatile unsigned char *b = right;
+    word index;
+    for (index = 0; index != count; ++index) {
+        if (a[index] != b[index])
+            return (int)a[index] - (int)b[index];
+    }
+    return 0;
+}
+
+#if defined(__clang__)
+__attribute__((no_builtin("memcmp")))
+#endif
+NOINLINE word abi_duplicated_libcall(word value)
+{
+    unsigned char first[13];
+    unsigned char second[13];
+    word index;
+    for (index = 0; index != 13; ++index) {
+        first[index] = (unsigned char)(3*index + 5);
+        second[index] = (unsigned char)(3*index + 5);
+    }
+    word live = value ^ 0x315UL;
+    int equal = abi_test_memcmp(first, abi_memcmp_reference, 13);
+    first[value % 13] += (unsigned char)value;
+    int negative = abi_test_memcmp(abi_memcmp_reference, first, 13);
+    int positive = abi_test_memcmp(first, second, 13);
+    /* memcmp guarantees the sign, including when LLVM folds a comparison. */
+    if (equal != 0 || negative >= 0 || positive <= 0)
+        return 0;
+    word result = 37 + live;
+    for (index = 0; index != 13; ++index)
+        result += (index + 1) * (first[index] + 3*second[index]);
+    return result;
+}
+
+int main(void)
+{
+    /* 37 + 4*2639 + x*(x%13+1) + (x^789), after checking all three signs. */
+    const word expected[] = {11383UL, 11435UL, 11398UL};
+    unsigned int round;
+    for (round = 0; round != 2; ++round) {
+        unsigned int index;
+        for (index = 0; index != 3; ++index) {
+            if (abi_duplicated_libcall(abi_inputs[index]) != expected[index])
+                return 17;
+        }
+    }
+    return 42;
+}
+
 #elif TEST_CASE == 10 || TEST_CASE == 13
 volatile word abi_inputs[] = {3, 17, 29};
 

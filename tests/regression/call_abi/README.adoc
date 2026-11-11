@@ -2,7 +2,8 @@
 
 These freestanding cases check fault-free calling-convention behavior on RV32 and
 RV64. Each case checks independently calculated results, exits with `42` on
-success or `17` on an oracle mismatch, and produces no output.
+success or `17` on an oracle mismatch. The variadic libcall cases also check
+complete literal stdout; the other cases produce no output.
 
 [cols="1,3",options="header"]
 |===
@@ -32,6 +33,9 @@ success or `17` on an oracle mismatch, and produces no output.
 |`large_fixed_stack_arguments_caller_only` |Only the owner of the large fixed frame is protected, while the ten-argument helper uses the ordinary ABI.
 |`dynamic_stack_arguments_small_frame` |A small fixed frame and two simultaneously live VLAs retain independent contents across nested pointer calls and ten-word stack-argument calls.
 |`dynamic_stack_arguments_small_frame_caller_only` |Only the VLA owner is protected, checking runtime stack movement across ordinary nested callees.
+|`libcall_stack_arguments` |A freestanding variadic `printf` shim receives ten character arguments, checking stack arguments, distinct return counts and live fixed locals across two calls.
+|`libcall_dynamic_stack_arguments` |The same calls retain fixed locals and a runtime-sized array, checking libcall preservation with a moving SP.
+|`duplicated_libcall` |A freestanding `memcmp` shim compares local/global and local/local buffers, retaining zero, negative and positive results and whole-buffer checksums across calls.
 |`realigned_live_values` |A caller with a 64-byte-aligned volatile array and twelve independent live values invokes an unprotected helper with register arguments, checking realigned spill slots separately from stack-passed arguments.
 |`realigned_entry_residues` |An unprotected caller varies runtime stack padding to cover all four ABI-valid entry-SP residues modulo 64, repeatedly invokes the protected realigned function, and checks its returned SP and padding contents.
 |`realigned_entry_residues_protected_leaf` |The same entry residues also protect the nested arithmetic and array-alignment helpers, checking both the ordinary-to-protected and protected-to-protected boundaries.
@@ -91,6 +95,26 @@ retains its own expected runtime separation when later arrays are allocated.
 Outgoing stack arguments use separate primary/shadow call storage at the ABI
 offsets; returning from the call restores the caller's prior stack context.
 The small-frame cases exercise these operations while both arrays remain live.
+
+The libcall cases give their unprotected shims the real `printf` and `memcmp`
+signatures and symbol names, so COMPAS handles them as recognized libcalls.
+Only callers are selected, for EDDI and SWIFT. The `printf` shim implements
+literal text and `%c`, writes the resulting bytes directly, and returns the
+number written. Each call consumes ten promoted integer arguments in addition
+to its format pointer. Complete literal stdout checks their order and requires
+each call to execute once; return values `11` and `13` remain live together.
+Fixed and VLA callers also check weighted contents of every local word after
+the calls. The duplicated `memcmp` case uses actual byte comparisons and retains
+zero, negative and positive results alongside local contents and an independent
+live value. Only the signs are required, matching the C `memcmp` contract.
+Each input executes twice. No currently recognized duplicable libcall needs
+more than eight integer argument registers with its actual RISC-V signature;
+the variadic case checks stack arguments and the comparison case checks the
+separate original/duplicate snapshots and result reloads.
+Returning libcalls use fixed caller-context and result snapshots,
+leaving SP and outgoing ABI slots in place. Original results remain in primary
+registers and duplicate results enter the corresponding shadows; preservation
+uses the enabled floating-point register width.
 
 The realigned-frame case keeps its local array indexed by a runtime value so it
 cannot shrink to a few scalars, and uses both call results in the independent

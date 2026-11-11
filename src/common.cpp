@@ -457,7 +457,8 @@ namespace {
 
 void access_call_regs(const std::vector<llvm::Register> &regs,
                       llvm::MachineBasicBlock *MBB,
-                      llvm::MachineBasicBlock::iterator insert, bool restore) {
+                      llvm::MachineBasicBlock::iterator insert, bool restore,
+                      riscv_common::CallFrameBank bank) {
   if (regs.empty())
     return;
 
@@ -467,8 +468,21 @@ void access_call_regs(const std::vector<llvm::Register> &regs,
   if (frame_index >= 0)
     llvm::report_fatal_error("COMPAS: DMR call frame was not prepared");
   const auto frame = spill_frame(regs, MF);
-  if (frame.size > MF.getFrameInfo().getObjectSize(frame_index))
+  const unsigned result_size =
+      riscv_common::isDmrFunction(std::string{MF.getName()})
+          ? riscv_common::kLibcallResultFrameSize
+          : 0;
+  const int64_t reserved = MF.getFrameInfo().getObjectSize(frame_index);
+  if (reserved < result_size)
     llvm::report_fatal_error("COMPAS: DMR call frame is too small");
+  const uint64_t caller_size = reserved - result_size;
+  const uint64_t bank_size =
+      bank == riscv_common::CallFrameBank::Caller ? caller_size : result_size;
+  if ((bank != riscv_common::CallFrameBank::Caller &&
+       bank != riscv_common::CallFrameBank::Libcall) || frame.size > bank_size)
+    llvm::report_fatal_error("COMPAS: DMR call frame is too small");
+  const uint64_t bank_offset =
+      bank == riscv_common::CallFrameBank::Caller ? 0 : caller_size;
 
   const auto &subtarget = MF.getSubtarget<llvm::RISCVSubtarget>();
   const auto *tii = subtarget.getInstrInfo();
@@ -479,7 +493,8 @@ void access_call_regs(const std::vector<llvm::Register> &regs,
       MF, frame_index, frame_reg);
   if (offset.getScalable() || frame_reg != riscv_common::kFP)
     llvm::report_fatal_error("COMPAS: DMR call frame requires a stable FP");
-  const int64_t displacement = offset.getFixed();
+  const int64_t displacement = offset.getFixed() +
+                               static_cast<int64_t>(bank_offset);
   const bool large_offset =
       !llvm::isInt<12>(displacement) ||
       !llvm::isInt<12>(displacement + frame.slots.back().offset);
@@ -491,7 +506,8 @@ void access_call_regs(const std::vector<llvm::Register> &regs,
             ? 4
             : slot.width;
     auto *memory = MF.getMachineMemOperand(
-        llvm::MachinePointerInfo::getFixedStack(MF, frame_index, slot.offset),
+        llvm::MachinePointerInfo::getFixedStack(MF, frame_index,
+                                                bank_offset + slot.offset),
         restore ? llvm::MachineMemOperand::MOLoad
                 : llvm::MachineMemOperand::MOStore,
         memory_width, llvm::Align(memory_width));
@@ -569,14 +585,16 @@ void access_call_regs(const std::vector<llvm::Register> &regs,
 
 void riscv_common::saveCallRegs(const std::vector<llvm::Register> &regs,
                                 llvm::MachineBasicBlock *MBB,
-                                llvm::MachineBasicBlock::iterator insert) {
-  access_call_regs(regs, MBB, insert, false);
+                                llvm::MachineBasicBlock::iterator insert,
+                                CallFrameBank bank) {
+  access_call_regs(regs, MBB, insert, false, bank);
 }
 
 void riscv_common::loadCallRegs(const std::vector<llvm::Register> &regs,
                                 llvm::MachineBasicBlock *MBB,
-                                llvm::MachineBasicBlock::iterator insert) {
-  access_call_regs(regs, MBB, insert, true);
+                                llvm::MachineBasicBlock::iterator insert,
+                                CallFrameBank bank) {
+  access_call_regs(regs, MBB, insert, true, bank);
 }
 
 void riscv_common::saveRegs(std::vector<llvm::Register> regs,

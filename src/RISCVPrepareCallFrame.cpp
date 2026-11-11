@@ -112,7 +112,12 @@ unsigned dmr_frame_size(const llvm::MachineFunction &MF) {
       word_size;
   if (subtarget.hasStdExtF())
     size += 16 * std::max(word_size, subtarget.hasStdExtD() ? 8u : 4u);
-  return llvm::alignTo(size, 16);
+  // A protected caller can duplicate a libcall. Its outer monitor snapshot
+  // and the first call's ABI arguments/results must remain independent.
+  return llvm::alignTo(size, 16) +
+         (riscv_common::isDmrFunction(std::string{MF.getName()})
+              ? riscv_common::kLibcallResultFrameSize
+              : 0);
 }
 
 class RISCVPrepareCallFrame : public llvm::MachineFunctionPass {

@@ -75,10 +75,18 @@ void preserveSignatureAcrossCall(llvm::MachineInstr *call,
                                  llvm::Register scratch);
 // Preserve selective-call context in a preallocated fixed frame. These helpers
 // leave both stack pointers unchanged at the call boundary.
+// A duplicated libcall keeps its post-call ABI values in a separate bank
+// while the caller's original monitor state remains saved in Caller.
+enum class CallFrameBank { Caller, Libcall };
+// Supported RISC-V ABIs return at most two registers, each at most 64 bits.
+// The result snapshot also retains the ABI's sixteen-byte stack alignment.
+constexpr unsigned kLibcallResultFrameSize = 16;
 void saveCallRegs(const std::vector<llvm::Register> &, llvm::MachineBasicBlock *,
-                  llvm::MachineBasicBlock::iterator);
+                  llvm::MachineBasicBlock::iterator,
+                  CallFrameBank = CallFrameBank::Caller);
 void loadCallRegs(const std::vector<llvm::Register> &, llvm::MachineBasicBlock *,
-                  llvm::MachineBasicBlock::iterator);
+                  llvm::MachineBasicBlock::iterator,
+                  CallFrameBank = CallFrameBank::Caller);
 // save registers in the vector one by one onto the stack and do this
 // at the instruction point pointed to by iterator
 void saveRegs(std::vector<llvm::Register>, llvm::MachineBasicBlock*,

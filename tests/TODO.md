@@ -24,11 +24,11 @@ VLAs requiring additional stack realignment, such as a runtime-sized `__attribut
 
 ## Call-boundary instrumentation
 
-- [ ] Correct outgoing-argument displacement in duplicated-libcall, late tail-conversion and repair-mode preservation.
+- [ ] Correct outgoing-argument displacement in late tail-conversion and repair-mode preservation.
 - [ ] Exclude CFP-owned state from selective-call balance checks when DMR and CFP select different functions.
 - [ ] Make signature instrumentation aware of `+save-restore` prologue/epilogue helpers.
 
-The first item concerns legacy `saveRegs`/`loadRegs` paths that still move SP. Duplicated calls need distinct outer and argument/result snapshots with positional return-to-shadow reloads. Late tail wrappers run after the original epilogue restores FP and need earlier conversion or another preservation plan.
+The first item concerns remaining legacy `saveRegs`/`loadRegs` paths that move SP. Returning libcalls now use separate fixed caller-context and result banks without moving outgoing stack arguments. Duplicable calls copy the duplicate result to shadows, then reload the original result into its primary registers using the saved layout. Late tail wrappers run after the original epilogue restores FP and need earlier conversion or another preservation plan.
 
 For the balance-check issue, a RACFED-protected caller without DMR can invoke a DMR-protected callee while its evolving RTS in `t0` differs from ordinary shadow `t4`, causing target `-512`. Returning EDDI calls now exclude discarded caller-clobbered temporaries; CFP ownership still needs review for other DMR modes and preservation paths. Large RASM signature-slot offsets can expose the same comparison when address formation borrows `t4`. LLVM13's large-offset DMR-bank MIR probe also hits an assembly-printer assertion, leaving that validation incomplete.
 
