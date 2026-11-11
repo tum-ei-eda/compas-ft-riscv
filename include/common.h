@@ -58,6 +58,9 @@ const unsigned kFP{llvm::RISCV::X8};
 
 RegType getRegType(llvm::Register);
 bool isDmrFunction(const std::string &name);
+// Finalize emitted instrumentation without changing instruction order or
+// assigning signatures to the continuation blocks introduced here.
+void normalizeControlFlow(llvm::MachineFunction &MF);
 // Runtime control-flow state owned by the selected signature scheme.
 std::vector<llvm::Register> signatureRegisters(const llvm::MachineFunction &MF);
 // Preserve actual signature state in the preallocated fixed frame, without

@@ -5,6 +5,7 @@ project(Sihft)
 add_llvm_library(Sihft
   STATIC
     src/common.cpp
+    src/RISCVCompasHardening.cpp
     src/RISCVCfcss.cpp
     src/RISCVPrepareCallFrame.cpp
     src/RISCVRasm.cpp

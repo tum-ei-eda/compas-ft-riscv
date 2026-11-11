@@ -18,18 +18,31 @@
 
 #include <algorithm>
 #include <iterator>
+#include <map>
+#include <set>
 #include <sstream>
 
 #include "RISCVFrameLowering.h"
 #include "RISCVInstrInfo.h"
 #include "RISCVMachineFunctionInfo.h"
 #include "RISCVSubtarget.h"
+#include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
 namespace {
+
+void remove_operand(llvm::MachineInstr &MI, unsigned index) {
+#if LLVM_VERSION_MAJOR < 15
+  MI.RemoveOperand(index);
+#else
+  MI.removeOperand(index);
+#endif
+}
 
 struct SpillSlot {
   llvm::Register reg;
@@ -104,6 +117,145 @@ SpillFrame spill_frame(const std::vector<llvm::Register> &regs,
 }
 
 } // namespace
+
+void riscv_common::normalizeControlFlow(llvm::MachineFunction &MF) {
+  if (MF.empty())
+    return;
+  const auto *tii = MF.getSubtarget().getInstrInfo();
+
+  // Preserve PHI values through splits by remembering the original incoming
+  // block of every new continuation. The normal post-RA pipeline has no PHIs,
+  // but the standalone factories can also be used in machine-IR pipelines.
+  struct PhiInputs {
+    llvm::MachineInstr *phi;
+    std::map<llvm::MachineBasicBlock *, llvm::MachineOperand> values;
+  };
+  std::vector<PhiInputs> phis;
+  std::map<llvm::MachineBasicBlock *, llvm::MachineBasicBlock *> origins;
+  std::map<llvm::MachineBasicBlock *, std::vector<llvm::MachineBasicBlock *>>
+      original_successors;
+  for (auto &MBB : MF) {
+    origins.emplace(&MBB, &MBB);
+    original_successors.emplace(&MBB, std::vector<llvm::MachineBasicBlock *>(
+                                          MBB.succ_begin(), MBB.succ_end()));
+    for (auto &phi : MBB.phis()) {
+      PhiInputs inputs{&phi, {}};
+      for (unsigned i = 1; i + 1 < phi.getNumOperands(); i += 2)
+        inputs.values.emplace(phi.getOperand(i + 1).getMBB(),
+                              phi.getOperand(i));
+      phis.push_back(std::move(inputs));
+    }
+    for (auto &MI : MBB) {
+      // A no-link local transfer is a branch, not a call. Keep the original
+      // instruction's symbols and flags while using LLVM's branch descriptor.
+      if (MI.getOpcode() == llvm::RISCV::JAL && MI.getNumOperands() >= 2 &&
+          MI.getOperand(0).isReg() && MI.getOperand(0).getReg() == k0 &&
+          MI.getOperand(1).isMBB()) {
+        MI.setDesc(tii->get(llvm::RISCV::PseudoBR));
+        remove_operand(MI, 0);
+      }
+    }
+  }
+
+  // A label changes no emitted instruction order. Split after each terminator
+  // so checks have ordinary fallthrough blocks. Also retain instructions after
+  // barriers: unreachable trap jumps deliberately detect skipped branches.
+  for (auto &MBB : MF) {
+    for (auto &MI : MBB) {
+      if ((!MI.isTerminator() && !MI.isBarrier()) ||
+          std::next(MI.getIterator()) == MBB.end())
+        continue;
+      auto *continuation = MBB.splitAt(MI, false);
+      origins.emplace(continuation, origins.at(&MBB));
+      break;
+    }
+  }
+
+  // Reconstruct nominal edges rather than inheriting duplicate or unreachable
+  // edges from instrumentation. Preserve existing destinations for indirect
+  // branches, inlineasm_br and exceptional control flow.
+  for (auto &MBB : MF) {
+    std::set<llvm::MachineBasicBlock *> targets;
+    const auto &old_targets = original_successors.at(origins.at(&MBB));
+    for (auto *successor : old_targets)
+      if (successor->isEHPad())
+        targets.insert(successor);
+
+    bool falls_through = true;
+    for (const auto &MI : MBB) {
+      if (MI.isIndirectBranch() ||
+          MI.getOpcode() == llvm::TargetOpcode::INLINEASM_BR)
+        targets.insert(old_targets.begin(), old_targets.end());
+      if (MI.isBranch() || MI.getOpcode() == llvm::TargetOpcode::INLINEASM_BR)
+        for (const auto &operand : MI.operands())
+          if (operand.isMBB())
+            targets.insert(operand.getMBB());
+      if (MI.isBarrier() || MI.isReturn() || tii->isTailCall(MI)) {
+        falls_through = false;
+        break;
+      }
+    }
+    if (falls_through && MBB.getNextNode())
+      targets.insert(MBB.getNextNode());
+
+    while (!MBB.succ_empty())
+      MBB.removeSuccessor(MBB.succ_begin());
+    for (auto *target : targets)
+      MBB.addSuccessor(target);
+    MBB.normalizeSuccProbs();
+  }
+
+  for (auto &inputs : phis) {
+    auto &phi = *inputs.phi;
+    while (phi.getNumOperands() > 1)
+      remove_operand(phi, phi.getNumOperands() - 1);
+    for (auto *predecessor : phi.getParent()->predecessors()) {
+      const auto value = inputs.values.find(origins.at(predecessor));
+      if (value == inputs.values.end())
+        llvm::report_fatal_error("COMPAS: cannot repair PHI after CFG split");
+      phi.addOperand(MF, value->second);
+      phi.addOperand(MF, llvm::MachineOperand::CreateMBB(predecessor));
+    }
+  }
+
+  if (!MF.getRegInfo().tracksLiveness())
+    return;
+
+  // Solve from an empty state to eliminate stale loop live-ins. Entry keeps
+  // only its declared ABI and monitor inputs: inferring new function inputs
+  // from uses here would conceal genuinely missing register definitions.
+  std::vector<llvm::MachineBasicBlock::RegisterMaskPair> entry_liveins(
+      MF.front().livein_begin(), MF.front().livein_end());
+  for (auto &MBB : MF)
+    MBB.clearLiveIns();
+  for (const auto &livein : entry_liveins)
+    MF.front().addLiveIn(livein);
+
+  bool changed;
+  do {
+    changed = false;
+    for (auto I = MF.rbegin(), E = MF.rend(); I != E; ++I) {
+      auto &MBB = *I;
+      std::vector<llvm::MachineBasicBlock::RegisterMaskPair> previous(
+          MBB.livein_begin(), MBB.livein_end());
+      llvm::recomputeLiveIns(MBB);
+      if (&MBB == &MF.front()) {
+        MBB.clearLiveIns();
+        for (const auto &livein : entry_liveins)
+          MBB.addLiveIn(livein);
+      }
+      MBB.sortUniqueLiveIns();
+      changed |= !std::equal(
+          previous.begin(), previous.end(), MBB.livein_begin(),
+          MBB.livein_end(), [](const auto &lhs, const auto &rhs) {
+            return lhs.PhysReg == rhs.PhysReg && lhs.LaneMask == rhs.LaneMask;
+          });
+    }
+  } while (changed);
+
+  for (auto &MBB : MF)
+    llvm::recomputeLivenessFlags(MBB);
+}
 
 bool riscv_common::isDmrFunction(const std::string &name) {
   return inCSString(llvm::cl::enable_eddi, name) ||

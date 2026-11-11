@@ -21,6 +21,14 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
 
+namespace {
+
+llvm::DebugLoc blockDebugLoc(const llvm::MachineBasicBlock &MBB) {
+  return MBB.empty() ? llvm::DebugLoc() : MBB.front().getDebugLoc();
+}
+
+} // namespace
+
 llvm::FunctionPass *llvm::createRISCVCfcss() { return new RISCVCfcss(); }
 
 RISCVCfcss::RISCVCfcss() : RISCVDmr{} {}
@@ -90,13 +98,15 @@ void RISCVCfcss::init() {
     mbb_info_[&MBB].s = cnt++;
   }
   for (auto &MBB : *MF_) {
+    if (mbb_info_[&MBB].predecessors.empty())
+      continue;
     auto PBB{*std::begin(mbb_info_[&MBB].predecessors)};
     mbb_info_[&MBB].s_i1 = mbb_info_[PBB].s;
     mbb_info_[&MBB].d = mbb_info_[PBB].s ^ mbb_info_[&MBB].s;
   }
 
   auto insert = MF_->front().begin();
-  const auto DL = insert->getDebugLoc();
+  const auto DL = blockDebugLoc(MF_->front());
   // G starts at the entry signature.
   llvm::BuildMI(MF_->front(), insert, DL, TII_->get(llvm::RISCV::ADDI))
       .addReg(kG, llvm::RegState::Define)
@@ -121,10 +131,10 @@ void RISCVCfcss::harden() {
     }
 
     auto insert{std::begin(MBB)};
+    const auto DL = blockDebugLoc(MBB);
     // G = G ^ d_j
-    llvm::BuildMI(MBB, insert, insert->getDebugLoc(),
-                  TII_->get(llvm::RISCV::XORI))
-        .addReg(kG)
+    llvm::BuildMI(MBB, insert, DL, TII_->get(llvm::RISCV::XORI))
+        .addReg(kG, llvm::RegState::Define)
         .addReg(kG)
         .addImm(mbb_info_[&MBB].d);
 
@@ -133,13 +143,11 @@ void RISCVCfcss::harden() {
     //       immediate value hence using kD temporarily for holding immediate
     //       looks to be safe for now but have to work on several programs to
     //       see if this implementation works out
-    llvm::BuildMI(MBB, insert, insert->getDebugLoc(),
-                  TII_->get(llvm::RISCV::ADDI))
-        .addReg(kD)
+    llvm::BuildMI(MBB, insert, DL, TII_->get(llvm::RISCV::ADDI))
+        .addReg(kD, llvm::RegState::Define)
         .addReg(riscv_common::k0)
         .addImm(mbb_info_[&MBB].s);
-    llvm::BuildMI(MBB, insert, insert->getDebugLoc(),
-                  TII_->get(llvm::RISCV::BNE))
+    llvm::BuildMI(MBB, insert, DL, TII_->get(llvm::RISCV::BNE))
         .addReg(kG)
         .addReg(kD)
         .addMBB(cf_err_bb_);
@@ -151,7 +159,7 @@ void RISCVCfcss::harden() {
       // G = G ^ D at start
       llvm::BuildMI(MBB, std::next(std::begin(MBB)),
                     std::begin(MBB)->getDebugLoc(), TII_->get(llvm::RISCV::XOR))
-          .addReg(kG)
+          .addReg(kG, llvm::RegState::Define)
           .addReg(kG)
           .addReg(kD);
 
@@ -199,9 +207,9 @@ void RISCVCfcss::harden() {
         }
 
         // updating D on insert via D_i,m = s_i,1 ^ s_i,m
-        llvm::BuildMI(*PBB, insert, PBB->front().getDebugLoc(),
+        llvm::BuildMI(*PBB, insert, blockDebugLoc(*PBB),
                       TII_->get(llvm::RISCV::ADDI))
-            .addReg(kD)
+            .addReg(kD, llvm::RegState::Define)
             .addReg(riscv_common::k0)
             .addImm(mbb_info_[&MBB].s_i1 ^ mbb_info_[PBB].s);
       }
@@ -212,7 +220,7 @@ void RISCVCfcss::harden() {
   // this definition after constructing fan-in updates so it executes before
   // any entry-block adjustment rather than overwriting one.
   llvm::BuildMI(MF_->front(), MF_->front().begin(),
-                MF_->front().front().getDebugLoc(),
+                blockDebugLoc(MF_->front()),
                 TII_->get(llvm::RISCV::ADDI))
       .addReg(kD, llvm::RegState::Define)
       .addReg(riscv_common::k0)
@@ -258,19 +266,19 @@ void RISCVCfcss::insertErrorBB() {
   cf_err_bb_ = MF_->CreateMachineBasicBlock();
   MF_->push_back(cf_err_bb_);
 
-  auto DLL{MF_->front().front().getDebugLoc()};
+  const auto DLL = blockDebugLoc(MF_->front());
 
   if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0) {
     // storing '1' to addr : (0xfff8 = 0x10000 - 0x8):
     // lui t1, 16 -> makes t1 = 0x10000
     llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
                   TII_->get(llvm::RISCV::LUI))
-        .addReg(llvm::RISCV::X6)
+        .addReg(llvm::RISCV::X6, llvm::RegState::Define)
         .addImm(16);
     // addi t2, zero, 1 -> makes t2 = 1
     llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
                   TII_->get(llvm::RISCV::ADDI))
-        .addReg(llvm::RISCV::X7)
+        .addReg(llvm::RISCV::X7, llvm::RegState::Define)
         .addReg(riscv_common::k0)
         .addImm(1);
     // sw t2, -8(t1) -> stores t2 to (t1 - 8) i.e. store 1 to 0xfff8
@@ -284,19 +292,21 @@ void RISCVCfcss::insertErrorBB() {
     // storing '93' to a7, aka SYS_exit code ECALL code:
     llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
                   TII_->get(llvm::RISCV::ADDI))
-        .addReg(llvm::RISCV::X17) // a7
+        .addReg(llvm::RISCV::X17, llvm::RegState::Define) // a7
         .addReg(llvm::RISCV::X0)  // zero
         .addImm(93);
-    // storing '-512' to a0, aka exit return value when ecall forces newlib sys
+    // storing '-256' to a0, aka exit return value when ecall forces newlib sys
     // exit:
     llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
                   TII_->get(llvm::RISCV::ADDI))
-        .addReg(llvm::RISCV::X10) // a7
+        .addReg(llvm::RISCV::X10, llvm::RegState::Define) // a0
         .addReg(llvm::RISCV::X0)  // zero
         .addImm(-256);
     // invoke 'ecall'
     llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
-                  TII_->get(llvm::RISCV::ECALL));
+                  TII_->get(llvm::RISCV::ECALL))
+        .addReg(llvm::RISCV::X17, llvm::RegState::Implicit)
+        .addReg(llvm::RISCV::X10, llvm::RegState::Implicit);
   }
 
   if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
@@ -306,12 +316,9 @@ void RISCVCfcss::insertErrorBB() {
     // jump to it from anywhere in asm
     cf_err_bb_->addSuccessor(cf_err_bb_);
 
-    // keep on repeating this errBB as we dont want to execute code now
-    // J cf_err_bb_ = JALR X0, cf_err_bb_ because J is a pseudo-jump instr in
-    // RISCV
+    // Use a branch descriptor so LLVM recognizes the loop's successor.
     llvm::BuildMI(*cf_err_bb_, std::end(*cf_err_bb_), DLL,
-                  TII_->get(llvm::RISCV::JAL))
-        .addReg(riscv_common::k0)
+                  TII_->get(llvm::RISCV::PseudoBR))
         .addMBB(cf_err_bb_);
   } else {
     // quit early using ebreak

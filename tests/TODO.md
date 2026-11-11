@@ -42,19 +42,12 @@ For the balance-check issue, a RACFED-protected caller without DMR can invoke a 
 
 Compiler-generated `__riscv_save_*` calls execute before FP setup and can clobber G/RTS in `t0`. Signature initialization and preservation must account for their prologue placement.
 
-## Machine-instruction and CFG verification
+## Machine-instruction metadata
 
-- [ ] Correct verifier errors across the regression suites, including `control_flow`, `crc_control_flow`, `call_abi` and `multi_function`.
+- [ ] Describe the shadow calling convention at indirect calls with unknown target protection.
+- [ ] Give ordinary EDDI duplicate memory operations independent pointer/alias metadata.
 
-Observed diagnostics include definitions marked as uses, undefined physical registers, instructions after terminators, missing/unexpected or duplicate CFG edges, missing `mayStore` flags and expected-register-operand errors. Forced-FP pointer callees also expose entry RA checks before frame stores. DMR and CFP-only CFCSS still expose errors even where functional execution passes. CFP-only RASM/RACFED pass call-ABI verification.
-
-Keep the runner's `functional_status` separate from verification: a verifier error makes the overall result `ERROR` even when execution passes. Do not turn these into runtime `XFAIL` allowances.
-
-```sh
-python3 tests/regression/run.py --case control_flow/diamond \
-  --arch rv32 --mode SWIFT --cfp none --verify-machineinstrs \
-  --build-dir build/tests-todo-machine-verifier
-```
+Functional indirect-call coverage does not establish complete shadow argument/result and preserved-register metadata for unknown targets. Ordinary duplicated loads/stores can still carry primary-bank pointer or fixed-stack provenance; updating it must preserve the separate handling of incoming stack arguments and store loadbacks.
 
 ## Protected inline assembly: stack-pointer probe
 
@@ -74,7 +67,7 @@ python3 tests/regression/run.py --case call_abi/stack_alignment \
 - [ ] Correct FP equality checks for NaNs and signed zero.
 - [ ] Define protection of architectural FP control/status state.
 
-The current `FEQ_S`/`FEQ_D` checks reject matching NaNs and accept oppositely signed zeroes. The rounding-mode input (`FRM`) is shared by primary and shadow computations; FP control/status state has no shadow. The [hard-float suite](regression/hard_float/README.adoc) checks finite values against exact-bit oracles, including nonzero lower binary64 bits on RV32. Machine-verifier failures remain tracked above.
+The current `FEQ_S`/`FEQ_D` checks reject matching NaNs and accept oppositely signed zeroes. The rounding-mode input (`FRM`) is shared by primary and shadow computations; FP control/status state has no shadow. The [hard-float suite](regression/hard_float/README.adoc) checks finite values against exact-bit oracles, including nonzero lower binary64 bits on RV32.
 
 ```sh
 python3 tests/regression/run.py --case 'hard_float/*' \

@@ -96,7 +96,7 @@ index e6140edc8403..fa49a7b510c1 100644
  namespace llvm {
  class RISCVRegisterBankInfo;
  class RISCVSubtarget;
-@@ -68,6 +99,15 @@ void initializeRISCVRedundantCopyEliminationPass(PassRegistry &);
+@@ -68,6 +99,16 @@ void initializeRISCVRedundantCopyEliminationPass(PassRegistry &);
  InstructionSelector *createRISCVInstructionSelector(const RISCVTargetMachine &,
                                                      RISCVSubtarget &,
                                                      RISCVRegisterBankInfo &);
@@ -107,6 +107,7 @@ index e6140edc8403..fa49a7b510c1 100644
 +FunctionPass *createRISCVRasm();
 +FunctionPass *createRISCVRacfed();
 +FunctionPass *createRISCVDmr();
++FunctionPass *createRISCVCompasHardening();
 +FunctionPass *createRISCVPrepareCallFrame();
 +class MachineFunction;
 +void reserveRISCVCompasCallFrame(MachineFunction &);
@@ -421,19 +422,16 @@ index 0c9219076498..ca13459d1214 100644
 diff --git a/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp b/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
 --- a/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
 +++ b/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
-@@ -246,6 +246,11 @@
+@@ -246,6 +246,8 @@
    // possibility for other passes to break the requirements for forward
    // progress in the LR/SC block.
    addPass(createRISCVExpandAtomicPseudoPass());
 +
-+  addPass(createRISCVDmr());
-+  addPass(createRISCVCfcss());
-+  addPass(createRISCVRasm());
-+  addPass(createRISCVRacfed());
++  addPass(createRISCVCompasHardening());
  }
 
  void RISCVPassConfig::addMachineSSAOptimization() {
-@@ -256,6 +261,7 @@
+@@ -256,6 +258,7 @@
  }
 
  void RISCVPassConfig::addPreRegAlloc() {

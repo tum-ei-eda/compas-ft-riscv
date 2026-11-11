@@ -32,6 +32,9 @@ public:
   RISCVDmr();
   // override the transformation function
   bool runOnMachineFunction(llvm::MachineFunction &) override;
+  // Describe the completed monitor convention before rebuilding liveness.
+  // Keep this after instrumentation, whose argument analysis uses the ABI.
+  void finalizeCallingConvention();
 
 protected:
   // for convenience

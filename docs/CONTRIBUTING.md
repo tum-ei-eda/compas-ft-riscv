@@ -16,6 +16,8 @@ LLVM backend integration belongs in the version-specific [patches](../patches/).
 
 Use the C++ standard configured for the LLVM build, currently C++17 in [docker/.env](../docker/.env), and follow the LLVM style in [.clang-format](../.clang-format). Format changed code consistently with its surroundings. Keep assumptions about LLVM machine instructions, register aliases, relocations, CFG edges and pass ordering explicit. When adding an instruction or ISA extension, account for both primary and shadow operands, register widths, stack alignment and interactions with other enabled protection passes.
 
+The backend schedules `RISCVCompasHardening`, which runs DMR, CFCSS, RASM and RACFED in their existing order. This shared pass preserves the signature regions and completes CFG and physical-register liveness updates before LLVM verifies the result. The implementation lives in [RISCVCompasHardening.cpp](../src/RISCVCompasHardening.cpp); control-flow normalization is shared through [common.cpp](../src/common.cpp).
+
 ## Development and validation
 
 COMPAS builds as part of a patched LLVM source tree. The root CMake project uses LLVM's `add_llvm_library`; it is not a standalone LLVM plugin build. The current [CI workflow](../.github/workflows/ci.yml) and [container configuration](../docker/.env) select LLVM 16.0.6. Match the LLVM release to its integration patch; the historical manual also describes LLVM 13.0.1.

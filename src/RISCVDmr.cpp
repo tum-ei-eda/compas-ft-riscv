@@ -16,6 +16,7 @@
 
 #include "RISCVDmr.h"
 
+#include <algorithm>
 #include <random>
 
 #include "RISCVFrameLowering.h"
@@ -384,6 +385,161 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
   }
 
   return !ignore;
+}
+
+void RISCVDmr::finalizeCallingConvention() {
+  const bool caller_dmr = is_func_dmr(fname_);
+  const bool caller_eddi =
+      riscv_common::inCSString(llvm::cl::enable_eddi, fname_);
+  const auto &subtarget = MF_->getSubtarget<llvm::RISCVSubtarget>();
+  auto callName = [](const llvm::MachineInstr &MI) {
+    for (const auto &operand : MI.operands()) {
+      if (operand.isGlobal())
+        return operand.getGlobal()->getName().str();
+      if (operand.isSymbol())
+        return std::string(operand.getSymbolName());
+    }
+    return std::string();
+  };
+  bool selective_wrapper = false;
+  if (!caller_dmr)
+    for (const auto *call : user_calls_)
+      selective_wrapper |= is_func_dmr(callName(*call));
+  if (!caller_dmr && !selective_wrapper)
+    return;
+
+  auto addRegister = [&](llvm::MachineInstr &MI, llvm::Register reg,
+                         bool define) {
+    for (const auto &operand : MI.operands())
+      if (operand.isReg() && operand.getReg() == reg &&
+          operand.isDef() == define)
+        return;
+    MI.addOperand(*MF_, llvm::MachineOperand::CreateReg(reg, define, true));
+  };
+  auto integerRegister = [](llvm::Register reg) {
+    return riscv_common::getRegType(reg) == riscv_common::RegType::I;
+  };
+  auto invariant = [](llvm::Register reg) {
+    return reg == riscv_common::k0 || reg == riscv_common::kSP ||
+           reg == riscv_common::kGP || reg == riscv_common::kTP;
+  };
+  auto declareInput = [&](llvm::Register reg) {
+    if (!MRI_->isReserved(reg) && !MF_->front().isLiveIn(reg))
+      MF_->front().addLiveIn(reg);
+  };
+
+  // A non-EDDI boundary compares the complete GPR monitor bank. Its values
+  // include otherwise unspecified architectural results of ordinary calls.
+  // Declare those observations at the calls, rather than treating a value
+  // clobbered earlier in the function as an additional entry live-in.
+  const bool observes_bank = selective_wrapper || (caller_dmr && !caller_eddi);
+  for (auto &MBB : *MF_) {
+    for (auto &MI : MBB) {
+      if (MI.isReturn() && !MI.isCall()) {
+        std::vector<llvm::Register> results;
+        for (const auto &operand : MI.operands())
+          if (operand.isReg() && operand.isUse() &&
+              P2S_.count(operand.getReg()))
+            results.push_back(operand.getReg());
+        addRegister(MI, riscv_common::kRA, false);
+        if (caller_dmr) {
+          for (const auto reg : results)
+            addRegister(MI, P2S_.at(reg), false);
+          for (const auto &pair : P2S_) {
+            if (!integerRegister(pair.first))
+              continue;
+            if (invariant(pair.first) || pair.first == riscv_common::kFP ||
+                pair.first == riscv_common::kRA || !caller_eddi) {
+              addRegister(MI, pair.first, false);
+              addRegister(MI, pair.second, false);
+              if (!caller_eddi)
+                declareInput(pair.first);
+            }
+          }
+        } else {
+          // Selective-call helpers restore the ordinary caller's preserved
+          // bank even where it was pristine before late instrumentation.
+          for (const auto *reg = TRI_->getCalleeSavedRegs(MF_); *reg; ++reg)
+            addRegister(MI, *reg, false);
+        }
+        continue;
+      }
+      if (!MI.isCall() ||
+          (MI.getOpcode() == llvm::RISCV::JAL && MI.getNumOperands() &&
+           MI.getOperand(0).isReg() &&
+           MI.getOperand(0).getReg() == riscv_common::k0))
+        continue;
+
+      const auto callee = callName(MI);
+      const bool callee_dmr = !callee.empty() && is_func_dmr(callee);
+      const bool callee_eddi =
+          callee_dmr &&
+          riscv_common::inCSString(llvm::cl::enable_eddi, callee);
+      const bool bank_boundary = callee_dmr && !callee_eddi;
+      const auto arguments = getArgRegs(&MI);
+      const auto results = getRetRegs(&MI);
+      RegSetType uses, definitions;
+      for (auto &operand : MI.operands()) {
+        if (!operand.isRegMask())
+          continue;
+        const auto *original = operand.getRegMask();
+        if (observes_bank)
+          for (const auto &pair : P2S_)
+            if ((integerRegister(pair.first) ||
+                 (selective_wrapper &&
+                  isFullWidthFPRegister(pair.first, subtarget))) &&
+                !invariant(pair.first) &&
+                llvm::MachineOperand::clobbersPhysReg(original, pair.first))
+              definitions.insert(pair.first);
+        if (!callee_dmr)
+          continue;
+
+        auto *mask = MF_->allocateRegMask();
+        std::copy_n(original, (TRI_->getNumRegs() + 31) / 32, mask);
+        for (const auto &pair : P2S_) {
+          bool preserved =
+              !llvm::MachineOperand::clobbersPhysReg(original, pair.first);
+          if (integerRegister(pair.first) && invariant(pair.first))
+            preserved = pair.first != riscv_common::kSP || !callee_eddi;
+          const auto bit = uint32_t(1) << (pair.second % 32);
+          if (preserved)
+            mask[pair.second / 32] |= bit;
+          else
+            mask[pair.second / 32] &= ~bit;
+          if (integerRegister(pair.first) &&
+              (invariant(pair.first) || bank_boundary) &&
+              pair.first != riscv_common::kRA) {
+            uses.insert(pair.first);
+            uses.insert(pair.second);
+          }
+          if (bank_boundary && integerRegister(pair.first) && !preserved) {
+            definitions.insert(pair.first);
+            definitions.insert(pair.second);
+          }
+        }
+        operand.setRegMask(mask);
+      }
+      if (callee_dmr) {
+        for (const auto reg : arguments)
+          if (P2S_.count(reg))
+            uses.insert(P2S_.at(reg));
+        for (const auto reg : results)
+          if (P2S_.count(reg))
+            definitions.insert(P2S_.at(reg));
+        if (!TII_->isTailCall(MI)) {
+          // The callee copies the newly linked RA at entry, rather than
+          // consuming the caller's old shadow RA.
+          definitions.insert(P2S_.at(riscv_common::kRA));
+          if (callee_eddi)
+            definitions.insert(P2S_.at(riscv_common::kSP));
+        }
+      }
+      for (const auto reg : uses)
+        addRegister(MI, reg, false);
+      for (const auto reg : definitions)
+        addRegister(MI, reg, true);
+    }
+  }
 }
 
 void RISCVDmr::protectGP() {
@@ -1141,28 +1297,24 @@ void RISCVDmr::duplicateInstructions() {
 
   llvm::BuildMI(MF_->front(), std::begin(MF_->front()),
                 MF_->front().front().getDebugLoc(),
-                TII_->get(llvm::RISCV::ADDI))
-      .addReg(P2S_.at(riscv_common::kRA))
+                TII_->get(llvm::RISCV::ADDI), P2S_.at(riscv_common::kRA))
       .addReg(riscv_common::kRA)
       .addImm(0);
 
   if (fname_ == "main") {
     llvm::BuildMI(MF_->front(), std::begin(MF_->front()),
                   MF_->front().front().getDebugLoc(),
-                  TII_->get(llvm::RISCV::ADDI))
-        .addReg(P2S_.at(riscv_common::kSP))
+                  TII_->get(llvm::RISCV::ADDI), P2S_.at(riscv_common::kSP))
         .addReg(riscv_common::kSP)
         .addImm(0);
     llvm::BuildMI(MF_->front(), std::begin(MF_->front()),
                   MF_->front().front().getDebugLoc(),
-                  TII_->get(llvm::RISCV::ADDI))
-        .addReg(P2S_.at(riscv_common::k0))
+                  TII_->get(llvm::RISCV::ADDI), P2S_.at(riscv_common::k0))
         .addReg(riscv_common::k0)
         .addImm(0);
     llvm::BuildMI(MF_->front(), std::begin(MF_->front()),
                   MF_->front().front().getDebugLoc(),
-                  TII_->get(llvm::RISCV::ADDI))
-        .addReg(P2S_.at(riscv_common::kGP))
+                  TII_->get(llvm::RISCV::ADDI), P2S_.at(riscv_common::kGP))
         .addReg(riscv_common::kGP)
         .addImm(0);
   }
@@ -1434,6 +1586,20 @@ void RISCVDmr::protectStores() {
           si->getOperand(1).setReg(addr_reg);
         }
         si->setDesc(TII_->get(LBStore2Load_.at(opcode)));
+        // The clone is now a load, with a defined result and an independent
+        // memory access through the other register bank. Store operand flags
+        // and primary-pointer alias metadata do not describe this access.
+        if (si->getOperand(0).isUse())
+          si->getOperand(0).setIsKill(false);
+        si->getOperand(0).setIsDef(true);
+        si->getOperand(0).setIsDead(false);
+        si->getOperand(0).setIsUndef(false);
+        llvm::SmallVector<llvm::MachineMemOperand *, 2> memory;
+        for (const auto *operand : MI->memoperands())
+          memory.push_back(MF_->getMachineMemOperand(
+              llvm::MachinePointerInfo(), llvm::MachineMemOperand::MOLoad,
+              operand->getSize(), operand->getAlign()));
+        si->setMemRefs(*MF_, memory);
         MBB->insertAfter(MI, si);
         loadbacks_.emplace(si);
 
@@ -1483,14 +1649,14 @@ void RISCVDmr::protectStores() {
               slli_imm -= 32;
             }
 
-            auto mi_builder{
-                llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::XOR))
-                    .addReg(shadow_zero)
-                    .addReg(shadow_zero)
-                    .addReg(P2S_.at(data_reg))};
+            auto mi_builder{llvm::BuildMI(*MBB, insert, DLL,
+                                          TII_->get(llvm::RISCV::XOR),
+                                          shadow_zero)
+                                .addReg(shadow_zero)
+                                .addReg(P2S_.at(data_reg))};
             loadbacks_.emplace(mi_builder.getInstr());
-            llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::SLLI))
-                .addReg(shadow_zero)
+            llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::SLLI),
+                          shadow_zero)
                 .addReg(shadow_zero)
                 .addImm(slli_imm);
             llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::BNE))
@@ -1824,6 +1990,13 @@ void RISCVDmr::updateSelectiveCalls() {
                     riscv_common::RegType::I ||
                 isFullWidthFPRegister(
                     regpair.first, MF_->getSubtarget<llvm::RISCVSubtarget>())) {
+              // Selective-call setup observes the complete monitor bank,
+              // including architectural values not used by the source IR.
+              // Declare those inputs explicitly instead of inferring them
+              // from arbitrary undefined uses during liveness repair.
+              if (!MRI_->isReserved(regpair.first) &&
+                  !MF_->front().isLiveIn(regpair.first))
+                MF_->front().addLiveIn(regpair.first);
               moveIntoShadow(MBB, insert, regpair.first, regpair.second);
             }
           }
@@ -2229,6 +2402,10 @@ void RISCVDmr::protectCalls() {
           }
         }
 
+        // UC3 checks the incoming monitor bank even for registers which are
+        // not ordinary arguments. These are intentional convention inputs.
+        if (!MRI_->isReserved(r) && !MF_->front().isLiveIn(r))
+          MF_->front().addLiveIn(r);
         llvm::BuildMI(entry_BB, insert, insert->getDebugLoc(),
                       TII_->get(llvm::RISCV::BNE))
             .addReg(r)
@@ -2286,8 +2463,7 @@ void RISCVDmr::protectCalls() {
         }
 
         llvm::BuildMI(entry_BB, insert, insert->getDebugLoc(),
-                      TII_->get(llvm::RISCV::ADDI))
-            .addReg(P2S_.at(r))
+                      TII_->get(llvm::RISCV::ADDI), P2S_.at(r))
             .addReg(r)
             .addImm(0);
       }
@@ -2377,8 +2553,7 @@ void RISCVDmr::protectBranches() {
         llvm::MachineBasicBlock::iterator insert{MI->getIterator()};
         insert++;
         llvm::BuildMI(*MI->getParent(), insert, MI->getDebugLoc(),
-                      TII_->get(llvm::RISCV::JAL))
-            .addReg(riscv_common::k0)
+                      TII_->get(llvm::RISCV::PseudoBR))
             .addMBB(err_bb_);
 
         // NOTE: due to nemesis it can happen that the original successor chain
@@ -2387,7 +2562,8 @@ void RISCVDmr::protectBranches() {
         //       chained block then we have to reestablish the link
         // TODO: this workaround only works if the unconditional branch follows
         //       a conditional branch (which led to nemesis blocks)
-        MI->getParent()->addSuccessor(MI->getOperand(0).getMBB());
+        if (!MI->getParent()->isSuccessor(MI->getOperand(0).getMBB()))
+          MI->getParent()->addSuccessor(MI->getOperand(0).getMBB());
       } else if (MI->isConditionalBranch()) {
         auto MBB{MI->getParent()};
         assert(MI->getOperand(2).isMBB() && "this branch is odd!");
@@ -2465,8 +2641,7 @@ void RISCVDmr::protectBranches() {
         MI->getOperand(2).setMBB(nemesis_taken_BB);
         nemesis_taken_BB->insert(nemesis_taken_BB->begin(), si);
         llvm::BuildMI(*nemesis_taken_BB, nemesis_taken_BB->end(),
-                      si->getDebugLoc(), TII_->get(llvm::RISCV::JAL))
-            .addReg(riscv_common::k0)
+                      si->getDebugLoc(), TII_->get(llvm::RISCV::PseudoBR))
             .addMBB(err_bb_);
       } else if (MI->isIndirectBranch()) {
         llvm::outs()
@@ -2482,8 +2657,7 @@ void RISCVDmr::protectBranches() {
         llvm::MachineBasicBlock::iterator insert{MI->getIterator()};
         insert++;
         llvm::BuildMI(*MI->getParent(), insert, MI->getDebugLoc(),
-                      TII_->get(llvm::RISCV::JAL))
-            .addReg(riscv_common::k0)
+                      TII_->get(llvm::RISCV::PseudoBR))
             .addMBB(err_bb_);
       } else if (MI->isConditionalBranch()) {
         auto MBB{MI->getParent()};
@@ -2504,8 +2678,7 @@ void RISCVDmr::protectBranches() {
         assert(nottaken_BB && "this branch has no fallthrough!");
 
         llvm::BuildMI(*MBB, MBB->end(), MI->getDebugLoc(),
-                      TII_->get(llvm::RISCV::JAL))
-            .addReg(riscv_common::k0)
+                      TII_->get(llvm::RISCV::PseudoBR))
             .addMBB(
                 err_bb_); // push back an unconditional jump to error-BB to
                           // protect previous unconditional jump to "not taken"
@@ -2534,13 +2707,11 @@ void RISCVDmr::protectBranches() {
         llvm::MachineBasicBlock::iterator insert =
             nemesec_nottaken_BB->instr_end();
         llvm::BuildMI(*si->getParent(), insert, si->getDebugLoc(),
-                      TII_->get(llvm::RISCV::JAL))
-            .addReg(riscv_common::k0)
+                      TII_->get(llvm::RISCV::PseudoBR))
             .addMBB(nottaken_BB); // we need to jump back to fallthrough
         insert = MI->getIterator();
         llvm::BuildMI(*MI->getParent(), ++insert, MI->getDebugLoc(),
-                      TII_->get(llvm::RISCV::JAL))
-            .addReg(riscv_common::k0)
+                      TII_->get(llvm::RISCV::PseudoBR))
             .addMBB(nemesec_nottaken_BB);
 
         // taken path duplication
@@ -2556,8 +2727,7 @@ void RISCVDmr::protectBranches() {
         MI->getOperand(2).setMBB(nemesis_taken_BB);
         nemesis_taken_BB->insert(nemesis_taken_BB->begin(), si);
         llvm::BuildMI(*nemesis_taken_BB, nemesis_taken_BB->end(),
-                      si->getDebugLoc(), TII_->get(llvm::RISCV::JAL))
-            .addReg(riscv_common::k0)
+                      si->getDebugLoc(), TII_->get(llvm::RISCV::PseudoBR))
             .addMBB(err_bb_);
       } else if (MI->isIndirectBranch()) {
         llvm::outs()
@@ -2597,20 +2767,19 @@ void RISCVDmr::insertErrorBB() {
   err_bb_ = MF_->CreateMachineBasicBlock();
   MF_->push_back(err_bb_);
 
-  auto DLL{MF_->front().front().getDebugLoc()};
+  const auto DLL = MF_->front().empty() ? llvm::DebugLoc()
+                                        : MF_->front().front().getDebugLoc();
 
   if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
       config_.eds == riscv_common::ErrorDetectionStrategy::ED1) {
     // storing '1' to addr : (0xfff0 = 0x10000 - 0x10):
     // lui t1, 16 -> makes t1 = 0x10000
     llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
-                  TII_->get(llvm::RISCV::LUI))
-        .addReg(llvm::RISCV::X6)
+                  TII_->get(llvm::RISCV::LUI), llvm::RISCV::X6)
         .addImm(16);
     // addi t2, zero, 1 -> makes t2 = 1
     llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
-                  TII_->get(llvm::RISCV::ADDI))
-        .addReg(llvm::RISCV::X7)
+                  TII_->get(llvm::RISCV::ADDI), llvm::RISCV::X7)
         .addReg(riscv_common::k0)
         .addImm(1);
     // sw t2, -16(t1) -> stores t2 to (t1 - 8) i.e. store 1 to 0xfff0
@@ -2622,20 +2791,20 @@ void RISCVDmr::insertErrorBB() {
   } else if (config_.eds == riscv_common::ErrorDetectionStrategy::ED3) {
     // storing '93' to a7, aka SYS_exit code ECALL code:
     llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
-                  TII_->get(llvm::RISCV::ADDI))
-        .addReg(llvm::RISCV::X17) // a7
-        .addReg(llvm::RISCV::X0)  // zero
+                  TII_->get(llvm::RISCV::ADDI), llvm::RISCV::X17) // a7
+        .addReg(llvm::RISCV::X0)                                  // zero
         .addImm(93);
     // storing '-512' to a0, aka exit return value when ecall forces newlib sys
     // exit:
     llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
-                  TII_->get(llvm::RISCV::ADDI))
-        .addReg(llvm::RISCV::X10) // a7
-        .addReg(llvm::RISCV::X0)  // zero
+                  TII_->get(llvm::RISCV::ADDI), llvm::RISCV::X10) // a0
+        .addReg(llvm::RISCV::X0)                                  // zero
         .addImm(-512);
     // invoke 'ecall'
     llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
-                  TII_->get(llvm::RISCV::ECALL));
+                  TII_->get(llvm::RISCV::ECALL))
+        .addReg(llvm::RISCV::X17, llvm::RegState::Implicit)
+        .addReg(llvm::RISCV::X10, llvm::RegState::Implicit);
   }
   if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
       config_.eds == riscv_common::ErrorDetectionStrategy::ED1 ||
@@ -2644,21 +2813,13 @@ void RISCVDmr::insertErrorBB() {
     // to encode the error-BB in order to make it a label so as to be able to
     // jump to it from anywhere in asm
     err_bb_->addSuccessor(err_bb_);
-    // // keep on repeating this errBB as we dont want to execute code now
-    // // J err_bb_ = JALR X0, err_bb_ because J is a pseudo-jump instr in RISCV
-    // llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
-    // TII_->get(llvm::RISCV::JAL))
-    //     .addReg(riscv_common::k0)
-    //     .addMBB(err_bb_);
   }
 
   if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
       config_.eds == riscv_common::ErrorDetectionStrategy::ED3) {
     // keep on repeating this errBB as we dont want to execute code now
-    // J err_bb_ = JALR X0, err_bb_ because J is a pseudo-jump instr in RISCV
     llvm::BuildMI(*err_bb_, std::end(*err_bb_), DLL,
-                  TII_->get(llvm::RISCV::JAL))
-        .addReg(riscv_common::k0)
+                  TII_->get(llvm::RISCV::PseudoBR))
         .addMBB(err_bb_);
 
   } else {
@@ -2936,8 +3097,7 @@ void RISCVDmr::repair() {
 
             // TODO: FP regs??
             llvm::BuildMI(MBB, std::next(MI.getIterator()), MI.getDebugLoc(),
-                          TII_->get(llvm::RISCV::ADDI))
-                .addReg(LiveP2S[r])
+                          TII_->get(llvm::RISCV::ADDI), LiveP2S[r])
                 .addReg(P2S_.at(r))
                 .addImm(0);
             ignore_these.emplace(&*std::next(MI.getIterator()));
@@ -2992,8 +3152,8 @@ void RISCVDmr::repair() {
 
                 if (it == MI.getIterator()) {
                   llvm::BuildMI(MBB, MI.getIterator(), MI.getDebugLoc(),
-                                TII_->get(llvm::RISCV::ADDI))
-                      .addReg(P2S_.at(riscv_common::kSP))
+                                TII_->get(llvm::RISCV::ADDI),
+                                P2S_.at(riscv_common::kSP))
                       .addReg(LiveP2S[riscv_common::kSP])
                       .addImm(0);
                   break;
@@ -3007,8 +3167,8 @@ void RISCVDmr::repair() {
                                               regs_to_spill.end()},
                   &MBB, next_it, LiveP2S[riscv_common::kSP]);
               llvm::BuildMI(MBB, std::next(MI.getIterator()), MI.getDebugLoc(),
-                            TII_->get(llvm::RISCV::ADDI))
-                  .addReg(LiveP2S[riscv_common::kSP])
+                            TII_->get(llvm::RISCV::ADDI),
+                            LiveP2S[riscv_common::kSP])
                   .addReg(P2S_.at(riscv_common::kSP))
                   .addImm(0);
 
@@ -3293,8 +3453,7 @@ void RISCVDmr::repair() {
             }
 
             llvm::BuildMI(MBB, MI.getIterator(), MI.getDebugLoc(),
-                          TII_->get(llvm::RISCV::ADDI))
-                .addReg(P2S_.at(r))
+                          TII_->get(llvm::RISCV::ADDI), P2S_.at(r))
                 .addReg(LiveP2S[r])
                 .addImm(0);
           }
@@ -3421,8 +3580,7 @@ void RISCVDmr::repair() {
 
         // TODO: can we optimize this without Jump instruction everytime!!
         llvm::BuildMI(*new_BB, new_BB->end(), MBB.front().getDebugLoc(),
-                      TII_->get(llvm::RISCV::JAL))
-            .addReg(riscv_common::k0)
+                      TII_->get(llvm::RISCV::PseudoBR))
             .addMBB(current_succ);
 
         MBB.replaceSuccessor(current_succ, new_BB);
@@ -3571,8 +3729,7 @@ void RISCVDmr::repair() {
           std::next(p.first)->getOperand(1).setReg(P2S_.at(riscv_common::k0));
           p.first = si->getIterator();
           llvm::BuildMI(*p.first->getParent(), p.second, p.first->getDebugLoc(),
-                        TII_->get(llvm::RISCV::XOR))
-              .addReg(P2S_.at(riscv_common::k0))
+                        TII_->get(llvm::RISCV::XOR), P2S_.at(riscv_common::k0))
               .addReg(P2S_.at(riscv_common::k0))
               .addReg(P2S_.at(riscv_common::k0));
         } else {
