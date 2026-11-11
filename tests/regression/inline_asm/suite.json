@@ -1,0 +1,51 @@
+{
+  "name": "inline_asm",
+  "adapter": "freestanding",
+  "architectures": ["rv32", "rv64"],
+  "modes": ["EDDI"],
+  "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+  "schedules": ["cgs", "fgs"],
+  "verify_machineinstrs": true,
+  "sources": ["inline_asm.c"],
+  "expected": {"exit": 42, "stdout": ""},
+  "cases": [
+    {
+      "name": "compiler_barrier",
+      "functions": ["asm_barrier"]
+    },
+    {
+      "name": "protected_stack_pointer",
+      "sources": ["../call_abi/call_abi.c"],
+      "defines": ["TEST_CASE=6"],
+      "functions": ["abi_stack_caller", "abi_stack_callee", "abi_stack_pointer"],
+      "expected_build_diagnostic": {
+        "source": "../call_abi/call_abi.c",
+        "modes": ["EDDI"],
+        "functions": ["abi_stack_pointer"],
+        "message": "COMPAS: inline assembly is unsupported in EDDI-protected function 'abi_stack_pointer'"
+      }
+    },
+    {
+      "name": "protected_register_assembly",
+      "defines": ["ASM_REGISTER"],
+      "functions": ["asm_barrier", "asm_opaque"],
+      "expected_build_diagnostic": {
+        "source": "inline_asm.c",
+        "modes": ["EDDI"],
+        "functions": ["asm_opaque"],
+        "message": "COMPAS: inline assembly is unsupported in EDDI-protected function 'asm_opaque'"
+      }
+    },
+    {
+      "name": "protected_empty_operand_assembly",
+      "defines": ["ASM_EMPTY_OPERAND"],
+      "functions": ["asm_barrier", "asm_opaque"],
+      "expected_build_diagnostic": {
+        "source": "inline_asm.c",
+        "modes": ["EDDI"],
+        "functions": ["asm_opaque"],
+        "message": "COMPAS: inline assembly is unsupported in EDDI-protected function 'asm_opaque'"
+      }
+    }
+  ]
+}

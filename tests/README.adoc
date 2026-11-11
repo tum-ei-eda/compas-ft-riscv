@@ -113,6 +113,42 @@ Known failures are declared explicitly in a manifest with the affected case, arc
 
 Known-failure expectations preserve visible evidence of functional behavior; they do not claim fault-detection coverage. Remove or update an expectation when its underlying issue is fixed and the relevant configuration is verified.
 
+Compile-diagnostic cases use `expected_build_diagnostic` to check an explicitly
+unsupported pattern, separately from known runtime failures. This freestanding
+field names one source from `sources`, the affected DMR `modes`, the selected
+`functions` that trigger rejection, and the literal diagnostic `message`.
+The expectation applies only when those modes and functions are selected;
+overriding the function selection to leave the helper unprotected instead runs
+the ordinary functional check. An unprotected reference must still execute and
+match its independent oracle. For example:
+
+[,json]
+----
+"expected_build_diagnostic": {
+  "source": "inline_asm.c",
+  "modes": ["EDDI"],
+  "functions": ["asm_opaque"],
+  "message": "COMPAS: inline assembly is unsupported in EDDI-protected function 'asm_opaque'"
+}
+----
+
+Only that source's `llc` stage may satisfy the expectation, with ordinary error
+status `1` and the matching diagnostic. Assertions, signals, unrelated build
+errors and missing tools remain `ERROR`. Unexpected acceptance is a failure.
+When machine verification is requested, the second `llc` invocation must reject
+the same pattern cleanly too; it does not establish verification of rejected
+code. Results identify these checks with `kind: "build_diagnostic"`, retain
+compiler logs, and omit them from `functional_counts`. They do not produce an
+executable or a runtime outcome. See link:regression/inline_asm/README.adoc[the
+inline-assembly cases] for rejection and supported-barrier examples.
+
+The link:regression/late_codegen/README.adoc[late code-generation suite] runs
+separately through `python3 tests/regression/late_codegen/run.py`. It reserves
+a large fixed area in machine IR before prologue/epilogue insertion, then checks
+the normal COMPAS pipeline with machine verification and an independent runtime
+oracle. This reaches preservation offsets that ordinary large C locals do not
+produce. CI runs it alongside the source-level regression suites.
+
 Freestanding manifests can set `verify_machineinstrs: true` to compile each IR source a second time with `-verify-machineinstrs`. This extra compilation writes separate `.verify` logs and assembly; the normal build still runs so that a verifier defect does not hide functional evidence. A verifier failure makes the configuration an `ERROR` and the command exits nonzero, including when the runtime result matches a known failure. The JSON report retains `outcome`, `functional_status` and `verification` separately, and includes both overall `counts` and `functional_counts`.
 
 `--verify-machineinstrs` enables verification for a selected freestanding run; `--no-verify-machineinstrs` disables the extra compilation for a functional-only investigation. The independent oracle and reference comparisons still apply. Verifier failures and newly observed runtime failures belong in the TODO while compiler fixes are deferred.

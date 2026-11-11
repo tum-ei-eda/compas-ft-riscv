@@ -1,0 +1,37 @@
+= Late code-generation regressions
+
+These compiler-level checks cover preservation slots beyond the signed 12-bit
+load/store displacement. Ordinary large C locals do not reproduce this layout:
+the preservation slots remain near the stable frame pointer. The driver compiles
+the C fixture to machine IR immediately before prologue/epilogue insertion,
+reserves an otherwise unused 4096-byte fixed area, and resumes the normal pipeline.
+PEI places its saved registers and the COMPAS preservation slots below this area.
+The driver adds a real definition for a borrowed caller-clobbered scratch register;
+it does not invent entry live-ins or change call-preserved masks.
+
+The three cases cover signature-only callers, EDDI callers invoking ordinary
+callees, and ordinary callers invoking EDDI callees. CFCSS additionally exercises
+borrowing one signature register to form the address of both saved signatures.
+An ordinary source-level reference is checked first. Each MIR configuration
+verifies that all PEI frame objects are disjoint, runs the actual machine verifier
+and executes under QEMU, checking literal arithmetic and cumulative side-effect
+oracles. Both RV32 and
+RV64 and both DMR schedules are selected by default.
+
+Run this focused MIR suite separately from the ordinary source-level suites:
+
+[source,shell]
+----
+python3 tests/regression/late_codegen/run.py \
+  --clang /path/to/clang --llc /path/to/llc \
+  --cc /path/to/riscv-none-elf-gcc --qemu '/path/to/qemu-riscv{bits}'
+----
+
+The script reuses the shared runner's tool discovery, ISA/ABI resolution, command
+timeouts and logs. `--case 'late_codegen/callee_context'`, `--arch rv32`,
+`--cfp RASM`, `--schedule cgs`, `--build-dir`, and `--list` narrow the run.
+The JSON result file and per-command input, output and error logs are retained
+under the build directory. LLVM 13 and 14 need explicit physical-register
+materialization here; their general `movImm` helper introduces virtual temporaries
+after register allocation. LLVM 15 and 16 already materialize directly into the
+physical destination.

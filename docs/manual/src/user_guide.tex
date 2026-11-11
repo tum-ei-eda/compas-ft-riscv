@@ -83,6 +83,15 @@ whether its caller uses this pair for a signature. These caller-clobbered
 registers carry no formal ABI argument. Argument and result checks remain,
 as do ordinary DMR instruction and data checks within functions without CFP.
 
+\subsubsection{Inline assembly in EDDI functions}
+EDDI diagnoses nonempty or operand-bearing inline assembly in selected functions
+because its assembly text has no defined primary/shadow register or stack
+contract. Keep such helpers outside the EDDI selection and call them through
+the ordinary selective-call boundary. An empty compiler barrier with no
+register operands, such as \texttt{asm volatile ("" ::: "memory")}, remains
+supported. It is emitted once, after pending shadow instructions, and retains
+its compiler memory-ordering effect.
+
 \subsubsection{Stack pointer arguments}
 EDDI allocates separate primary and shadow stack frames. For call arguments
 derived from the current frame, the argument check compares the shadow address

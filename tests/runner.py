@@ -152,8 +152,27 @@ def discover(args):
                         sources = config["sources"]
                         if not isinstance(sources, list) or not sources or any(not isinstance(value, str) for value in sources):
                             raise ValueError("sources must be a nonempty list of paths")
+                        diagnostic = config.get("expected_build_diagnostic")
+                        if diagnostic is not None:
+                            if (not isinstance(diagnostic, dict)
+                                    or diagnostic.get("source") not in sources
+                                    or not isinstance(diagnostic.get("message"), str)
+                                    or not diagnostic["message"].strip()):
+                                raise ValueError("expected_build_diagnostic requires a source from sources and a nonempty message")
+                            modes = diagnostic.get("modes")
+                            functions = diagnostic.get("functions")
+                            if (not isinstance(modes, list) or not modes
+                                    or any(value not in MODES[1:] for value in modes)):
+                                raise ValueError("expected_build_diagnostic.modes must select nonempty DMR modes")
+                            if (not isinstance(functions, list) or not functions
+                                    or any(not isinstance(value, str) or not value
+                                           or value not in config.get("functions", [])
+                                           for value in functions)):
+                                raise ValueError("expected_build_diagnostic.functions must select manifest DMR functions")
                     elif not isinstance(config["executable"], str) or not config["executable"]:
                         raise ValueError("CMake suites require an executable path")
+                    elif "expected_build_diagnostic" in config:
+                        raise ValueError("expected_build_diagnostic is supported by the freestanding adapter")
                     if not isinstance(config.get("verify_machineinstrs", False), bool):
                         raise ValueError("verify_machineinstrs must be a boolean")
                     for field in ("isa", "abi"):
@@ -238,6 +257,25 @@ def command(argv, directory, label, timeout, check=True):
     return dict(host_exit=process.returncode, stdout=stdout, stderr=stderr)
 
 
+def build_diagnostic_for(case, mode, functions):
+    diagnostic = case.get("expected_build_diagnostic")
+    if (diagnostic and mode in diagnostic["modes"]
+            and all(function in functions for function in diagnostic["functions"])):
+        return diagnostic
+    return None
+
+
+def check_build_diagnostic(observed, diagnostic, directory, label):
+    # Match an ordinary compiler rejection, never an assertion or a signal
+    # that happens to print the requested message before crashing.
+    if (observed["host_exit"] != 1
+            or diagnostic["message"] not in observed["stderr"]
+            or re.search(r"Assertion .* failed|PLEASE submit a bug report|Stack dump:",
+                         observed["stderr"])):
+        raise TestError(f"expected compiler diagnostic was not emitted cleanly; "
+                        f"status {observed['host_exit']}; see {directory / (label + '.stderr')}")
+
+
 def build_and_run(args, tools, case, arch, mode, cfp, schedule, functions, cfp_functions, directory, target):
     directory.mkdir(parents=True, exist_ok=True)
     build = lambda argv, label: command(argv, directory, label, args.build_timeout)
@@ -256,6 +294,7 @@ def build_and_run(args, tools, case, arch, mode, cfp, schedule, functions, cfp_f
             flags.append(f"-FGS={','.join(functions)}")
         frame_flags = (["-fno-omit-frame-pointer", "-mno-omit-leaf-frame-pointer"]
                        if target.get("frame_pointer", False) else [])
+        diagnostic = build_diagnostic_for(case, mode, functions)
         for index, source in enumerate(case["sources"]):
             stem = f"source-{index}"
             ir = directory / (stem + ".ll")
@@ -268,6 +307,28 @@ def build_and_run(args, tools, case, arch, mode, cfp, schedule, functions, cfp_f
             llc = [tools["llc"], f"-march=riscv{arch[2:]}", "-mattr=" + ",".join(target["features"]),
                    "-target-abi=" + abi, "-code-model=" + ("small" if model == "medlow" else "medium"),
                    "-O1", *flags, ir]
+            if diagnostic and source == diagnostic["source"]:
+                label = stem + ".llc"
+                observed = command([*llc, "-o", asm], directory, label,
+                                   args.build_timeout, check=False)
+                matched = observed["host_exit"] != 0
+                if matched:
+                    check_build_diagnostic(observed, diagnostic, directory, label)
+                if verify:
+                    verification["kind"] = "build_diagnostic"
+                    label = stem + ".verify"
+                    try:
+                        checked = command([*llc, "-verify-machineinstrs", "-o", directory / (stem + ".verify.s")],
+                                          directory, label, args.build_timeout, check=False)
+                        if matched or checked["host_exit"] != 0:
+                            check_build_diagnostic(checked, diagnostic, directory, label)
+                    except TestError as error:
+                        verification["status"] = "ERROR"
+                        verification["errors"].append(str(error))
+                # Rejected code has no executable or functional outcome.
+                return {"build_diagnostic": dict(matched=matched,
+                            message=diagnostic["message"], source=source,
+                            host_exit=observed["host_exit"])}, verification
             build([*llc, "-o", asm], stem + ".llc")
             if verify:
                 # A verifier failure must not prevent the normal executable
@@ -410,12 +471,26 @@ def execute(args, tools, cases, results):
                     continue  # The reference already checks this configuration.
                 directory = root / f"{mode}-{cfp}-{schedule}"
                 result = dict(base, mode=mode, cfp=cfp, schedule=schedule, logdir=str(directory))
+                if build_diagnostic_for(case, mode, functions):
+                    result["kind"] = "build_diagnostic"
                 try:
                     failure = known_failure(case, arch, mode, cfp, schedule, functions, cfp_functions, target)
                     if failure:
                         result["known_failure"] = failure
                     observed, verification = build_and_run(args, tools, case, arch, mode, cfp, schedule,
                                                            functions, cfp_functions, directory, target)
+                    if "build_diagnostic" in observed:
+                        diagnostic = observed["build_diagnostic"]
+                        result["build_diagnostic"] = diagnostic
+                        result.update(status="PASS" if diagnostic["matched"] else "FAIL",
+                                      detail=("expected compiler diagnostic matched" if diagnostic["matched"]
+                                              else "compiler unexpectedly accepted an unsupported pattern"))
+                        if verification is not None:
+                            result["verification"] = verification
+                            if verification["status"] == "ERROR":
+                                result.update(status="ERROR", detail="; ".join(verification["errors"]))
+                        emit(results, result)
+                        continue
                     result["outcome"] = observed
                     if observed == outcome and oracle_matches(case, observed):
                         result.update(status="XPASS" if failure else "PASS", detail="matches reference and independent oracle")
@@ -466,7 +541,8 @@ def main(default_suite="all"):
             print(f"ERROR {error}", file=sys.stderr)
         finally:
             counts = dict(Counter(result["status"] for result in results))
-            functional_counts = dict(Counter(result.get("functional_status", result["status"]) for result in results))
+            functional_counts = dict(Counter(result.get("functional_status", result["status"]) for result in results
+                                            if result.get("kind") != "build_diagnostic"))
             report = dict(results=results, counts=counts, functional_counts=functional_counts)
             (args.build_dir / "results.json").write_text(json.dumps(report, indent=2) + "\n")
         print("Results: " + ", ".join(f"{count} {status}" for status, count in sorted(counts.items())))

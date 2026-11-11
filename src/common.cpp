@@ -36,6 +36,10 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
+#if LLVM_VERSION_MAJOR < 15
+#include "MCTargetDesc/RISCVMatInt.h"
+#endif
+
 namespace {
 
 void remove_operand(llvm::MachineInstr &MI, unsigned index) {
@@ -43,6 +47,48 @@ void remove_operand(llvm::MachineInstr &MI, unsigned index) {
   MI.RemoveOperand(index);
 #else
   MI.removeOperand(index);
+#endif
+}
+
+void materialize_frame_offset(llvm::MachineBasicBlock &MBB,
+                              llvm::MachineBasicBlock::iterator insert,
+                              const llvm::DebugLoc &DL, llvm::Register dest,
+                              int64_t value) {
+  assert(dest.isPhysical() && "Late frame addressing needs a physical register");
+  const auto &subtarget =
+      MBB.getParent()->getSubtarget<llvm::RISCVSubtarget>();
+  const auto *tii = subtarget.getInstrInfo();
+#if LLVM_VERSION_MAJOR >= 15
+  tii->movImm(MBB, insert, DL, dest, value);
+#else
+  // LLVM 13/14 movImm creates virtual temporaries for multi-instruction
+  // constants. These accesses run after RA; reuse the borrowed physical
+  // destination throughout the target's immediate-materialization sequence.
+  if (!subtarget.is64Bit() && !llvm::isInt<32>(value))
+    llvm::report_fatal_error("COMPAS: frame offset exceeds RV32 address width");
+  llvm::Register source{llvm::RISCV::X0};
+  for (const auto &inst :
+       llvm::RISCVMatInt::generateInstSeq(value, subtarget.getFeatureBits())) {
+    auto builder = llvm::BuildMI(MBB, insert, DL, tii->get(inst.Opc), dest);
+    if (inst.Opc == llvm::RISCV::LUI) {
+      builder.addImm(inst.Imm);
+#if LLVM_VERSION_MAJOR == 13
+    } else if (inst.Opc == llvm::RISCV::ADDUW) {
+#else
+    } else if (inst.Opc == llvm::RISCV::ADD_UW) {
+#endif
+      builder.addReg(source).addReg(llvm::RISCV::X0);
+#if LLVM_VERSION_MAJOR >= 14
+    } else if (inst.Opc == llvm::RISCV::SH1ADD ||
+               inst.Opc == llvm::RISCV::SH2ADD ||
+               inst.Opc == llvm::RISCV::SH3ADD) {
+      builder.addReg(source).addReg(source);
+#endif
+    } else {
+      builder.addReg(source).addImm(inst.Imm);
+    }
+    source = dest;
+  }
 #endif
 }
 
@@ -431,7 +477,7 @@ void riscv_common::preserveSignatureAcrossCall(
         buffer = *other;
         saveRegs(regs, MBB, insert);
       }
-      tii->movImm(*MBB, insert, DL, scratch, displacement);
+      materialize_frame_offset(*MBB, insert, DL, scratch, displacement);
       llvm::BuildMI(*MBB, insert, DL, tii->get(llvm::RISCV::ADD))
           .addReg(scratch, llvm::RegState::Define)
           .addReg(frame_reg)
@@ -546,7 +592,7 @@ void access_call_regs(const std::vector<llvm::Register> &regs,
   const std::vector<llvm::Register> temporaries{address, buffer};
   const auto temporary_frame = spill_frame(temporaries, MF);
   riscv_common::saveRegs(temporaries, MBB, insert);
-  tii->movImm(*MBB, insert, DL, address, displacement);
+  materialize_frame_offset(*MBB, insert, DL, address, displacement);
   llvm::BuildMI(*MBB, insert, DL, tii->get(llvm::RISCV::ADD), address)
       .addReg(frame_reg)
       .addReg(address);

@@ -24,12 +24,29 @@ SWIFT, NZDC, NZDC+NEMESIS and NZDC+NEMESEC still abort with `reg not found in P2
 
 ## Call-boundary instrumentation
 
-- [ ] Correct outgoing-argument displacement in late tail-conversion and repair-mode preservation.
+- [ ] Correct caller-clobbered balance checks in late-converted EDDI tail calls.
+- [ ] Audit repair-mode preservation that moves SP around calls.
 - [ ] Make signature instrumentation aware of `+save-restore` prologue/epilogue helpers.
 
-The first item concerns remaining legacy `saveRegs`/`loadRegs` paths that move SP. Returning libcalls now use separate fixed caller-context and result banks without moving outgoing stack arguments. Duplicable calls copy the duplicate result to shadows, then reload the original result into its primary registers using the saved layout. Late tail wrappers run after the original epilogue restores FP and need earlier conversion or another preservation plan.
+Late tail wrappers run after the original epilogue restores FP and still use legacy `saveRegs`/`loadRegs` preservation. Their EDDI post-call checks compare discarded caller-clobbered temporaries because the filtering used for ordinary returning calls is conditional on `fixed_call_frame`. A callee returning a value from a runtime-indexed local array can leave correctly separated pointers in `a1`/`s9`; a tail-converted ordinary caller then rejects them despite matching results in `a0`/`s8`. This reproduces on RV32/RV64 with LLVM13/16, passes machine verification, and produces target `-512` instead of `42` with only `protected_callee` EDDI-selected:
 
-LLVM13's large-offset DMR-bank MIR probe hits an assembly-printer assertion, leaving that validation incomplete.
+```c
+typedef unsigned long word;
+__attribute__((noinline)) word protected_callee(word a) {
+    volatile word local[4];
+    for (word i = 0; i < 4; ++i) local[i] = a + i;
+    return local[a & 3];
+}
+__attribute__((noinline)) word wrapper(word a) {
+    volatile word scratch[9];
+    scratch[0] = a;
+    return protected_callee(scratch[0]);
+}
+volatile word input = 7;
+int main(void) { return wrapper(input) == 10 ? 42 : 17; }
+```
+
+Compile at `-O2` with sibling-call optimization enabled; the shared freestanding runner currently disables it. Both backends reject RISC-V tail calls with stack-passed arguments, so the earlier outgoing-stack-argument displacement claim is a latent layout concern rather than a reproduced tail-call failure. Moving SP in remaining repair-mode call preservation still needs review. Returning libcalls already use separate fixed caller-context and result banks without moving outgoing arguments.
 
 Compiler-generated `__riscv_save_*` calls execute before FP setup and can clobber G/RTS in `t0`. Signature initialization and preservation must account for their prologue placement.
 
@@ -39,19 +56,6 @@ Compiler-generated `__riscv_save_*` calls execute before FP setup and can clobbe
 - [ ] Give ordinary EDDI duplicate memory operations independent pointer/alias metadata.
 
 Functional indirect-call coverage does not establish complete shadow argument/result and preserved-register metadata for unknown targets. Ordinary duplicated loads/stores can still carry primary-bank pointer or fixed-stack provenance; updating it must preserve the separate handling of incoming stack arguments and store loadbacks.
-
-## Protected inline assembly: stack-pointer probe
-
-- [ ] Support or explicitly diagnose hardening the inline-assembly `abi_stack_pointer` helper.
-
-The normal alignment case leaves this helper unprotected so it observes the caller's SP without creating a frame. Selecting it for EDDI reproduces LLVM13's `MachineOperand::getReg()` / `isReg()` assertion during the DMR pass.
-
-```sh
-python3 tests/regression/run.py --case call_abi/stack_alignment \
-  --arch rv64 --mode EDDI --cfp none --no-verify-machineinstrs \
-  --functions 'abi_stack_caller,abi_stack_callee,abi_stack_pointer' \
-  --build-dir build/tests-todo-protected-inline-asm
-```
 
 ## Floating-point checks
 

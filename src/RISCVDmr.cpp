@@ -32,6 +32,7 @@
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDwarf.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -43,6 +44,24 @@
 // #define DBG
 
 namespace {
+
+bool isCompilerBarrier(const llvm::MachineInstr &MI) {
+  if (MI.getOpcode() != llvm::TargetOpcode::INLINEASM ||
+      MI.getNumOperands() < llvm::InlineAsm::MIOp_FirstOperand ||
+      !MI.getOperand(llvm::InlineAsm::MIOp_AsmString).isSymbol() ||
+      MI.getOperand(llvm::InlineAsm::MIOp_AsmString).getSymbolName()[0] ||
+      !MI.getOperand(llvm::InlineAsm::MIOp_ExtraInfo).isImm() ||
+      (MI.getOperand(llvm::InlineAsm::MIOp_ExtraInfo).getImm() &
+       llvm::InlineAsm::Extra_IsAlignStack))
+    return false;
+  // An empty compiler barrier may carry source-location metadata, but no
+  // register, memory-constraint or control-flow operands that need a shadow.
+  for (unsigned index = llvm::InlineAsm::MIOp_FirstOperand;
+       index != MI.getNumOperands(); ++index)
+    if (!MI.getOperand(index).isMetadata())
+      return false;
+  return true;
+}
 
 // Post-RA constant addition using only the supplied physical destination.
 // Preserve independent primary/shadow computations without virtual registers
@@ -392,6 +411,18 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
 
   auto ignore = ignoreMF();
   if (!ignore) {
+    if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_))
+      for (const auto &MBB : *MF_)
+        for (const auto &MI : MBB)
+          if (MI.isInlineAsm() && !isCompilerBarrier(MI)) {
+            // Opaque templates cannot be duplicated by renaming MachineInstr
+            // operands: implicit SP uses, memory effects and branches would
+            // retain their original meaning. Diagnose before analyzing their
+            // nonstandard operands as ordinary loads/stores or instructions.
+            MI.emitError("COMPAS: inline assembly is unsupported in "
+                         "EDDI-protected function '" + fname_ + "'");
+            return false;
+          }
     if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_) &&
         MF_->getInfo<llvm::RISCVMachineFunctionInfo>()
             ->hasCompasUnsupportedPointerArgs())
@@ -728,6 +759,8 @@ void RISCVDmr::analyze_function() {
     }
 
     for (auto &MI : MBB) {
+      if (isCompilerBarrier(MI))
+        continue;
       if (MI.mayStore()) {
         stores_.emplace(&MI);
       } else if (MI.mayLoad()) {
@@ -1370,7 +1403,8 @@ void RISCVDmr::duplicateInstructions() {
       for (auto &MI : MBB) {
         if (MI.isCFIInstruction() || MI.isDebugInstr())
           continue;
-        if (MI.isCall() || MI.mayStore() || MI.isBranch() || MI.isReturn() ||
+        if (isCompilerBarrier(MI) || MI.isCall() || MI.mayStore() ||
+            MI.isBranch() || MI.isReturn() ||
             dynamic_sp_origins_.count(&MI)) {
           terminator_reached = true;
         } else {
@@ -1410,7 +1444,7 @@ void RISCVDmr::duplicateInstructions() {
       }
 
       for (auto &MI : MBB) {
-        if (MI.isCFIInstruction() || MI.isDebugInstr())
+        if (MI.isCFIInstruction() || MI.isDebugInstr() || isCompilerBarrier(MI))
           continue;
         if (MI.isCall() || MI.mayStore() || MI.isBranch() || MI.isReturn() ||
             dynamic_sp_origins_.count(&MI)) {

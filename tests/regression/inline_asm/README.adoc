@@ -1,0 +1,41 @@
+= Inline assembly regressions
+
+EDDI cannot safely duplicate arbitrary inline assembly by renaming its machine
+operands. Templates may refer to registers such as SP in their text, access
+memory or transfer control. Selecting a function with such assembly now emits
+`COMPAS: inline assembly is unsupported in EDDI-protected function '<name>'`
+and exits the compiler with an ordinary error, before interpreting the assembly's
+symbol and flag operands as a regular load or store.
+
+[cols="1,3",options="header"]
+|===
+|Case |Coverage
+|`compiler_barrier` |A selected arithmetic function contains both an empty memory barrier and an empty operand-free assembly statement. Runtime inputs and exact literal results check fault-free execution around both barriers.
+|`protected_stack_pointer` |The existing call-ABI SP probe is also selected for EDDI. Its `mv` template and memory clobber reproduce the previous store-protection assertion and must produce the explicit diagnostic instead.
+|`protected_register_assembly` |A register-only `addi` template is rejected even without a memory clobber.
+|`protected_empty_operand_assembly` |An empty template with an input/output register constraint is opaque to the EDDI contract and is rejected too.
+|===
+
+Only empty `INLINEASM` templates without constraint, register, control-flow or
+stack-alignment operands are accepted as compiler barriers. Source-location
+metadata and compiler-only memory clobber flags are allowed. The coarse schedule
+flushes pending shadow instructions before each barrier; the fine schedule leaves
+the barrier in place without duplicating it. `INLINEASM_BR` is unsupported.
+
+The manifest covers EDDI on RV32/RV64, both schedules and every control-flow
+scheme, including a separate compilation with machine verification. Diagnostic
+cases still execute an unprotected reference and require its independent exit
+oracle. Their selected compilations must return the expected compiler error;
+they do not claim functional execution or machine verification of rejected code.
+Selecting only `asm_barrier`, or excluding `abi_stack_pointer` from the SP case,
+disables the diagnostic expectation and checks the ordinary unprotected helper
+boundary. Other DMR modes keep their existing inline-assembly behavior.
+
+[,bash]
+----
+python3 tests/regression/run.py --case 'inline_asm/*'
+python3 tests/regression/run.py --case inline_asm/protected_stack_pointer \
+  --functions 'abi_stack_caller,abi_stack_callee'
+python3 tests/regression/run.py --case 'inline_asm/protected_*assembly' \
+  --functions asm_barrier
+----
