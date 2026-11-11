@@ -113,6 +113,28 @@ bool mayReceiveSignatureState(llvm::Register primary) {
           !llvm::cl::enable_racfed.empty());
 }
 
+// A shadow address can name a separate allocation. Its primary IR value,
+// frame object, alias scopes and value-range facts do not describe that bank.
+// Retain access semantics, including atomics, but give the access conservative
+// unknown provenance in the original address space. Valid EDDI bank allocation
+// preserves the effective access alignment; retain getAlign(), not the original
+// base alignment whose offset is being discarded here.
+void useIndependentShadowMemory(llvm::MachineFunction &MF,
+                                llvm::MachineInstr &MI) {
+  llvm::SmallVector<llvm::MachineMemOperand *, 2> memory;
+  for (const auto *old : MI.memoperands()) {
+    const auto flags = static_cast<llvm::MachineMemOperand::Flags>(
+        old->getFlags() & ~(llvm::MachineMemOperand::MODereferenceable |
+                            llvm::MachineMemOperand::MOInvariant));
+    memory.push_back(MF.getMachineMemOperand(
+        llvm::MachinePointerInfo(old->getAddrSpace()), flags,
+        old->getMemoryType(), old->getAlign(), llvm::AAMDNodes(), nullptr,
+        old->getSyncScopeID(), old->getSuccessOrdering(),
+        old->getFailureOrdering()));
+  }
+  MI.setMemRefs(MF, memory);
+}
+
 bool incomingStackArgumentOffset(const llvm::MachineInstr &MI,
                                  int64_t &offset) {
   if (!MI.mayLoad())
@@ -255,13 +277,7 @@ void rewriteIncomingStackArguments(
     shadow.getOperand(2).setImm(shadow_address.second);
     // S may name the protected caller's separate bank. Do not retain the
     // original MMO's assertion that this load aliases the primary argument.
-    llvm::SmallVector<llvm::MachineMemOperand *, 1> memory;
-    for (const auto *old : shadow.memoperands())
-      memory.push_back(MF.getMachineMemOperand(
-          llvm::MachinePointerInfo(), old->getFlags(), old->getSize(),
-          old->getAlign(), llvm::AAMDNodes(), nullptr, old->getSyncScopeID(),
-          old->getSuccessOrdering(), old->getFailureOrdering()));
-    shadow.setMemRefs(MF, memory);
+    useIndependentShadowMemory(MF, shadow);
     reset_scratch(shadow);
   }
 }
@@ -552,10 +568,18 @@ void RISCVDmr::finalizeCallingConvention() {
         continue;
 
       const auto callee = callName(MI);
-      const bool callee_dmr = !callee.empty() && is_func_dmr(callee);
+      // Indirect calls have no runtime convention adapter. Their targets must
+      // implement the caller's shadow convention, but the machine instruction
+      // cannot identify whether a target instead uses the ordinary ABI. Model
+      // the possible effects of both without promising extra preservation.
+      const bool unknown_target = callee.empty() && caller_dmr;
+      const bool callee_dmr = unknown_target ||
+                              (!callee.empty() && is_func_dmr(callee));
       const bool callee_eddi =
           callee_dmr &&
-          riscv_common::inCSString(llvm::cl::enable_eddi, callee);
+          (unknown_target
+               ? caller_eddi
+               : riscv_common::inCSString(llvm::cl::enable_eddi, callee));
       const bool bank_boundary = callee_dmr && !callee_eddi;
       const auto arguments = getArgRegs(&MI);
       const auto results = getRetRegs(&MI);
@@ -582,6 +606,9 @@ void RISCVDmr::finalizeCallingConvention() {
               !llvm::MachineOperand::clobbersPhysReg(original, pair.first);
           if (integerRegister(pair.first) && invariant(pair.first))
             preserved = pair.first != riscv_common::kSP || !callee_eddi;
+          if (unknown_target)
+            preserved &= !llvm::MachineOperand::clobbersPhysReg(original,
+                                                               pair.second);
           const auto bit = uint32_t(1) << (pair.second % 32);
           if (preserved)
             mask[pair.second / 32] |= bit;
@@ -598,6 +625,15 @@ void RISCVDmr::finalizeCallingConvention() {
             definitions.insert(pair.first);
             definitions.insert(pair.second);
           }
+          // Later instrumentation can observe a shadow value even where an
+          // ordinary target may have clobbered it. Describe that architectural
+          // output, rather than preserving it in the mask or inventing an
+          // entry live-in. Its replicated value still requires a compatible
+          // protected target at runtime.
+          if (unknown_target && !preserved &&
+              (integerRegister(pair.first) ||
+               isFullWidthFPRegister(pair.first, subtarget)))
+            definitions.insert(pair.second);
         }
         operand.setRegMask(mask);
       }
@@ -1289,6 +1325,8 @@ void RISCVDmr::analyzeStackArguments() {
 llvm::MachineInstr *
 RISCVDmr::genShadowFromPrimary(const llvm::MachineInstr *MI) const {
   auto si{MF_->CloneMachineInstr(MI)};
+  if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_))
+    useIndependentShadowMemory(*MF_, *si);
   auto symbol = shadow_pcrel_symbols_.find(MI->getPreInstrSymbol());
   if (symbol != shadow_pcrel_symbols_.end())
     si->setPreInstrSymbol(*MF_, symbol->second);
@@ -2315,6 +2353,7 @@ void RISCVDmr::protectStores() {
           op.setReg(P2S_.at(op.getReg()));
         }
       }
+      useIndependentShadowMemory(*MF_, *si);
     }
   } else {
     assert(0 && "this protect-strategy for stores is not supported yet");

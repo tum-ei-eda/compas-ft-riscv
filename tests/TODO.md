@@ -53,13 +53,6 @@ Compile at `-O2` with sibling-call optimization enabled; the shared freestanding
 
 Compiler-generated `__riscv_save_*` calls execute before FP setup and can clobber G/RTS in `t0`. Signature initialization and preservation must account for their prologue placement.
 
-## Machine-instruction metadata
-
-- [ ] Describe the shadow calling convention at indirect calls with unknown target protection.
-- [ ] Give ordinary EDDI duplicate memory operations independent pointer/alias metadata.
-
-Functional indirect-call coverage does not establish complete shadow argument/result and preserved-register metadata for unknown targets. Ordinary duplicated loads/stores can still carry primary-bank pointer or fixed-stack provenance; updating it must preserve the separate handling of incoming stack arguments and store loadbacks.
-
 ## Floating-point checks
 
 - [ ] Correct FP equality checks for NaNs and signed zero.

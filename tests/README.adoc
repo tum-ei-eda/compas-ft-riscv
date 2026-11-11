@@ -149,6 +149,13 @@ the normal COMPAS pipeline with machine verification and an independent runtime
 oracle. This reaches preservation offsets that ordinary large C locals do not
 produce. CI runs it alongside the source-level regression suites.
 
+The link:regression/machine_metadata/README.adoc[machine-instruction metadata suite]
+runs separately through `python3 tests/regression/machine_metadata/run.py`. It
+checks indirect-call shadow arguments/results and conservative preserved masks,
+independent EDDI memory provenance, incoming stack arguments and store loadbacks.
+Real MIR operands, mask-consumer verifier probes and literal runtime oracles
+cover properties that fault-free execution alone cannot establish.
+
 Freestanding manifests can set `verify_machineinstrs: true` to compile each IR source a second time with `-verify-machineinstrs`. This extra compilation writes separate `.verify` logs and assembly; the normal build still runs so that a verifier defect does not hide functional evidence. A verifier failure makes the configuration an `ERROR` and the command exits nonzero, including when the runtime result matches a known failure. The JSON report retains `outcome`, `functional_status` and `verification` separately, and includes both overall `counts` and `functional_counts`.
 
 `--verify-machineinstrs` enables verification for a selected freestanding run; `--no-verify-machineinstrs` disables the extra compilation for a functional-only investigation. The independent oracle and reference comparisons still apply. Verifier failures and newly observed runtime failures belong in the TODO while compiler fixes are deferred.

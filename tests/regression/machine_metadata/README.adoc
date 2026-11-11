@@ -1,0 +1,49 @@
+= Machine-instruction metadata regressions
+
+These compiler-level checks cover metadata that fault-free execution alone
+cannot validate. The C fixture exercises indirect integer and double calls,
+ordinary global and private-stack accesses, incoming stack arguments, and
+atomic loads and stores. Literal arithmetic and side-effect oracles check the
+unprotected reference and every hardened executable.
+
+The driver saves machine IR before prologue/epilogue insertion, decorates real
+accesses with rooted alias, range and access metadata, and resumes the normal
+pipeline. Resuming before PEI reconstructs COMPAS's target-owned frame state.
+The driver compares the last registered checkpoint before hardening with the
+final machine remark checkpoint after hardening. It discovers the latter's
+instance number from the LLVM pass pipeline, rather than hardcoding a release.
+
+Indirect calls must declare their shadow arguments, results and convention
+inputs. Their masks must conservatively intersect ordinary-ABI preservation
+with the caller's shadow convention. Separate MIR probes copy the actual
+emitted mask, define a physical register before the call, and consume it after
+the call with COMPAS reservations disabled. LLVM's actual verifier must accept
+preserved registers and diagnose undefined uses of clobbered registers. These
+checks do not establish runtime compatibility with unprotected indirect targets;
+the targets must implement the caller's shadow convention.
+
+EDDI primary accesses must retain their metadata. Shadow accesses must have
+independent unknown provenance in the same address space, without the primary
+alias, range, invariant or dereferenceability claims. Access types, effective
+alignment, volatility, non-temporal flags and atomic scope/order must survive.
+Checks include ordinary saved-register stack accesses and the separate incoming
+stack-argument rewrite. NZDC store-loadback checks require fresh load metadata
+and the shadow address, independently of EDDI's ordinary duplication rule.
+
+Both architectures, integer and hard-float ABIs, both DMR schedules, all five
+protected DMR modes and all four CFP selections run by default. Each profile
+runs machine verification, metadata assertions, mask-consumer probes and QEMU.
+
+[source,shell]
+----
+python3 tests/regression/machine_metadata/run.py \
+  --clang /path/to/clang --llc /path/to/llc \
+  --cc /path/to/riscv-none-elf-gcc --qemu '/path/to/qemu-riscv{bits}'
+----
+
+The driver reuses the shared runner's tool discovery, target settings, timeouts
+and logs. Use `--case 'machine_metadata/integer'`, `--arch rv32`, `--mode EDDI`,
+`--cfp none`, `--schedule cgs`, `--build-dir` or `--list` to narrow the run.
+The default ISAs include A for atomic loads/stores and F/D for the floating-point
+profile. JSON results retain metadata counts, verifier-probe outcomes and log
+locations. CI runs this focused suite alongside the source-level regressions.

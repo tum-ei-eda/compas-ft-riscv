@@ -131,6 +131,24 @@ point into separate caller frames whose size is unknown to the callee. The
 exception is identified from the saved-register spill metadata. Ordinary data
 stores, including values held in \texttt{s0}, retain their value checks.
 
+\subsubsection{Machine-instruction metadata}
+Indirect calls from protected functions declare the shadow arguments, results
+and convention inputs consumed by a compatible protected target. When the target
+protection is unknown, their preserved-register masks intersect the ordinary ABI
+with the caller's shadow convention. Possible clobbered shadow outputs are
+described explicitly, without claiming additional preservation. This metadata
+does not provide a runtime convention adapter: indirect targets must implement
+the caller's shadow convention.
+
+Ordinary EDDI duplicate loads and stores have independent unknown memory
+provenance in the original address space. They do not inherit the primary
+access's IR value, frame object, alias scopes, ranges, invariant or
+dereferenceability claims. Access types, effective alignment, volatility,
+non-temporal flags and atomic scope/order are retained. Incoming stack-argument
+loads keep their separate bank-aware address rewrite. Store loadbacks remain
+fresh loads with their own metadata. These metadata rules do not add support
+for otherwise unsupported atomic instruction patterns.
+
 \subsubsection{Example}
 For the sake of example, assume we want to protect the \texttt{crc} program from the MiBench suite. The
 compiled program is to run on the RISCV spike simulator. The C project contains the following C files:
