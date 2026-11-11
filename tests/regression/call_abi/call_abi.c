@@ -7,7 +7,8 @@
 typedef unsigned long word;
 typedef unsigned long long wide;
 
-#if TEST_CASE == 4 || (TEST_CASE >= 7 && TEST_CASE <= 9)
+#if TEST_CASE == 4 || (TEST_CASE >= 7 && TEST_CASE <= 9) || \
+    TEST_CASE == 14 || TEST_CASE == 15
 NOINLINE word abi_ten_args(word a, word b, word c, word d, word e,
                           word f, word g, word h, word i, word j)
 {
@@ -304,16 +305,26 @@ int main(void)
     return 42;
 }
 
-#elif TEST_CASE == 9
+#elif TEST_CASE == 9 || TEST_CASE == 14
 volatile word abi_inputs[] = {1, 7, 13};
 
-NOINLINE word abi_dynamic_stack_arguments(word value)
+#if TEST_CASE == 14
+#define ABI_FRAME_CALLER abi_large_fixed_stack_arguments
+#else
+#define ABI_FRAME_CALLER abi_dynamic_stack_arguments
+#endif
+
+NOINLINE word ABI_FRAME_CALLER(word value)
 {
-    /* A large fixed frame and VLA require frame-index expansion and stable FP. */
+    /* Separate large fixed allocation from the original combined VLA case. */
     volatile word spill[1024];
     word fixed_index = (value & 511UL) + 1;
     word count = (value & 7UL) + 11;
+#if TEST_CASE == 14
+    volatile word dynamic[18];
+#else
     volatile word dynamic[count];
+#endif
     spill[0] = value ^ 0x1234UL;
     spill[1023] = value + 0x4321UL;
     /* Runtime indexing prevents splitting the fixed array into small slots. */
@@ -335,9 +346,86 @@ int main(void)
     /* 111*x + 17996 + (x ^ 0x1234) + 3*(x ^ 0x5a), evaluated independently. */
     const word expected[] = {23041UL, 23711UL, 24365UL};
     unsigned int index;
+#if TEST_CASE == 14
+    unsigned int round;
+    for (round = 0; round != 2; ++round)
+#endif
     for (index = 0; index != 3; ++index) {
-        if (abi_dynamic_stack_arguments(abi_inputs[index]) != expected[index])
+        if (ABI_FRAME_CALLER(abi_inputs[index]) != expected[index])
             return 17;
+    }
+    return 42;
+}
+
+#elif TEST_CASE == 15
+volatile word abi_inputs[] = {1, 7, 13};
+volatile word abi_first_counts[] = {3, 8, 17};
+volatile word abi_second_counts[] = {9, 4, 21};
+
+NOINLINE word abi_dynamic_pointer_leaf(const volatile word *array,
+                                      word count, word bias)
+{
+    return array[0] + 3*array[count / 2] + 5*array[count - 1] + bias;
+}
+
+NOINLINE word abi_dynamic_pointer_middle(const volatile word *array,
+                                        word count, word bias)
+{
+    word leaf = abi_dynamic_pointer_leaf(array, count, bias);
+    word ten = abi_ten_args(array[0], array[count - 1], bias, count,
+                           bias + 2, bias + 3, bias + 4, bias + 5,
+                           bias + 6, bias + 7);
+    /* The incoming VLA pointer stays live across both nested calls. */
+    return leaf + ten + array[count / 2];
+}
+
+NOINLINE word abi_dynamic_small_frame(word value, word first_count,
+                                     word second_count)
+{
+    volatile word fixed[5];
+    word index;
+    for (index = 0; index != 5; ++index)
+        fixed[index] = value + 3*index + 7;
+
+    volatile word first[first_count];
+    for (index = 0; index != first_count; ++index)
+        first[index] = value + 2*index + 5;
+    word first_result = abi_dynamic_pointer_middle(first, first_count,
+                                                 value + 1);
+
+    /* Allocate another VLA while the first pointer and its contents stay live. */
+    volatile word second[second_count];
+    for (index = 0; index != second_count; ++index)
+        second[index] = 3*value + 5*index + 11;
+    word second_result = abi_dynamic_pointer_middle(second, second_count,
+                                                  value + 3);
+    word third_result = abi_dynamic_pointer_middle(first, first_count,
+                                                 value + 5);
+    word result = first_result + 2*second_result + 3*third_result;
+    for (index = 0; index != 5; ++index)
+        result += fixed[index] * (index + 1);
+    for (index = 0; index != first_count; ++index)
+        result += first[index] * (index + 1);
+    for (index = 0; index != second_count; ++index)
+        result += second[index] * (index + 1);
+    return result;
+}
+
+int main(void)
+{
+    /* Middle = 2*a[0] + 4*a[n/2] + 7*a[n-1] + 49*bias + 4*n + 220.
+     * These literals also include the three weighted whole-array checksums. */
+    const word expected[] = {6474UL, 8400UL, 45236UL};
+    unsigned int round;
+    for (round = 0; round != 2; ++round) {
+        unsigned int index;
+        for (index = 0; index != 3; ++index) {
+            if (abi_dynamic_small_frame(abi_inputs[index],
+                                        abi_first_counts[index],
+                                        abi_second_counts[index]) !=
+                expected[index])
+                return 17;
+        }
     }
     return 42;
 }

@@ -32,7 +32,7 @@ index e528d33b5f8c..1f9e4b005aad 100644
 +        }
      }
    }
- 
+
 diff --git a/llvm/lib/Target/RISCV/CMakeLists.txt b/llvm/lib/Target/RISCV/CMakeLists.txt
 index 961781bec193..f4a9fbebd01e 100644
 --- a/llvm/lib/Target/RISCV/CMakeLists.txt
@@ -40,7 +40,7 @@ index 961781bec193..f4a9fbebd01e 100644
 @@ -52,6 +52,9 @@ add_llvm_target(RISCVCodeGen
    Target
    GlobalISel
- 
+
 +  LINK_LIBS
 +  Sihft
 +
@@ -58,11 +58,11 @@ index ef1f97067e12..89dbedc73d38 100644
 +++ b/llvm/lib/Target/RISCV/RISCV.h
 @@ -15,8 +15,38 @@
  #define LLVM_LIB_TARGET_RISCV_RISCV_H
- 
+
  #include "MCTargetDesc/RISCVBaseInfo.h"
 +#include "llvm/Support/CommandLine.h"
  #include "llvm/Target/TargetMachine.h"
- 
+
 +namespace llvm::cl {
 +inline opt<bool> reserve_rf{"RRF", desc("reserve half of RegFiles"),
 +                            value_desc("pass")};
@@ -110,7 +110,7 @@ index ef1f97067e12..89dbedc73d38 100644
 +class MachineFunction;
 +void reserveRISCVCompasCallFrame(MachineFunction &);
 +} // namespace llvm
- 
+
  #endif
 diff --git a/llvm/lib/Target/RISCV/RISCVExpandPseudoInsts.cpp b/llvm/lib/Target/RISCV/RISCVExpandPseudoInsts.cpp
 --- a/llvm/lib/Target/RISCV/RISCVExpandPseudoInsts.cpp
@@ -190,10 +190,77 @@ diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp b/llvm/lib/Target/RISC
    const RISCVRegisterInfo *RegInfo =
        MF.getSubtarget<RISCVSubtarget>().getRegisterInfo();
    MachineFrameInfo &MFI = MF.getFrameInfo();
+@@ -963,6 +965,17 @@
+       // Ensure the stack remains aligned after adjustment.
+       Amount = alignSPAdjust(Amount);
+
++      if (MF.getFrameInfo().hasVarSizedObjects() &&
++          riscv_common::inCSString(cl::enable_eddi, MF.getName().str())) {
++        // A dynamic EDDI caller needs two outgoing argument banks below its
++        // current allocations. Preserve their boundaries for late expansion.
++        const unsigned Opcode = MI->getOpcode() == RISCV::ADJCALLSTACKDOWN
++                                    ? RISCV::COMPAS_CALLDOWN
++                                    : RISCV::COMPAS_CALLUP;
++        BuildMI(MBB, MI, DL, MF.getSubtarget().getInstrInfo()->get(Opcode))
++            .addImm(Amount);
++        return MBB.erase(MI);
++      }
+       if (MI->getOpcode() == RISCV::ADJCALLSTACKDOWN)
+         Amount = -Amount;
+
 diff --git a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp b/llvm/lib/Target/RISCV/RISCVISelLowering.cpp
 --- a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp
 +++ b/llvm/lib/Target/RISCV/RISCVISelLowering.cpp
-@@ -7685,6 +7685,32 @@
+@@ -24,6 +24,7 @@
+ #include "llvm/CodeGen/MachineFunction.h"
+ #include "llvm/CodeGen/MachineInstrBuilder.h"
+ #include "llvm/CodeGen/MachineRegisterInfo.h"
++#include "llvm/CodeGen/TargetFrameLowering.h"
+ #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
+ #include "llvm/CodeGen/ValueTypes.h"
+ #include "llvm/IR/DiagnosticInfo.h"
+@@ -167,7 +168,7 @@
+     setLoadExtAction(N, XLenVT, MVT::i1, Promote);
+
+   // TODO: add all necessary setOperationAction calls.
+-  setOperationAction(ISD::DYNAMIC_STACKALLOC, XLenVT, Expand);
++  setOperationAction(ISD::DYNAMIC_STACKALLOC, XLenVT, Custom);
+
+   setOperationAction(ISD::BR_JT, MVT::Other, Expand);
+   setOperationAction(ISD::BR_CC, XLenVT, Expand);
+@@ -2089,6 +2090,31 @@
+ SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
+                                             SelectionDAG &DAG) const {
+   switch (Op.getOpcode()) {
++  case ISD::DYNAMIC_STACKALLOC: {
++    MachineFunction &MF = DAG.getMachineFunction();
++    if (!riscv_common::inCSString(cl::enable_eddi, MF.getName().str()))
++      return SDValue(); // Retain generic expansion outside EDDI.
++    SDLoc DL(Op);
++    EVT VT = Op.getValueType();
++    const uint64_t Alignment = std::max(
++        DAG.getSubtarget().getFrameLowering()->getStackAlign().value(),
++        cast<ConstantSDNode>(Op.getOperand(2))->getZExtValue());
++    // Both halves require the requested alignment, even when it exceeds the
++    // ordinary stack alignment. COMPAS retains it for aligning each base.
++    SDValue Size = DAG.getNode(ISD::ADD, DL, VT, Op.getOperand(1),
++                               DAG.getConstant(Alignment - 1, DL, VT));
++    Size = DAG.getNode(ISD::AND, DL, VT, Size,
++                       DAG.getConstant(-Alignment, DL, VT));
++    SDValue Chain = DAG.getCALLSEQ_START(Op.getOperand(0), 0, 0, DL);
++    SDValue Operands[] = {Size, DAG.getTargetConstant(Alignment, DL, VT),
++                          Chain};
++    SDNode *Allocation = DAG.getMachineNode(
++        RISCV::COMPAS_DYNALLOC, DL, DAG.getVTList(VT, MVT::Other), Operands);
++    Chain = DAG.getCALLSEQ_END(
++        SDValue(Allocation, 1), DAG.getIntPtrConstant(0, DL, true),
++        DAG.getIntPtrConstant(0, DL, true), SDValue(), DL);
++    return DAG.getMergeValues({SDValue(Allocation, 0), Chain}, DL);
++  }
+   default:
+     report_fatal_error("unimplemented operand");
+   case ISD::GlobalAddress:
+@@ -7685,6 +7711,32 @@
      analyzeInputArgs(MF, CCInfo, Ins, /*IsRet=*/false,
                       CallConv == CallingConv::Fast ? CC_RISCV_FastCC
                                                     : CC_RISCV);
@@ -316,7 +383,7 @@ index 388cce00bdf3..e6e6bd0761b9 100644
 @@ -106,6 +106,103 @@ BitVector RISCVRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
    markSuperRegs(Reserved, RISCV::FFLAGS);
    markSuperRegs(Reserved, RISCV::FCSR);
- 
+
 +  if (riscv_common::inCSString(llvm::cl::enable_cfcss,
 +                               std::string{MF.getName()}) ||
 +      riscv_common::inCSString(llvm::cl::enable_rasm,
@@ -433,3 +500,23 @@ diff --git a/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp b/llvm/lib/Target/RISC
    if (TM->getOptLevel() != CodeGenOpt::None)
      addPass(createRISCVMergeBaseOffsetOptPass());
    addPass(createRISCVInsertVSETVLIPass());
+diff --git a/llvm/lib/Target/RISCV/RISCVInstrInfo.td b/llvm/lib/Target/RISCV/RISCVInstrInfo.td
+--- a/llvm/lib/Target/RISCV/RISCVInstrInfo.td
++++ b/llvm/lib/Target/RISCV/RISCVInstrInfo.td
+@@ -1212,6 +1212,16 @@
+
+ /// Other pseudo-instructions
+
++// Keep dynamic EDDI allocation/call-area semantics until COMPAS expands the
++// paired intervals after register allocation and frame-index elimination.
++let Defs = [X2], Uses = [X2], hasSideEffects = 1,
++    mayLoad = 0, mayStore = 0, hasNoSchedulingInfo = 1 in {
++def COMPAS_DYNALLOC : Pseudo<(outs GPR:$dst),
++                            (ins GPR:$size, ixlenimm:$alignment), []>;
++def COMPAS_CALLDOWN : Pseudo<(outs), (ins ixlenimm:$amount), []>;
++def COMPAS_CALLUP : Pseudo<(outs), (ins ixlenimm:$amount), []>;
++}
++
+ // Pessimistically assume the stack pointer will be clobbered
+ let Defs = [X2], Uses = [X2] in {
+ def ADJCALLSTACKDOWN : Pseudo<(outs), (ins i32imm:$amt1, i32imm:$amt2),

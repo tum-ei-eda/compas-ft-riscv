@@ -28,6 +28,10 @@ success or `17` on an oracle mismatch, and produces no output.
 |`nested_stack_arguments_callee_only_frame_pointer` |The same forced-FP calls select only the middle and leaf, exercising ordinary incoming ABI slots and protected-to-protected shadow arguments in one execution.
 |`dynamic_stack_arguments` |A large fixed frame and a runtime-sized local array keep values live across ten-word calls, exercising frame-pointer addressing and a moving stack pointer.
 |`dynamic_stack_arguments_caller_only` |Only the caller with the large fixed frame and VLA is protected, checking stable preservation slots while calling an unprotected ten-argument helper.
+|`large_fixed_stack_arguments` |A 1024-word fixed array and fixed-size scratch storage isolate large frame adjustments from runtime-sized allocation, retaining the original combined case's arithmetic oracle.
+|`large_fixed_stack_arguments_caller_only` |Only the owner of the large fixed frame is protected, while the ten-argument helper uses the ordinary ABI.
+|`dynamic_stack_arguments_small_frame` |A small fixed frame and two simultaneously live VLAs retain independent contents across nested pointer calls and ten-word stack-argument calls.
+|`dynamic_stack_arguments_small_frame_caller_only` |Only the VLA owner is protected, checking runtime stack movement across ordinary nested callees.
 |`realigned_live_values` |A caller with a 64-byte-aligned volatile array and twelve independent live values invokes an unprotected helper with register arguments, checking realigned spill slots separately from stack-passed arguments.
 |`realigned_entry_residues` |An unprotected caller varies runtime stack padding to cover all four ABI-valid entry-SP residues modulo 64, repeatedly invokes the protected realigned function, and checks its returned SP and padding contents.
 |`realigned_entry_residues_protected_leaf` |The same entry residues also protect the nested arithmetic and array-alignment helpers, checking both the ordinary-to-protected and protected-to-protected boundaries.
@@ -59,6 +63,35 @@ protected and ordinary callers entering the protected middle function.
 The dynamic-frame case uses a 1024-word volatile fixed array and a variable-length
 volatile array. Its calls consume both stack-passed arguments and local values;
 the final result checks values retained in both arrays after the calls.
+The large-fixed variants reuse its `23041`/`23711`/`24365` oracle with an
+18-word fixed scratch array, so no VLA remains. They repeat every input twice.
+The small-frame variants retain five fixed words and allocate a first VLA,
+pass its pointer through two nested helpers, then allocate a second VLA while
+the first pointer remains live. They call the same helpers with both arrays
+and read every element of the fixed array and both VLAs after the calls. The
+middle helper also invokes the ten-argument leaf while retaining its incoming
+pointer. All pointer formals use ordinary integer argument registers.
+Runtime size pairs `(3,9)`, `(8,4)` and `(17,21)` run twice with three distinct
+inputs. Independent literal results include weighted checksums of every array,
+detecting overlap or loss of either allocation. All-selected and caller-only
+selections share the same arithmetic and oracles.
+
+For fixed frames, EDDI uses LLVM's complete nominal frame size, including when
+the prologue and epilogue split it into immediate and register adjustments.
+EDDI keeps frame allocation at function entry so it dominates every return.
+The original adjustments and frame-index addressing stay intact; a separate
+primary allocation provides the shadow-frame separation and is released at
+return. Stack-pointer adjustment steps retain ABI alignment. Primary CFA and
+saved-register offsets account for the relocated primary frame. These cases
+isolate large fixed-frame handling from variable-sized allocation.
+
+For ABI-aligned VLAs, EDDI checks the independently computed sizes and allocates
+a fresh primary/shadow interval below the existing storage. Each VLA pointer
+retains its own expected runtime separation when later arrays are allocated.
+Outgoing stack arguments use separate primary/shadow call storage at the ABI
+offsets; returning from the call restores the caller's prior stack context.
+The small-frame cases exercise these operations while both arrays remain live.
+
 The realigned-frame case keeps its local array indexed by a runtime value so it
 cannot shrink to a few scalars, and uses both call results in the independent
 live-value checks.
@@ -78,8 +111,8 @@ padding for alignment rounding. Spilled frame addresses retain their known
 primary-to-shadow offset; ordinary scalar stores still require equal values.
 An ordinary caller checks return values, ABI-preserved registers and control
 state after a protected call. Discarded caller-clobbered temporaries fall outside
-that return contract. Incoming stack arguments in realigned callees, protected
-VLAs, large frame adjustments and save/restore libcalls remain separate
+that return contract. Incoming stack arguments in realigned callees, VLAs
+requiring additional stack realignment and save/restore libcalls remain separate
 follow-ups in link:../../TODO.md[the test TODO].
 
 The signature-join case exercises preservation of both the running signature and

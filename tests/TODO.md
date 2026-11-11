@@ -8,7 +8,7 @@ Run commands from the repository root after [configuring the tools](README.adoc#
 
 - [ ] Extend inherited-pointer tracking beyond ordinary register formals and private full-word spills.
 
-In [`stack_args`](regression/stack_args/suite.json) ([issue #14](https://github.com/tum-ei-eda/compas-ft-riscv/issues/14)), stack-passed/byval pointer formals and inherited-pointer tail calls are explicitly unsupported; pointer returns and reloads from arbitrary memory are not tracked. Runtime provenance currently requires pointer-typed IR PHI/select candidates, supported affine pointer operations, a single fixed-frame prologue and encodable FP-relative metadata stores. Integer-encoded pointer merges and nonlinear operations on runtime origins remain unsupported.
+In [`stack_args`](regression/stack_args/suite.json) ([issue #14](https://github.com/tum-ei-eda/compas-ft-riscv/issues/14)), stack-passed/byval pointer formals and inherited-pointer tail calls are explicitly unsupported; pointer returns and reloads from arbitrary memory are not tracked. Tracking pointer merges currently requires pointer-typed IR PHI/select candidates, supported affine pointer operations and encodable FP-relative metadata stores. Integer-encoded pointer merges and nonlinear operations on runtime origins remain unsupported.
 
 ```sh
 python3 tests/regression/run.py --case 'stack_args/*' \
@@ -16,17 +16,11 @@ python3 tests/regression/run.py --case 'stack_args/*' \
   --verify-machineinstrs --build-dir build/tests-todo-stack
 ```
 
-## EDDI: large and dynamic frames
+## EDDI: realigned dynamic frames
 
-- [ ] Correct EDDI's large/dynamic frame handling in `dynamic_stack_arguments` and `dynamic_stack_arguments_caller_only`.
+- [ ] Give realigned variable-sized EDDI frames a separate base-pointer contract.
 
-Both scenarios still produce sixteen build errors per backend across RV32/RV64 and all CFP selections in the [call-ABI suite](regression/call_abi/README.adoc). Variable-sized EDDI frames are explicitly diagnosed as unsupported before transformation; the earlier investigation encountered `MachineOperand::setImm()` assertions or incorrect execution instead. Realigned-frame support requires one encodable fixed allocation, without save/restore libcalls or incoming stack-argument loads. Large incoming argument offsets with a small callee frame do not establish support for a large EDDI frame.
-
-```sh
-python3 tests/regression/run.py --case 'call_abi/dynamic_stack_arguments*' \
-  --mode EDDI --cfp none --cfp CFCSS --cfp RASM --cfp RACFED \
-  --no-verify-machineinstrs --build-dir build/tests-todo-eddi-frames
-```
+VLAs requiring additional stack realignment, such as a runtime-sized `__attribute__((aligned(64)))` local array, are explicitly rejected with `realigned EDDI dynamic frames require a separate base pointer`. LLVM uses `x9`/`s1` as a base pointer for this combination, conflicting with EDDI's shadow SP. Supporting it requires distinct base-pointer ownership and corresponding primary/shadow addressing; accepting the current register assignment would overwrite an allocated bank.
 
 ## Call-boundary instrumentation
 

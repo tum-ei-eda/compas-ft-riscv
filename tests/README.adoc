@@ -111,7 +111,7 @@ Freestanding cases compare the target exit value recorded in QEMU's syscall trac
 
 Known failures are declared explicitly in a manifest with the affected case, architecture, mode and schedule, an issue link, a reason and the observed target exit value. Only that matching runtime failure is `XFAIL`. A missing tool, a build failure, an invalid reference result or a different runtime failure still fails the run. When a known failure starts passing it is `XPASS`, which fails by default so that stale expectations are reviewed. `--allow-xpass` permits exploratory validation while updating the manifest.
 
-The stack argument manifest records failures in the current implementation. These expectations preserve visible evidence of the behavior; they do not claim fault-detection coverage. Remove or update an expectation when its underlying issue is fixed and the relevant configuration is verified.
+Known-failure expectations preserve visible evidence of functional behavior; they do not claim fault-detection coverage. Remove or update an expectation when its underlying issue is fixed and the relevant configuration is verified.
 
 Freestanding manifests can set `verify_machineinstrs: true` to compile each IR source a second time with `-verify-machineinstrs`. This extra compilation writes separate `.verify` logs and assembly; the normal build still runs so that a verifier defect does not hide functional evidence. A verifier failure makes the configuration an `ERROR` and the command exits nonzero, including when the runtime result matches a known failure. The JSON report retains `outcome`, `functional_status` and `verification` separately, and includes both overall `counts` and `functional_counts`.
 

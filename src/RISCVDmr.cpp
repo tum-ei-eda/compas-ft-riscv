@@ -32,6 +32,7 @@
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCDwarf.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -41,6 +42,36 @@
 // #define DBG
 
 namespace {
+
+// Post-RA constant addition using only the supplied physical destination.
+// Preserve independent primary/shadow computations without virtual registers
+// or a borrowed live register, including split large-frame adjustments.
+llvm::MachineInstr *
+addOffset(llvm::MachineBasicBlock &MBB,
+          llvm::MachineBasicBlock::iterator insert,
+          const llvm::TargetInstrInfo &TII, llvm::Register destination,
+          llvm::Register base, int64_t offset, llvm::DebugLoc DL = {},
+          llvm::MachineInstr::MIFlag flag = llvm::MachineInstr::NoFlags) {
+  llvm::MachineInstr *first = nullptr;
+  do {
+    const int64_t maximum =
+        destination == riscv_common::kSP || destination == llvm::RISCV::X9
+            ? 2032
+            : 2047;
+    const int64_t step = std::max<int64_t>(-2048, std::min(maximum, offset));
+    auto instruction =
+        llvm::BuildMI(MBB, insert, DL, TII.get(llvm::RISCV::ADDI), destination)
+            .addReg(base)
+            .addImm(step);
+    if (flag != llvm::MachineInstr::NoFlags)
+      instruction.setMIFlag(flag);
+    if (!first)
+      first = instruction.getInstr();
+    base = destination;
+    offset -= step;
+  } while (offset);
+  return first;
+}
 
 bool isFullWidthFPRegister(llvm::Register reg,
                            const llvm::RISCVSubtarget &subtarget) {
@@ -87,7 +118,7 @@ bool incomingStackArgumentOffset(const llvm::MachineInstr &MI,
 void rewriteIncomingStackArguments(
     llvm::MachineFunction &MF,
     const std::map<llvm::MachineInstr *, llvm::MachineInstr *> &loads,
-    int64_t frame_size, int64_t shadow_frame_offset,
+    int64_t allocated_prefix, int64_t shadow_frame_offset,
     llvm::MachineInstr &primary_sp, llvm::MachineInstr &shadow_sp,
     llvm::Register shadow_zero, llvm::Register shadow_stack,
     llvm::Register shadow_frame) {
@@ -144,8 +175,8 @@ void rewriteIncomingStackArguments(
   // At entry, P and S identify the caller's two outgoing argument banks.
   // EDDI changes SP to P-F-D and shadow SP to P-F, with frame separation D.
   // Save S before the live shadow SP starts addressing this frame.
-  const int64_t store_offset = frame_size + frame.getObjectOffset(snapshot);
-  if (!llvm::isInt<12>(store_offset))
+  const int64_t store_offset = allocated_prefix + frame.getObjectOffset(snapshot);
+  if (store_offset < 0 || !llvm::isInt<12>(store_offset))
     llvm::report_fatal_error(
         "COMPAS: unsupported incoming shadow SP slot offset");
   llvm::BuildMI(*primary_sp.getParent(), shadow_sp.getIterator(),
@@ -383,6 +414,10 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
     // insertion
     updateSelectiveCalls();
   }
+
+  if (!ignore && MF_->getFrameInfo().hasVarSizedObjects() &&
+      riscv_common::inCSString(llvm::cl::enable_eddi, fname_))
+    preserveDynamicStackAcrossCalls();
 
   return !ignore;
 }
@@ -650,6 +685,7 @@ void RISCVDmr::init() {
   stack_address_call_args_.clear();
   pointer_delta_updates_.clear();
   pointer_delta_entry_.clear();
+  dynamic_sp_origins_.clear();
   use_shadow_for_stack_ops_ =
       !riscv_common::inCSString(llvm::cl::enable_eddi, fname_);
   frame_size_ = 0;
@@ -728,27 +764,31 @@ void RISCVDmr::analyze_function() {
 }
 
 void RISCVDmr::calc_framesize() {
-  if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_) &&
-      MF_->getFrameInfo().hasVarSizedObjects())
-    llvm::report_fatal_error(
-        "COMPAS: dynamic EDDI stack frames are not supported");
-  for (auto &MI : *entry_bb_) {
-    if (MI.getFlag(llvm::MachineInstr::FrameSetup) &&
-        MI.getOpcode() == llvm::RISCV::ADDI && MI.getNumOperands() >= 3 &&
-        MI.getOperand(0).isReg() && MI.getOperand(0).isDef() &&
-        MI.getOperand(0).getReg() == riscv_common::kSP &&
-        MI.getOperand(1).isReg() &&
-        MI.getOperand(1).getReg() == riscv_common::kSP &&
-        MI.getOperand(2).isImm() && MI.getOperand(2).getImm() < 0) {
-      frame_size_ = std::abs(MI.getOperand(2).getImm());
+  if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_))
+    frame_size_ = MF_->getFrameInfo().getStackSize();
+  else
+    for (auto &MI : *entry_bb_) {
+      if (MI.getFlag(llvm::MachineInstr::FrameSetup) &&
+          MI.getOpcode() == llvm::RISCV::ADDI && MI.getNumOperands() >= 3 &&
+          MI.getOperand(0).isReg() && MI.getOperand(0).isDef() &&
+          MI.getOperand(0).getReg() == riscv_common::kSP &&
+          MI.getOperand(1).isReg() &&
+          MI.getOperand(1).getReg() == riscv_common::kSP &&
+          MI.getOperand(2).isImm() && MI.getOperand(2).getImm() < 0) {
+        frame_size_ = std::abs(MI.getOperand(2).getImm());
+      }
     }
-  }
   shadow_frame_offset_ = frame_size_;
   if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_) &&
       MF_->getSubtarget<llvm::RISCVSubtarget>()
           .getRegisterInfo()
           ->hasStackRealignment(*MF_)) {
     const auto &frame = MF_->getFrameInfo();
+    // LLVM uses s1 as a base pointer for this combination. It is already
+    // EDDI's shadow SP, so accepting it would overwrite an allocated bank.
+    if (frame.hasVarSizedObjects())
+      llvm::report_fatal_error(
+          "COMPAS: realigned EDDI dynamic frames require a separate base pointer");
     const uint64_t alignment = frame.getMaxAlign().value();
     // Aligning SP can move a frame down by A-1 bytes, while CSI and fixed
     // objects remain relative to the pre-alignment SP/FP. Leave a full guard
@@ -756,13 +796,10 @@ void RISCVDmr::calc_framesize() {
     // also be divisible by A to preserve the separation after both ANDIs.
     const uint64_t separation = llvm::alignTo(
         static_cast<uint64_t>(frame_size_) + alignment - 1, alignment);
-    if (frame.hasVarSizedObjects() ||
-        MF_->getInfo<llvm::RISCVMachineFunctionInfo>()->useSaveRestoreLibCalls(
-            *MF_) ||
-        frame.getStackSize() != static_cast<uint64_t>(frame_size_) ||
-        !llvm::isInt<12>(-static_cast<int64_t>(frame_size_ + separation)))
+    if (MF_->getInfo<llvm::RISCVMachineFunctionInfo>()->useSaveRestoreLibCalls(
+            *MF_))
       llvm::report_fatal_error(
-          "COMPAS: realigned EDDI requires a single encodable fixed frame");
+          "COMPAS: realigned EDDI save/restore libcalls are unsupported");
     shadow_frame_offset_ = separation;
   }
 
@@ -800,6 +837,7 @@ void RISCVDmr::analyzeStackArguments() {
   const uint64_t unchanged_low_bits = (separation & -separation) - 1;
   const Value unknown{Relation::Unsupported, {}, all_bits};
   const bool runtime_origins = riscv_common::usesPointerProvenance(*MF_);
+  const bool dynamic_frame = MF_->getFrameInfo().hasVarSizedObjects();
   auto runtimeOrigin = [&](unsigned key) {
     const unsigned slot = key < register_count ? key - llvm::RISCV::X0
                                                : 32 + key - register_count;
@@ -857,6 +895,41 @@ void RISCVDmr::analyzeStackArguments() {
                       PointerDeltaUpdates *writes = nullptr) {
     if (MI.isDebugInstr())
       return;
+    auto assign = [&](unsigned key, Value assigned) {
+      if (writes && assigned.relation != Relation::Unsupported)
+        writes->emplace(runtimeOrigin(key).index,
+                        assigned.relation == Relation::Equal
+                            ? PointerOrigin{PointerOrigin::Kind::Equal, 0}
+                            : assigned.origin);
+      if (assigned.relation == Relation::FrameAddress &&
+          (assigned.origin.kind == PointerOrigin::Kind::Runtime ||
+           assigned.origin.kind == PointerOrigin::Kind::Scalar ||
+           assigned.origin.kind == PointerOrigin::Kind::Constant ||
+           assigned.origin.kind == PointerOrigin::Kind::Context))
+        assigned.origin = runtimeOrigin(key);
+      state.at(key) = assigned;
+    };
+    if (MI.getOpcode() == llvm::RISCV::COMPAS_DYNALLOC) {
+      const auto size = MI.getOperand(1).getReg();
+      if (value(state, size).relation != Relation::Equal)
+        llvm::report_fatal_error("COMPAS: unsupported EDDI allocation size");
+      const Value allocated{Relation::FrameAddress,
+                            {PointerOrigin::Kind::Scalar, size}, all_bits};
+      assign(MI.getOperand(0).getReg(), allocated);
+      assign(riscv_common::kSP, allocated);
+      return;
+    }
+    if (MI.getOpcode() == llvm::RISCV::COMPAS_CALLDOWN ||
+        MI.getOpcode() == llvm::RISCV::COMPAS_CALLUP) {
+      assign(riscv_common::kSP,
+             {Relation::FrameAddress,
+              MI.getOpcode() == llvm::RISCV::COMPAS_CALLDOWN
+                  ? PointerOrigin{PointerOrigin::Kind::Constant,
+                                  static_cast<unsigned>(MI.getOperand(0).getImm())}
+                  : PointerOrigin{PointerOrigin::Kind::Context, 1},
+              all_bits});
+      return;
+    }
     Value result{Relation::Equal, {}, all_bits};
     const auto spill = spills.find(&MI);
     if (MI.mayLoad() && spill != spills.end() && spill->second.full_word)
@@ -949,26 +1022,18 @@ void RISCVDmr::analyzeStackArguments() {
                                  MI.getNumOperands() && MI.getOperand(0).isReg()
                              ? value(state, MI.getOperand(0).getReg())
                              : unknown;
-    auto assign = [&](unsigned key, Value assigned) {
-      if (writes && assigned.relation != Relation::Unsupported)
-        writes->emplace(runtimeOrigin(key).index,
-                        assigned.relation == Relation::Equal
-                            ? PointerOrigin{PointerOrigin::Kind::Equal, 0}
-                            : assigned.origin);
-      if (assigned.relation == Relation::FrameAddress &&
-          assigned.origin.kind == PointerOrigin::Kind::Runtime)
-        assigned.origin = runtimeOrigin(key);
-      state.at(key) = assigned;
-    };
     // Read all sources before killing destinations, including reused registers.
     for (auto &item : state)
-      if (item.first < register_count && MI.modifiesRegister(item.first, TRI_))
+      if (item.first < register_count && MI.modifiesRegister(item.first, TRI_) &&
+          !(dynamic_frame && MI.isCall() && item.first == riscv_common::kSP))
         assign(item.first, result);
     if (MI.mayStore() && spill != spills.end())
       assign(spill->second.key, stored);
     state.at(riscv_common::k0) = {Relation::Equal, {}, 0};
-    state.at(riscv_common::kSP).relation = Relation::FrameAddress;
-    state.at(riscv_common::kSP).origin = {};
+    if (!dynamic_frame || MI.getFlag(llvm::MachineInstr::FrameSetup)) {
+      state.at(riscv_common::kSP).relation = Relation::FrameAddress;
+      state.at(riscv_common::kSP).origin = {};
+    }
   };
 
   // An unvisited loop backedge must not erase its incoming provenance.
@@ -1030,6 +1095,16 @@ void RISCVDmr::analyzeStackArguments() {
       continue;
     State state = found->second;
     for (auto &MI : MBB) {
+      if (MI.getOpcode() == llvm::RISCV::COMPAS_DYNALLOC ||
+          MI.getOpcode() == llvm::RISCV::COMPAS_CALLDOWN ||
+          MI.getOpcode() == llvm::RISCV::COMPAS_CALLUP) {
+        const auto stack = value(state, riscv_common::kSP);
+        if (stack.relation != Relation::FrameAddress)
+          llvm::report_fatal_error("COMPAS: unknown EDDI dynamic stack origin");
+        dynamic_sp_origins_.emplace(&MI, stack.origin);
+        if (stack.origin.kind == PointerOrigin::Kind::Runtime)
+          uses[&MI].insert(stack.origin.index);
+      }
       if (MI.mayStore() && MI.getNumOperands() && MI.getOperand(0).isReg()) {
         const auto data = value(state, MI.getOperand(0).getReg());
         if (data.relation == Relation::FrameAddress)
@@ -1255,63 +1330,14 @@ void RISCVDmr::duplicateInstructions() {
         if (incomingStackArgumentOffset(MI, offset))
           incoming_stack_loads.emplace(&MI, nullptr);
       }
-    if (!incoming_stack_loads.empty() ||
-        !info->getCompasIncomingPointerRegs().empty() ||
-        !pointer_delta_updates_.empty() || !pointer_delta_entry_.empty()) {
-      // The existing EDDI frame expansion supports one fixed allocation.
-      // Reject other prologues explicitly rather than reconstructing entry
-      // addresses from a partial/split allocation or a save/restore libcall.
-      unsigned allocations = 0, frame_pointers = 0;
-      bool supported = frame_size_ > 0 &&
-                       llvm::isInt<12>(-static_cast<int64_t>(frame_size_) -
-                                       shadow_frame_offset_) &&
-                       MF_->getFrameInfo().getStackSize() ==
-                           static_cast<uint64_t>(frame_size_) &&
-                       MF_->getFrameInfo().getOffsetAdjustment() == 0 &&
-                       !info->useSaveRestoreLibCalls(*MF_);
-      for (const auto &MI : *entry_bb_) {
-        if (!MI.getFlag(llvm::MachineInstr::FrameSetup) ||
-            MI.isCFIInstruction() || !MI.getNumOperands() ||
-            !MI.getOperand(0).isReg() || !MI.getOperand(0).isDef())
-          continue;
-        const auto destination = MI.getOperand(0).getReg();
-        if (destination != riscv_common::kSP &&
-            destination != riscv_common::kFP)
-          continue;
-        // Pointer deltas use a fixed bank and can coexist with the supported
-        // realignment prologue. Formal stack loads retain their tighter guard.
-        if (destination == riscv_common::kSP && incoming_stack_loads.empty() &&
-            MI.getOpcode() == llvm::RISCV::ANDI && MI.getNumOperands() >= 3 &&
-            MI.getOperand(1).isReg() &&
-            MI.getOperand(1).getReg() == riscv_common::kSP &&
-            MI.getOperand(2).isImm() &&
-            MI.getOperand(2).getImm() ==
-                -static_cast<int64_t>(
-                    MF_->getFrameInfo().getMaxAlign().value()))
-          continue;
-        supported &= MI.getOpcode() == llvm::RISCV::ADDI &&
-                     MI.getNumOperands() >= 3 && MI.getOperand(1).isReg() &&
-                     MI.getOperand(1).getReg() == riscv_common::kSP &&
-                     MI.getOperand(2).isImm();
-        if (!supported)
-          break;
-        if (destination == riscv_common::kSP) {
-          ++allocations;
-          supported &= MI.getOperand(2).getImm() == -frame_size_;
-        } else {
-          ++frame_pointers;
-          supported &=
-              MI.getOperand(2).getImm() ==
-              frame_size_ - static_cast<int64_t>(info->getVarArgsSaveSize());
-        }
-      }
-      if (!supported || allocations != 1 || frame_pointers != 1)
-        llvm::report_fatal_error("COMPAS: incoming EDDI arguments "
-                                 "require a single fixed frame");
-    }
+    if (info->useSaveRestoreLibCalls(*MF_))
+      llvm::report_fatal_error(
+          "COMPAS: EDDI save/restore libcalls are unsupported");
   }
+  std::map<llvm::MachineInstr *, llvm::MachineInstr *> shadows;
   auto shadow_instruction = [&](llvm::MachineInstr &MI) {
     auto *shadow = genShadowFromPrimary(&MI);
+    shadows.emplace(&MI, shadow);
     auto incoming = incoming_stack_loads.find(&MI);
     if (incoming != incoming_stack_loads.end())
       incoming->second = shadow;
@@ -1328,7 +1354,10 @@ void RISCVDmr::duplicateInstructions() {
           insert2Shadowblock{};
       bool terminator_reached{false};
       for (auto &MI : MBB) {
-        if (MI.isCall() || MI.mayStore() || MI.isBranch() || MI.isReturn()) {
+        if (MI.isCFIInstruction() || MI.isDebugInstr())
+          continue;
+        if (MI.isCall() || MI.mayStore() || MI.isBranch() || MI.isReturn() ||
+            dynamic_sp_origins_.count(&MI)) {
           terminator_reached = true;
         } else {
           if (MI.mayLoad() && config_.psl == ProtectStrategyLoad::L1) {
@@ -1367,7 +1396,10 @@ void RISCVDmr::duplicateInstructions() {
       }
 
       for (auto &MI : MBB) {
-        if (MI.isCall() || MI.mayStore() || MI.isBranch() || MI.isReturn()) {
+        if (MI.isCFIInstruction() || MI.isDebugInstr())
+          continue;
+        if (MI.isCall() || MI.mayStore() || MI.isBranch() || MI.isReturn() ||
+            dynamic_sp_origins_.count(&MI)) {
           continue;
         } else if (MI.mayLoad() && config_.psl == ProtectStrategyLoad::L1) {
           // SWIFT uses one checked load followed by a copy, in either schedule.
@@ -1407,77 +1439,280 @@ void RISCVDmr::duplicateInstructions() {
 
   // EDDI reserves an independent frame, with extra separation for realignment.
   if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_)) {
-    // prologue
-    llvm::MachineInstr *primary_sp = nullptr, *shadow_sp = nullptr;
+    // Leave LLVM's original split allocation/address materialization intact.
+    // Reserve D below the first primary allocation and start its shadow from
+    // the corresponding independently adjusted entry bank. All later original
+    // setup/destruction instructions then preserve the same separation.
+    llvm::MachineInstr *primary_sp = nullptr;
+    int64_t allocated_prefix = frame_size_;
     for (auto &MI : *entry_bb_) {
-      if (MI.getFlag(llvm::MachineInstr::FrameSetup) &&
-          MI.getOpcode() == llvm::RISCV::ADDI && MI.getNumOperands() >= 3 &&
-          MI.getOperand(0).isReg() && MI.getOperand(0).isDef() &&
-          MI.getOperand(1).isReg() && MI.getOperand(2).isImm() &&
-          MI.getOperand(2).getImm() == -frame_size_) {
-        if (MI.getOperand(0).getReg() == riscv_common::kSP &&
-            MI.getOperand(1).getReg() == riscv_common::kSP) {
-          primary_sp = &MI;
-          MI.getOperand(2).setImm(-frame_size_ - shadow_frame_offset_);
-        } else if (MI.getOperand(0).getReg() == P2S_.at(riscv_common::kSP) &&
-                   MI.getOperand(1).getReg() == P2S_.at(riscv_common::kSP)) {
-          shadow_sp = &MI;
-          MI.getOperand(1).setReg(riscv_common::kSP);
-          MI.getOperand(2).setImm(shadow_frame_offset_);
-        }
+      if (!MI.getFlag(llvm::MachineInstr::FrameSetup) ||
+          !MI.modifiesRegister(riscv_common::kSP, TRI_) ||
+          MI.isCFIInstruction())
+        continue;
+      if (MI.getOpcode() == llvm::RISCV::ADDI && MI.getNumOperands() >= 3 &&
+          MI.getOperand(1).isReg() &&
+          MI.getOperand(1).getReg() == riscv_common::kSP &&
+          MI.getOperand(2).isImm() && MI.getOperand(2).getImm() < 0) {
+        allocated_prefix = -MI.getOperand(2).getImm();
+        primary_sp = &MI;
+        break;
+      }
+      if (MI.getOpcode() == llvm::RISCV::SUB && MI.getNumOperands() >= 3 &&
+          MI.getOperand(1).isReg() &&
+          MI.getOperand(1).getReg() == riscv_common::kSP) {
+        primary_sp = &MI;
+        break;
       }
     }
-    if (primary_sp && shadow_sp) {
-      // FGS normally puts a shadow instruction before its primary. Frame
-      // allocation is special: the shadow must use the newly doubled stack.
-      shadow_sp->removeFromParent();
-      entry_bb_->insert(std::next(primary_sp->getIterator()), shadow_sp);
-    }
-    if (!MF_->getInfo<llvm::RISCVMachineFunctionInfo>()
-             ->getCompasIncomingPointerRegs()
-             .empty()) {
-      if (!primary_sp || !shadow_sp)
+    if (!primary_sp && frame_size_)
+      llvm::report_fatal_error("COMPAS: unsupported EDDI frame allocation");
+    if (primary_sp) {
+      const auto shadow = shadows.find(primary_sp);
+      if (shadow == shadows.end())
         llvm::report_fatal_error(
-            "COMPAS: pointer delta frame setup is missing");
-      saveIncomingPointerDeltas(shadow_sp);
-    }
-    if (!incoming_stack_loads.empty()) {
-      if (!primary_sp || !shadow_sp)
-        llvm::report_fatal_error(
-            "COMPAS: incoming argument frame setup is missing");
-      for (const auto &pair : incoming_stack_loads)
-        if (!pair.second)
-          llvm::report_fatal_error(
-              "COMPAS: incoming stack argument was not duplicated");
-      rewriteIncomingStackArguments(
-          *MF_, incoming_stack_loads, frame_size_, shadow_frame_offset_,
-          *primary_sp, *shadow_sp, P2S_.at(riscv_common::k0),
-          P2S_.at(riscv_common::kSP), P2S_.at(riscv_common::kFP));
-    }
-    // epilogue
-    for (auto exit_BB : exit_bbs_) {
-      for (auto &MI : *exit_BB) {
-        if (MI.getFlag(llvm::MachineInstr::FrameDestroy) &&
-            MI.getOpcode() == llvm::RISCV::ADDI && MI.getNumOperands() >= 3 &&
-            MI.getOperand(0).isReg() &&
-            MI.getOperand(0).getReg() == riscv_common::kSP &&
-            MI.getOperand(1).isReg() &&
-            MI.getOperand(1).getReg() == riscv_common::kSP &&
-            MI.getOperand(2).isImm() &&
-            MI.getOperand(2).getImm() == frame_size_) {
-          MI.getOperand(2).setImm(frame_size_ + shadow_frame_offset_);
-
-          break;
+            "COMPAS: EDDI frame allocation was not duplicated");
+      shadow->second->eraseFromParent();
+      auto insert = std::next(primary_sp->getIterator());
+      auto *extra_allocation =
+          addOffset(*entry_bb_, insert, *TII_, riscv_common::kSP,
+                    riscv_common::kSP, -shadow_frame_offset_,
+                    primary_sp->getDebugLoc(), llvm::MachineInstr::FrameSetup);
+      auto *shadow_sp =
+          addOffset(*entry_bb_, insert, *TII_, P2S_.at(riscv_common::kSP),
+                    riscv_common::kSP, shadow_frame_offset_,
+                    primary_sp->getDebugLoc(), llvm::MachineInstr::FrameSetup);
+      if (!MF_->getInfo<llvm::RISCVMachineFunctionInfo>()
+               ->getCompasIncomingPointerRegs()
+               .empty())
+        saveIncomingPointerDeltas(shadow_sp, allocated_prefix);
+      if (!incoming_stack_loads.empty()) {
+        for (const auto &pair : incoming_stack_loads)
+          if (!pair.second)
+            llvm::report_fatal_error(
+                "COMPAS: incoming stack argument was not duplicated");
+        rewriteIncomingStackArguments(
+            *MF_, incoming_stack_loads, allocated_prefix, shadow_frame_offset_,
+            *primary_sp, *shadow_sp, P2S_.at(riscv_common::k0),
+            P2S_.at(riscv_common::kSP), P2S_.at(riscv_common::kFP));
+      }
+      std::map<llvm::MachineInstr *, llvm::MachineInstr *> extra_deallocations;
+      for (auto &MBB : *MF_)
+        for (auto &MI : MBB)
+          if (MI.isReturn() || TII_->isTailCall(MI))
+            extra_deallocations.emplace(
+                &MI, addOffset(MBB, MI.getIterator(), *TII_, riscv_common::kSP,
+                               riscv_common::kSP, shadow_frame_offset_,
+                               MI.getDebugLoc(), llvm::MachineInstr::FrameDestroy));
+      // The physical primary frame is D below the original caller CFA.
+      // CFI describes that primary frame once, independently of its shadow.
+      for (auto &MBB : *MF_) {
+        for (auto iterator = MBB.begin(); iterator != MBB.end();) {
+          auto &MI = *iterator++;
+          if (!MI.isCFIInstruction())
+            continue;
+          const auto original =
+              MF_->getFrameInstructions().at(MI.getOperand(0).getCFIIndex());
+          auto adjusted = original;
+          using CFI = llvm::MCCFIInstruction;
+          switch (original.getOperation()) {
+          case CFI::OpDefCfaOffset:
+            adjusted = CFI::cfiDefCfaOffset(original.getLabel(),
+                                            original.getOffset() +
+                                                shadow_frame_offset_);
+            break;
+          case CFI::OpDefCfa:
+            adjusted =
+                CFI::cfiDefCfa(original.getLabel(), original.getRegister(),
+                               original.getOffset() + shadow_frame_offset_);
+            break;
+          case CFI::OpOffset:
+            adjusted =
+                CFI::createOffset(original.getLabel(), original.getRegister(),
+                                  original.getOffset() - shadow_frame_offset_);
+            break;
+          default:
+            continue;
+          }
+          llvm::BuildMI(MBB, MI.getIterator(), MI.getDebugLoc(),
+                        TII_->get(llvm::TargetOpcode::CFI_INSTRUCTION))
+              .addCFIIndex(MF_->addFrameInst(adjusted))
+              .setMIFlags(MI.getFlags());
+          MI.eraseFromParent();
         }
+      }
+      // Describe each extra SP adjustment, including its final return state.
+      // Restore the linear CFI state after each return so later lexical blocks
+      // retain their original body recipe. Original epilogue CFI is otherwise
+      // left to LLVM; this does not add asynchronous unwind support to it.
+      using CFI = llvm::MCCFIInstruction;
+      const unsigned dwarf_sp = TRI_->getDwarfRegNum(riscv_common::kSP, true);
+      auto cfi = [&](llvm::MachineBasicBlock &MBB,
+                     llvm::MachineBasicBlock::iterator where,
+                     const CFI &instruction) {
+        llvm::BuildMI(MBB, where, llvm::DebugLoc(),
+                      TII_->get(llvm::TargetOpcode::CFI_INSTRUCTION))
+            .addCFIIndex(MF_->addFrameInst(instruction));
+      };
+      cfi(*entry_bb_, extra_allocation->getIterator(),
+          CFI::cfiDefCfa(nullptr, dwarf_sp, allocated_prefix));
+      int64_t cfa_offset = allocated_prefix;
+      for (auto iterator = extra_allocation->getIterator();
+           &*iterator != shadow_sp;) {
+        const auto &MI = *iterator++;
+        if (MI.getOpcode() != llvm::RISCV::ADDI ||
+            MI.getOperand(0).getReg() != riscv_common::kSP)
+          continue;
+        cfa_offset -= MI.getOperand(2).getImm();
+        cfi(*entry_bb_, iterator, CFI::cfiDefCfaOffset(nullptr, cfa_offset));
+      }
+      for (const auto &deallocation : extra_deallocations) {
+        auto &MBB = *deallocation.first->getParent();
+        auto iterator = deallocation.second->getIterator();
+        // LLVM13's AsmPrinter lacks the dedicated remember/restore cases.
+        // Emit the standard DW_CFA bytes through its supported escape form.
+        cfi(MBB, iterator,
+            CFI::createEscape(nullptr, llvm::StringRef("\x0a", 1)));
+        cfi(MBB, iterator,
+            CFI::cfiDefCfa(nullptr, dwarf_sp, shadow_frame_offset_));
+        cfa_offset = shadow_frame_offset_;
+        while (&*iterator != deallocation.first) {
+          const auto &MI = *iterator++;
+          cfa_offset -= MI.getOperand(2).getImm();
+          cfi(MBB, iterator, CFI::cfiDefCfaOffset(nullptr, cfa_offset));
+        }
+        cfi(MBB, std::next(deallocation.first->getIterator()),
+            CFI::createEscape(nullptr, llvm::StringRef("\x0b", 1)));
       }
     }
   }
 
   emitPointerDeltaUpdates();
+  expandDynamicStack();
 
 #ifdef DBG
   llvm::outs() << "COMPAS_DBG: duplicateInstructions() done\n";
 #endif
+}
+
+unsigned RISCVDmr::pointerContextSlot(unsigned index) const {
+  const auto *info = MF_->getInfo<llvm::RISCVMachineFunctionInfo>();
+  const int bank = info->getCompasPointerDeltaFrameIndex();
+  if (index >= 3 || bank >= 0 || !MF_->getFrameInfo().hasVarSizedObjects())
+    llvm::report_fatal_error("COMPAS: dynamic stack context was not prepared");
+  return MF_->getFrameInfo().getObjectSize(bank) / isa_config_.word_length -
+         info->getCompasIncomingPointerRegs().size() - 3 + index;
+}
+
+void RISCVDmr::expandDynamicStack() {
+  const llvm::Register primary_sp = riscv_common::kSP;
+  const auto shadow_sp = P2S_.at(primary_sp);
+  const auto scratch = P2S_.at(riscv_common::k0);
+  const unsigned stack_slot = primary_sp - llvm::RISCV::X0;
+  for (const auto &allocation : dynamic_sp_origins_) {
+    auto *MI = allocation.first;
+    auto &MBB = *MI->getParent();
+    const auto insert = MI->getIterator();
+    const auto DL = MI->getDebugLoc();
+    const unsigned opcode = MI->getOpcode();
+    if (opcode == llvm::RISCV::COMPAS_DYNALLOC) {
+      const auto destination = MI->getOperand(0).getReg();
+      const auto size = MI->getOperand(1).getReg();
+      const auto shadow_size = P2S_.at(size);
+      const uint64_t alignment = MI->getOperand(2).getImm();
+      if (!llvm::isPowerOf2_64(alignment) || alignment < 16)
+        llvm::report_fatal_error("COMPAS: unsupported EDDI VLA alignment");
+      llvm::BuildMI(MBB, insert, DL, TII_->get(llvm::RISCV::BNE))
+          .addReg(size)
+          .addReg(shadow_size)
+          .addMBB(err_bb_);
+      // R is independently rounded in each register bank. Allocate a fresh
+      // interval of 2R below both old banks, with its shadow R above primary.
+      // Older pointers retain their own expectations across later allocations.
+      loadPointerDelta(&MBB, insert, allocation.second);
+      llvm::BuildMI(MBB, insert, DL, TII_->get(llvm::RISCV::SUB), shadow_sp)
+          .addReg(shadow_sp)
+          .addReg(scratch);
+      llvm::BuildMI(MBB, insert, DL, TII_->get(llvm::RISCV::SUB), shadow_sp)
+          .addReg(shadow_sp)
+          .addReg(shadow_size);
+      for (unsigned repeat = 0; repeat < 2; ++repeat)
+        llvm::BuildMI(MBB, insert, DL, TII_->get(llvm::RISCV::SUB), primary_sp)
+            .addReg(primary_sp)
+            .addReg(size);
+      for (const auto reg : {primary_sp, shadow_sp}) {
+        if (llvm::isInt<12>(-static_cast<int64_t>(alignment))) {
+          llvm::BuildMI(MBB, insert, DL, TII_->get(llvm::RISCV::ANDI), reg)
+              .addReg(reg)
+              .addImm(-static_cast<int64_t>(alignment));
+        } else {
+          const unsigned shift = llvm::Log2_64(alignment);
+          llvm::BuildMI(MBB, insert, DL, TII_->get(llvm::RISCV::SRLI), reg)
+              .addReg(reg)
+              .addImm(shift);
+          llvm::BuildMI(MBB, insert, DL, TII_->get(llvm::RISCV::SLLI), reg)
+              .addReg(reg)
+              .addImm(shift);
+        }
+      }
+      // Capture R before the output overwrites a possibly aliased size input.
+      addOffset(MBB, insert, *TII_, scratch, size, 0, DL);
+      storePointerDelta(&MBB, insert, stack_slot);
+      storePointerDelta(&MBB, insert, destination - llvm::RISCV::X0);
+      addOffset(MBB, insert, *TII_, destination, primary_sp, 0, DL);
+      addOffset(MBB, insert, *TII_, P2S_.at(destination), shadow_sp, 0, DL);
+    } else if (opcode == llvm::RISCV::COMPAS_CALLDOWN) {
+      const int64_t amount = MI->getOperand(0).getImm();
+      if (amount <= 0 || amount % 16)
+        llvm::report_fatal_error("COMPAS: unsupported EDDI call allocation");
+      addOffset(MBB, insert, *TII_, scratch, shadow_sp, 0, DL);
+      storePointerDelta(&MBB, insert, pointerContextSlot(0));
+      loadPointerDelta(&MBB, insert, allocation.second);
+      storePointerDelta(&MBB, insert, pointerContextSlot(1));
+      llvm::BuildMI(MBB, insert, DL, TII_->get(llvm::RISCV::SUB), shadow_sp)
+          .addReg(shadow_sp)
+          .addReg(scratch);
+      addOffset(MBB, insert, *TII_, shadow_sp, shadow_sp, -amount, DL);
+      addOffset(MBB, insert, *TII_, primary_sp, primary_sp, -2 * amount, DL);
+      loadPointerDelta(&MBB, insert,
+                       {PointerOrigin::Kind::Constant,
+                        static_cast<unsigned>(amount)});
+      storePointerDelta(&MBB, insert, stack_slot);
+    } else {
+      const int64_t amount = MI->getOperand(0).getImm();
+      addOffset(MBB, insert, *TII_, primary_sp, primary_sp, 2 * amount, DL);
+      loadPointerDelta(&MBB, insert, {PointerOrigin::Kind::Context, 0});
+      addOffset(MBB, insert, *TII_, shadow_sp, scratch, 0, DL);
+      loadPointerDelta(&MBB, insert, {PointerOrigin::Kind::Context, 1});
+      storePointerDelta(&MBB, insert, stack_slot);
+    }
+    addOffset(MBB, insert, *TII_, scratch, riscv_common::k0, 0, DL);
+    MI->eraseFromParent();
+  }
+  dynamic_sp_origins_.clear();
+}
+
+void RISCVDmr::preserveDynamicStackAcrossCalls() {
+  // Callees can replace the monitor's SP with their own fixed-frame bank.
+  // Preserve the actual caller state, independently of the checked delta.
+  const auto scratch = P2S_.at(riscv_common::k0);
+  const auto shadow_sp = P2S_.at(riscv_common::kSP);
+  for (auto &MBB : *MF_) {
+    if (&MBB == err_bb_)
+      continue;
+    for (auto &MI : MBB) {
+      if (!MI.isCall() || TII_->isTailCall(MI))
+        continue;
+      addOffset(MBB, MI.getIterator(), *TII_, scratch, shadow_sp, 0,
+                MI.getDebugLoc());
+      storePointerDelta(&MBB, MI.getIterator(), pointerContextSlot(2));
+      addOffset(MBB, MI.getIterator(), *TII_, scratch, riscv_common::k0, 0);
+      const auto after = std::next(MI.getIterator());
+      loadPointerDelta(&MBB, after, {PointerOrigin::Kind::Context, 2});
+      addOffset(MBB, after, *TII_, shadow_sp, scratch, 0, MI.getDebugLoc());
+      addOffset(MBB, after, *TII_, scratch, riscv_common::k0, 0);
+    }
+  }
 }
 
 void RISCVDmr::syncFPRegs(llvm::MachineBasicBlock *MBB,
@@ -1507,7 +1742,8 @@ void RISCVDmr::syncFPRegs(llvm::MachineBasicBlock *MBB,
       .addMBB(err_bb_);
 }
 
-void RISCVDmr::saveIncomingPointerDeltas(llvm::MachineInstr *before) {
+void RISCVDmr::saveIncomingPointerDeltas(llvm::MachineInstr *before,
+                                         int64_t allocated_prefix) {
   const auto *info = MF_->getInfo<llvm::RISCVMachineFunctionInfo>();
   const auto pointers = info->getCompasIncomingPointerRegs();
   const int bank = info->getCompasPointerDeltaFrameIndex();
@@ -1518,8 +1754,8 @@ void RISCVDmr::saveIncomingPointerDeltas(llvm::MachineInstr *before) {
   for (const auto reg : pointers) {
     const unsigned offset = index++ * isa_config_.word_length;
     const int64_t displacement =
-        frame_size_ + MF_->getFrameInfo().getObjectOffset(bank) + offset;
-    if (!llvm::isInt<12>(displacement) || !P2S_.count(reg))
+        allocated_prefix + MF_->getFrameInfo().getObjectOffset(bank) + offset;
+    if (displacement < 0 || !llvm::isInt<12>(displacement) || !P2S_.count(reg))
       llvm::report_fatal_error("COMPAS: unsupported pointer delta capture");
     // The caller validates the argument pair before transfer. Keep its entry
     // separation immutable rather than deriving it again at each later check.
@@ -1552,17 +1788,18 @@ void RISCVDmr::loadPointerDelta(llvm::MachineBasicBlock *MBB,
                                 PointerOrigin origin) {
   const auto scratch = P2S_.at(riscv_common::k0);
   if (origin.kind == PointerOrigin::Kind::Equal ||
-      origin.kind == PointerOrigin::Kind::Frame) {
-    if (origin.kind == PointerOrigin::Kind::Frame &&
-        shadow_frame_offset_ > 2047)
-      llvm::report_fatal_error(
-          "COMPAS: EDDI frame address separation exceeds ADDI range");
-    llvm::BuildMI(*MBB, insert, llvm::DebugLoc(), TII_->get(llvm::RISCV::ADDI),
-                  scratch)
-        .addReg(riscv_common::k0)
-        .addImm(origin.kind == PointerOrigin::Kind::Equal
-                    ? 0
-                    : shadow_frame_offset_);
+      origin.kind == PointerOrigin::Kind::Frame ||
+      origin.kind == PointerOrigin::Kind::Constant ||
+      origin.kind == PointerOrigin::Kind::Scalar) {
+    const llvm::Register base = origin.kind == PointerOrigin::Kind::Scalar
+                                    ? origin.index
+                                    : riscv_common::k0;
+    const int64_t offset = origin.kind == PointerOrigin::Kind::Frame
+                               ? shadow_frame_offset_
+                           : origin.kind == PointerOrigin::Kind::Constant
+                               ? origin.index
+                               : 0;
+    addOffset(*MBB, insert, *TII_, scratch, base, offset);
     return;
   }
   const auto *info = MF_->getInfo<llvm::RISCVMachineFunctionInfo>();
@@ -1579,7 +1816,10 @@ void RISCVDmr::loadPointerDelta(llvm::MachineBasicBlock *MBB,
           "COMPAS: incoming pointer origin was not prepared");
     index = std::distance(pointers.begin(), found);
   } else {
-    index = pointers.size() + origin.index;
+    index = pointers.size() +
+            (origin.kind == PointerOrigin::Kind::Context
+                 ? pointerContextSlot(origin.index)
+                 : origin.index);
   }
   const unsigned offset = index * isa_config_.word_length;
   if (offset + isa_config_.word_length >
@@ -1676,21 +1916,17 @@ void RISCVDmr::emitPointerDeltaUpdates() {
     emit(entry_bb_, insert, pointer_delta_entry_);
   }
   for (const auto &update : pointer_delta_updates_)
-    emit(update.first->getParent(), std::next(update.first->getIterator()),
-         update.second);
+    if (!dynamic_sp_origins_.count(update.first))
+      emit(update.first->getParent(), std::next(update.first->getIterator()),
+           update.second);
 }
 
 void RISCVDmr::checkFrameAddress(llvm::MachineInstr *MI, llvm::Register reg,
                                  PointerOrigin origin) {
   const auto scratch = P2S_.at(riscv_common::k0);
   if (origin.kind == PointerOrigin::Kind::Frame) {
-    if (shadow_frame_offset_ > 2047)
-      llvm::report_fatal_error(
-          "COMPAS: EDDI frame address separation exceeds ADDI range");
-    llvm::BuildMI(*MI->getParent(), MI->getIterator(), MI->getDebugLoc(),
-                  TII_->get(llvm::RISCV::ADDI), scratch)
-        .addReg(reg)
-        .addImm(shadow_frame_offset_);
+    addOffset(*MI->getParent(), MI->getIterator(), *TII_, scratch, reg,
+              shadow_frame_offset_, MI->getDebugLoc());
   } else {
     if (MI->isCall() && TII_->isTailCall(*MI))
       llvm::report_fatal_error(
@@ -2698,12 +2934,11 @@ void RISCVDmr::protectCalls() {
         }
       }
 
-      if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_)) {
-        llvm::BuildMI(*MI->getParent(), std::next(MI->getIterator()),
-                      MI->getDebugLoc(), TII_->get(llvm::RISCV::ADDI),
-                      P2S_.at(riscv_common::kSP))
-            .addReg(riscv_common::kSP)
-            .addImm(shadow_frame_offset_);
+      if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_) &&
+          !MF_->getFrameInfo().hasVarSizedObjects()) {
+        addOffset(*MI->getParent(), std::next(MI->getIterator()), *TII_,
+                  P2S_.at(riscv_common::kSP), riscv_common::kSP,
+                  shadow_frame_offset_, MI->getDebugLoc());
       }
     }
   } else {
@@ -2714,12 +2949,11 @@ void RISCVDmr::protectCalls() {
   // now handling recursive indirect calls (jalr)
   // ----------
   for (auto &MI : indirect_calls_) {
-    if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_)) {
-      llvm::BuildMI(*MI->getParent(), std::next(MI->getIterator()),
-                    MI->getDebugLoc(), TII_->get(llvm::RISCV::ADDI),
-                    P2S_.at(riscv_common::kSP))
-          .addReg(riscv_common::kSP)
-          .addImm(shadow_frame_offset_);
+    if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_) &&
+        !MF_->getFrameInfo().hasVarSizedObjects()) {
+      addOffset(*MI->getParent(), std::next(MI->getIterator()), *TII_,
+                P2S_.at(riscv_common::kSP), riscv_common::kSP,
+                shadow_frame_offset_, MI->getDebugLoc());
     }
   }
 

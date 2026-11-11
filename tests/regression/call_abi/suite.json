@@ -121,6 +121,26 @@
       "functions": ["abi_dynamic_stack_arguments"]
     },
     {
+      "name": "large_fixed_stack_arguments",
+      "defines": ["TEST_CASE=14"],
+      "functions": ["abi_large_fixed_stack_arguments", "abi_ten_args"]
+    },
+    {
+      "name": "large_fixed_stack_arguments_caller_only",
+      "defines": ["TEST_CASE=14"],
+      "functions": ["abi_large_fixed_stack_arguments"]
+    },
+    {
+      "name": "dynamic_stack_arguments_small_frame",
+      "defines": ["TEST_CASE=15"],
+      "functions": ["abi_dynamic_small_frame", "abi_dynamic_pointer_middle", "abi_dynamic_pointer_leaf", "abi_ten_args"]
+    },
+    {
+      "name": "dynamic_stack_arguments_small_frame_caller_only",
+      "defines": ["TEST_CASE=15"],
+      "functions": ["abi_dynamic_small_frame"]
+    },
+    {
       "name": "realigned_live_values",
       "defines": ["TEST_CASE=10"],
       "functions": ["abi_realigned_live_values"]

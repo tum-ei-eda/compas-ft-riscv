@@ -270,6 +270,8 @@ bool riscv_common::isDmrFunction(const std::string &name) {
 bool riscv_common::usesPointerProvenance(const llvm::MachineFunction &MF) {
   if (!inCSString(llvm::cl::enable_eddi, std::string{MF.getName()}))
     return false;
+  if (MF.getFrameInfo().hasVarSizedObjects())
+    return true;
 
   // Machine blocks and spill objects can change during register allocation.
   // Use the unchanged IR to choose a conservative candidate before reserving
@@ -298,7 +300,8 @@ riscv_common::pointerProvenanceSlots(const llvm::MachineFunction &MF) {
   // Register slots use architectural x0..x31 numbering. Spill metadata uses
   // 32 + FI, including holes in the frame-index space. Fixed objects have
   // negative indices and the immutable incoming-pointer prefix is separate.
-  return 32 + std::max(0, MF.getFrameInfo().getObjectIndexEnd());
+  return 32 + std::max(0, MF.getFrameInfo().getObjectIndexEnd()) +
+         (MF.getFrameInfo().hasVarSizedObjects() ? 3 : 0);
 }
 
 bool riscv_common::inCSString(std::string cs_string, std::string x) {

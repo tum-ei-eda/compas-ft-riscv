@@ -288,7 +288,7 @@ protected:
   std::set<llvm::MachineInstr *> loads_{};
   std::set<llvm::MachineInstr *> shadow_loads_{};
   struct PointerOrigin {
-    enum class Kind { Frame, Incoming, Runtime, Equal };
+    enum class Kind { Frame, Incoming, Runtime, Equal, Scalar, Constant, Context };
     Kind kind{Kind::Frame};
     // Incoming register or runtime metadata slot, depending on kind.
     unsigned index{0};
@@ -303,6 +303,7 @@ protected:
   using PointerDeltaUpdates = std::map<unsigned, PointerOrigin>;
   std::map<llvm::MachineInstr *, PointerDeltaUpdates> pointer_delta_updates_{};
   PointerDeltaUpdates pointer_delta_entry_{};
+  std::map<llvm::MachineInstr *, PointerOrigin> dynamic_sp_origins_{};
   std::map<llvm::MCSymbol *, llvm::MCSymbol *> shadow_pcrel_symbols_{};
   std::set<llvm::MachineBasicBlock *> exit_bbs_{};
   llvm::MachineBasicBlock *entry_bb_{nullptr};
@@ -316,9 +317,9 @@ protected:
       stack_address_call_args_{};
   std::string fname_{};
   bool use_shadow_for_stack_ops_{true};
-  int frame_size_{0};
+  int64_t frame_size_{0};
   // EDDI's frame separation includes padding around stack realignment.
-  int shadow_frame_offset_{0};
+  int64_t shadow_frame_offset_{0};
 
   virtual void init();
   void analyze_function();
@@ -327,8 +328,11 @@ protected:
   void updateSelectiveCalls();
   void duplicateInstructions();
   void preparePCRelativeAddresses();
-  void saveIncomingPointerDeltas(llvm::MachineInstr *);
+  void saveIncomingPointerDeltas(llvm::MachineInstr *, int64_t allocated_prefix);
   void emitPointerDeltaUpdates();
+  void expandDynamicStack();
+  void preserveDynamicStackAcrossCalls();
+  unsigned pointerContextSlot(unsigned) const;
   void loadPointerDelta(llvm::MachineBasicBlock *,
                         llvm::MachineBasicBlock::iterator, PointerOrigin);
   void storePointerDelta(llvm::MachineBasicBlock *,

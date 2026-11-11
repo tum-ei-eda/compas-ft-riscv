@@ -721,8 +721,7 @@ void RISCVRacfed::generate_intrablock_signature_updates() {
                    << "back?: " << (&MI == &(MBB.back())) << "mback["
                    << &(MBB.instr_back()) << "]" << MBB.instr_back() << "\n";
 
-      if ((MI.getFlag(llvm::MachineInstr::FrameSetup) &&
-           MI.isCFIInstruction()) || // ignore virtual frame calc instructions
+      if (MI.isMetaInstruction() || // metadata emits no monitored instruction
           (MI.isBranch() && !MI.isConditionalBranch()) ||
           is_local_unconditional_jump(MI) ||
           (MI.isConditionalBranch() &&

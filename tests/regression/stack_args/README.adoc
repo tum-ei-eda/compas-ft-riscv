@@ -72,14 +72,16 @@ stored into arbitrary shared memory.
 
 For pointer-typed IR PHI/select merges, EDDI propagates an independent expected
 primary/shadow address difference through registers and exact full-word private
-spills. Global pointers use zero, current-frame pointers use the frame separation,
-and inherited pointers use their immutable entry snapshots. The expectation is
+spills. Global pointers use zero, fixed-frame pointers use the frame separation,
+VLA pointers use their allocation's runtime separation, and inherited pointers
+use their immutable entry snapshots. The expectation is
 kept in a fixed FP-relative metadata bank; only definitions needed by pointer
 checks receive transport instructions. Checks do not derive a new expectation
 from the pointer pair they are validating. Integer-encoded pointer merges,
 unsupported pointer arithmetic and arbitrary memory reloads remain outside this
-tracking contract. Runtime metadata requires the supported single fixed-frame
-prologue and encodable FP-relative stores.
+tracking contract. Runtime metadata requires a stable frame pointer and
+encodable FP-relative stores; the nominal fixed frame can use LLVM's split
+stack adjustments.
 
 The manifest enables machine-instruction verification. Remaining unsupported
 configurations and metadata work are recorded in
