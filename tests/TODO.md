@@ -6,10 +6,13 @@ Run commands from the repository root after [configuring the tools](README.adoc#
 
 ## Remaining inherited-pointer limitations: issue #14
 
-Ordinary register- and stack-passed pointer formals and private full-word spills are supported. The [`stack_args`](regression/stack_args/suite.json) regressions pass; the remaining extensions related to [issue #14](https://github.com/tum-ei-eda/compas-ft-riscv/issues/14) are:
+**Fixed and regression-tested:** inherited-pointer forwarding in tail position with sibling-call optimization enabled. EDDI retains returning calls so frame-dependent checks remain valid. The `pointer_tail_*` cases cover protected and ordinary helpers, pointer merges, and incoming stack formals on RV32/RV64 with LLVM13/16.
 
-- [ ] Support byval/byref and other indirect pointer formals, which are explicitly rejected.
-- [ ] Support inherited-pointer tail calls, which are explicitly rejected.
+Ordinary register- and stack-passed pointer formals and private full-word spills are also supported. The remaining extensions related to [issue #14](https://github.com/tum-ei-eda/compas-ft-riscv/issues/14) in [`stack_args`](regression/stack_args/suite.json) are:
+
+- [ ] Support explicit LLVM `byval` aggregate copies, starting with fixed-size, pointer-free integer data.
+- [ ] Define support for `byref` and other unsupported indirect argument conventions separately from `byval` copying.
+- [ ] Support inherited-pointer `musttail` transfers, which require a separate frame-lifetime and outgoing-stack contract.
 - [ ] Track pointer returns and pointer reloads from arbitrary memory.
 - [ ] Extend pointer merges beyond pointer-typed IR PHI/select candidates, supported affine operations and encodable FP-relative metadata stores. Integer-encoded pointer merges and nonlinear operations on runtime origins remain unsupported.
 

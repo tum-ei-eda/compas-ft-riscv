@@ -7,6 +7,86 @@
   "verify_machineinstrs": true,
   "cases": [
     {
+      "name": "pointer_tail_musttail",
+      "sources": ["pointer_tail_musttail.ll"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "cfp_modes": ["none"],
+      "functions": ["pointer_tail_musttail_leaf", "pointer_tail_musttail_middle"],
+      "expected": {"exit": 42, "stdout": ""},
+      "expected_build_diagnostic": {
+        "source": "pointer_tail_musttail.ll",
+        "modes": ["EDDI"],
+        "functions": ["pointer_tail_musttail_middle"],
+        "message": "COMPAS: musttail calls with EDDI pointer arguments require a returning call"
+      }
+    },
+    {
+      "name": "pointer_tail_protected",
+      "sources": ["pointer_tail.c"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+      "functions": ["pointer_tail_leaf", "pointer_tail_middle", "pointer_tail_owner"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "pointer_tail_ordinary_leaf",
+      "sources": ["pointer_tail.c"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+      "functions": ["pointer_tail_middle", "pointer_tail_owner"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "pointer_tail_merged",
+      "sources": ["pointer_tail.c"],
+      "defines": ["MERGED_POINTERS=1"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+      "functions": ["pointer_tail_leaf", "pointer_tail_middle", "pointer_tail_owner"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "pointer_tail_merged_ordinary_leaf",
+      "sources": ["pointer_tail.c"],
+      "defines": ["MERGED_POINTERS=1"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+      "functions": ["pointer_tail_middle", "pointer_tail_owner"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "pointer_tail_stack_formals",
+      "sources": ["pointer_tail.c"],
+      "defines": ["STACK_POINTERS=1"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+      "functions": ["pointer_tail_leaf", "pointer_tail_middle", "pointer_tail_owner"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "pointer_tail_stack_formals_ordinary_leaf",
+      "sources": ["pointer_tail.c"],
+      "defines": ["STACK_POINTERS=1"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+      "functions": ["pointer_tail_middle", "pointer_tail_owner"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
       "name": "direct",
       "sources": ["stack_args.c"],
       "defines": ["TEST_CASE=1"],

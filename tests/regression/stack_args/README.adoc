@@ -1,7 +1,7 @@
 = Stack-address call regressions
 
 These freestanding cases check pointers into caller-owned stack memory across
-function calls on RV32 and RV64. Each case uses an independent result oracle,
+function calls on RV32 and RV64. Each functional case uses an independent result oracle,
 exits with `42` on success or `17` on an oracle mismatch, and produces no output.
 The manifest runs EDDI and SWIFT with coarse- and fine-grained scheduling.
 
@@ -19,6 +19,13 @@ The manifest runs EDDI and SWIFT with coarse- and fine-grained scheduling.
 |`forwarded_frames` |Two pointers and a scalar traverse repeated nested calls, distinct local frames, constant pointer offsets and a scalar branch join.
 |`forwarded_frames_frame_pointer` |The same nested calls force FP, covering stable frame addressing independently of control-flow protection.
 |`forwarded_wide` |A 64-bit tag and scalar precede an inherited pointer, checking its actual ABI register after arguments split differently on RV32 and RV64.
+|`pointer_tail_protected` |An O2 sibling-call candidate forwards inherited local/global pointers, swapped with independent offsets, to a protected leaf.
+|`pointer_tail_ordinary_leaf` |The same protected forwarder passes the primary pointers to an ordinary leaf.
+|`pointer_tail_merged` |Runtime pointer joins select between independent incoming roots and globals before tail-position forwarding to a protected leaf.
+|`pointer_tail_merged_ordinary_leaf` |The runtime joins cross into an ordinary leaf.
+|`pointer_tail_stack_formals` |Eight scalar words force both incoming pointers onto the stack; the tail-position leaf call passes its arguments in registers.
+|`pointer_tail_stack_formals_ordinary_leaf` |The incoming stack pointers are forwarded to an ordinary leaf in tail position.
+|`pointer_tail_musttail` |Explicit `musttail` on an EDDI pointer boundary receives a diagnostic instead of silently changing the required tail-call contract.
 |`stack_pointer_formals` |Eight XLEN scalar arguments force two ordinary pointer formals into stack argument slots nine and ten, across nested protected calls.
 |`stack_pointer_formals_caller_only` |The same stack arguments cross from a protected owner into ordinary helpers.
 |`stack_pointer_formals_callee_only` |Ordinary callers pass local and global pointers to protected helpers without allocating shadow pointees.
@@ -35,7 +42,7 @@ The manifest runs EDDI and SWIFT with coarse- and fine-grained scheduling.
 |`mixed_pointer_origins` |Independent pointer joins select between two inherited roots, the helper's own local storage and globals across nested calls with distinct frames.
 |===
 
-The nested frame cases call the same helpers from separate local and global
+The original nested frame cases call the same helpers from separate local and global
 callers. One call also passes a caller-local pointer and a global pointer
 together, so each pointer needs its own relationship to the shadow pointee.
 Forwarding a pointer does not make it refer to the forwarding function's frame.
@@ -60,12 +67,28 @@ pointers are read again after nested calls. The inner helper branches only on a
 scalar result choice, avoiding a global/local pointer merge in these cases.
 Three volatile inputs exercise both paths twice. Main compares the results with
 literal values calculated independently by expanding the weighted sums and
-checksums. Sibling-call optimization is disabled by the shared runner.
+checksums. Sibling-call optimization is disabled by default; the `pointer_tail_*`
+cases explicitly enable it with optimization level two.
 
 The wide-argument case keeps nonzero high and low halves of its tag in the
 result. With the default ABIs, the pointer is passed in `a3` on RV32 and `a2`
 on RV64. Separate local and global callers exercise the same forwarding helper;
 each result is checked twice against a literal oracle.
+
+The EDDI-only tail fixtures use a single direct call in the forwarding helper's
+return expression. The input IR contains a `tail` call and the unprotected
+backend produces a genuine sibling call. The protected forwarder retains an
+ordinary returning call before frame layout, so its immutable incoming-pointer
+snapshots and any runtime-merge metadata remain available during argument
+checks. Its seven-element volatile frame differs from the leaf's three-element
+frame and the owner's two ten-element arrays. Local/global, global/local,
+local/local and global/global pairs run for three inputs twice, with literal
+weighted-sum oracles. Runtime-merge variants choose each outgoing pointer
+independently; incoming-stack variants place both pointers above eight XLEN
+scalar arguments before forwarding them in argument registers. All six runtime
+selections run both schedules and all four control-flow protection modes.
+These fixtures establish functional equivalence and machine verification;
+they do not establish support for genuine inherited-pointer `musttail` calls.
 
 The pointer-formal fixtures are EDDI-only. Both pointer arguments are full
 XLEN values on RV32 and RV64; no hidden aggregate or `byval` argument changes

@@ -111,8 +111,8 @@ other EDDI functions. Each stack formal is identified by its actual ABI offset,
 including when wide scalar arguments change its location between RV32 and RV64.
 Entry capture reads the primary and shadow argument banks independently.
 Checks use the propagated expectation rather than measuring the pointer pair
-being checked. Indirect or by-value pointer parameters, inherited-pointer
-tail calls, pointer returns, arbitrary memory reloads, and pointer bits transported
+being checked. Indirect or by-value pointer parameters,
+pointer returns, arbitrary memory reloads, and pointer bits transported
 through floating-point registers remain outside this tracking contract.
 
 Realigned variable-sized EDDI frames use \texttt{x6}/\texttt{x30}
@@ -131,7 +131,7 @@ point into separate caller frames whose size is unknown to the callee. The
 exception is identified from the saved-register spill metadata. Ordinary data
 stores, including values held in \texttt{s0}, retain their value checks.
 
-\subsubsection{Selective EDDI tail-call boundaries}
+\subsubsection{EDDI tail-call boundaries}
 An ordinary caller invoking an EDDI callee must regain control to check the
 results and restore its saved context. Such direct calls are lowered as ordinary
 returning calls before frame layout, even when sibling-call optimization is
@@ -141,6 +141,16 @@ Balance checks retain the results and preserved state while excluding discarded
 caller-clobbered temporaries, which may hold distinct primary and shadow
 addresses. Calls marked \texttt{musttail} across this boundary are rejected
 because the required returning wrapper cannot preserve their tail-call contract.
+
+An EDDI caller passing pointer-typed arguments also retains a returning call,
+keeping its frame available for independently captured pointer expectations and
+selective-call context. This accepts inherited-pointer forwarding in tail
+position with sibling-call optimization enabled. The decision conservatively
+covers all outgoing pointer-typed arguments, including calls to ordinary
+helpers. Scalar calls between compatible protected functions remain eligible
+for tail-call optimization. Pointer calls marked \texttt{musttail} are rejected
+with an explicit diagnostic because they require a separate frame-lifetime
+contract.
 
 \subsubsection{Machine-instruction metadata}
 Indirect calls from protected functions declare the shadow arguments, results

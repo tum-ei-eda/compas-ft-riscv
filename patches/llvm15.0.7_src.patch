@@ -374,31 +374,54 @@ diff --git a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp b/llvm/lib/Target/RISCV
    for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i) {
      CCValAssign &VA = ArgLocs[i];
      SDValue ArgValue;
-@@ -11179,6 +11235,24 @@
-     analyzeOutputArgs(MF, ArgCCInfo, Outs, /*IsRet=*/false, &CLI,
+@@ -11180,13 +11236,46 @@
                        CallConv == CallingConv::Fast ? CC_RISCV_FastCC
                                                      : CC_RISCV);
-+
+
 +  // An ordinary caller needs a returning wrapper around an EDDI callee.
-+  // Keep LLVM's exact result registers, call mask and frame while they are
-+  // still available; late tail conversion runs after the original epilogue.
++  // An EDDI caller may also need its frame's pointer deltas while checking
++  // outgoing arguments. Keep that frame for every pointer-typed argument;
++  // physical argument positions no longer retain the original IR types.
++  // Decide here so LLVM retains exact results, call masks and context slots.
++  bool CompasPointerArgs = false;
++  if (IsTailCall &&
++      riscv_common::inCSString(cl::enable_eddi, MF.getName().str()))
++    for (const auto &Arg : CLI.getArgs())
++      CompasPointerArgs |= Arg.Ty->isPointerTy();
 +  const auto *CompasCallee = dyn_cast<GlobalAddressSDNode>(Callee);
-+  if (IsTailCall && CompasCallee &&
++  const bool CompasSelectiveBoundary =
++      CompasCallee &&
 +      riscv_common::inCSString(cl::enable_eddi,
 +                              CompasCallee->getGlobal()->getName().str()) &&
-+      !riscv_common::isDmrFunction(MF.getName().str())) {
++      !riscv_common::isDmrFunction(MF.getName().str());
++  const bool CompasReturningCall =
++      IsTailCall && (CompasPointerArgs || CompasSelectiveBoundary);
++  if (CompasReturningCall) {
 +    if (CLI.CB && CLI.CB->isMustTailCall()) {
 +      MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
 +          MF.getFunction(),
-+          "COMPAS: musttail calls across selective EDDI boundaries are "
-+          "unsupported"});
-+    } else {
-+      IsTailCall = false;
++          CompasPointerArgs
++              ? "COMPAS: musttail calls with EDDI pointer arguments require a "
++                "returning call"
++              : "COMPAS: musttail calls across selective EDDI boundaries are "
++                "unsupported"});
 +    }
++    // Continue lowering rejected musttail IR with valid frame semantics.
++    // The diagnostic above makes compilation fail without a later crash.
++    IsTailCall = false;
 +  }
-
++
    // Check if it's really possible to do a tail call.
    if (IsTailCall)
+     IsTailCall = isEligibleForTailCallOptimization(ArgCCInfo, CLI, MF, ArgLocs);
+
+   if (IsTailCall)
+     ++NumTailCalls;
+-  else if (CLI.CB && CLI.CB->isMustTailCall())
++  else if (CLI.CB && CLI.CB->isMustTailCall() && !CompasReturningCall)
+     report_fatal_error("failed to perform tail call elimination on a call "
+                        "site marked musttail");
+
 diff --git a/llvm/lib/Target/RISCV/RISCVMCInstLower.cpp b/llvm/lib/Target/RISCV/RISCVMCInstLower.cpp
 --- a/llvm/lib/Target/RISCV/RISCVMCInstLower.cpp
 +++ b/llvm/lib/Target/RISCV/RISCVMCInstLower.cpp
