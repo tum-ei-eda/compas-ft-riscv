@@ -55,12 +55,17 @@ const unsigned kGP{llvm::RISCV::X3};
 const unsigned kTP{llvm::RISCV::X4};
 // frame pointer register
 const unsigned kFP{llvm::RISCV::X8};
+// Realigned variable-sized EDDI frames reserve t1/t5 as an independent BP
+// pair. Ordinary ABI calls can clobber both; COMPAS preserves them at calls.
+const unsigned kEddiBP{llvm::RISCV::X6};
 
 RegType getRegType(llvm::Register);
 bool isDmrFunction(const std::string &name);
+bool usesEddiBasePointer(const llvm::MachineFunction &MF);
 // Stable before/after RA: identify EDDI variable frames and pointer-typed IR
 // merges. Their bank appends GPR deltas and one delta per ordinary FI;
-// variable frames also reserve three tail words for the outgoing call context.
+// variable frames reserve three outgoing-call words, plus two BP words when
+// realigned fixed locals need a stable base independent of the moving SP.
 bool usesPointerProvenance(const llvm::MachineFunction &MF);
 unsigned pointerProvenanceSlots(const llvm::MachineFunction &MF);
 // Finalize emitted instrumentation without changing instruction order or

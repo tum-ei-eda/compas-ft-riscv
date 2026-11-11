@@ -70,17 +70,31 @@ assembly code for a particular RISCV processor.
 \subsubsection{Stack pointer arguments}
 EDDI allocates separate primary and shadow stack frames. For call arguments
 derived from the current frame, the argument check compares the shadow address
-with the primary address plus the original frame size. The analysis follows
-register values across basic blocks and preserves value checks for scalar
-arguments loaded from stack memory. SWIFT uses one stack and checks its argument
-values directly. Both instruction schedules retain these checks.
+with the primary address plus the independently established frame separation,
+including padding required for stack realignment. Each variable-sized allocation
+has its own expected separation, which remains attached to its pointers across
+later allocations. The analysis follows register values across basic blocks and
+preserves value checks for scalar arguments loaded from stack memory. SWIFT uses
+one stack and checks its argument values directly. Both instruction schedules
+retain these checks.
 
 Address tracking covers copies and full-width addition and subtraction in integer
-registers. Mixed stack and non-stack provenance, or unsupported arithmetic on a
-tracked stack address, produces a compilation error at the affected call.
-Forwarding pointers from another EDDI frame, spilling pointer values to memory,
-and transporting pointer bits through floating-point registers require additional
-provenance tracking and remain unsupported by this analysis.
+registers, supported pointer merges, and exact full-word private spill slots.
+Ordinary pointer parameters passed in integer argument registers retain an
+immutable incoming separation when forwarded through other EDDI functions.
+Checks use the propagated expectation rather than measuring the pointer pair
+being checked. Stack-passed or by-value pointer parameters, inherited-pointer
+tail calls, pointer returns, arbitrary memory reloads, and pointer bits transported
+through floating-point registers remain outside this tracking contract.
+
+Realigned variable-sized EDDI frames use \texttt{x6}/\texttt{x30}
+(\texttt{t1}/\texttt{t5}) as the primary/shadow base-pointer pair for aligned
+fixed locals. The stack pointers remain \texttt{x2}/\texttt{x9}, and the frame
+pointers remain \texttt{x8}/\texttt{x31}. EDDI reserves the base-pointer pair
+before register allocation and preserves both actual values in separate
+FP-relative slots around every returning call, including duplicated libcalls.
+These registers remain caller-clobbered under the ordinary ABI; the caller's
+instrumentation restores them before further fixed-frame accesses.
 
 Before a callee establishes its own frame pointer, the incoming \texttt{s0}
 and its shadow belong to the caller. EDDI preserves both independently in the

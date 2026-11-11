@@ -267,6 +267,14 @@ bool riscv_common::isDmrFunction(const std::string &name) {
          inCSString(llvm::cl::enable_nzdc_nemesec, name);
 }
 
+bool riscv_common::usesEddiBasePointer(const llvm::MachineFunction &MF) {
+  return inCSString(llvm::cl::enable_eddi, std::string{MF.getName()}) &&
+         MF.getFrameInfo().hasVarSizedObjects() &&
+         MF.getSubtarget<llvm::RISCVSubtarget>()
+             .getRegisterInfo()
+             ->hasStackRealignment(MF);
+}
+
 bool riscv_common::usesPointerProvenance(const llvm::MachineFunction &MF) {
   if (!inCSString(llvm::cl::enable_eddi, std::string{MF.getName()}))
     return false;
@@ -301,7 +309,8 @@ riscv_common::pointerProvenanceSlots(const llvm::MachineFunction &MF) {
   // 32 + FI, including holes in the frame-index space. Fixed objects have
   // negative indices and the immutable incoming-pointer prefix is separate.
   return 32 + std::max(0, MF.getFrameInfo().getObjectIndexEnd()) +
-         (MF.getFrameInfo().hasVarSizedObjects() ? 3 : 0);
+         (MF.getFrameInfo().hasVarSizedObjects() ? 3 : 0) +
+         (usesEddiBasePointer(MF) ? 2 : 0);
 }
 
 bool riscv_common::inCSString(std::string cs_string, std::string x) {

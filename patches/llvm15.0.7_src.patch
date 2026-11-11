@@ -184,7 +184,63 @@ diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp b/llvm/lib/Target/RISC
  #include "RISCVMachineFunctionInfo.h"
  #include "RISCVSubtarget.h"
  #include "llvm/CodeGen/MachineFrameInfo.h"
-@@ -998,6 +999,7 @@
+@@ -249,6 +250,14 @@
+          TRI->hasStackRealignment(MF);
+ }
+
++Register RISCVFrameLowering::getBPReg(const MachineFunction &MF) const {
++  // EDDI owns s1 as its shadow SP. Its aligned fixed frame uses the
++  // caller-owned t1/t5 pair, which COMPAS preserves across returning calls.
++  if (riscv_common::inCSString(cl::enable_eddi, MF.getName().str()))
++    return RISCV::X6;
++  return RISCVABI::getBPReg();
++}
++
+ // Determines the size of the frame and maximum call frame size.
+ void RISCVFrameLowering::determineFrameLayout(MachineFunction &MF) const {
+   MachineFrameInfo &MFI = MF.getFrameInfo();
+@@ -399,7 +408,7 @@
+
+   Register FPReg = getFPReg(STI);
+   Register SPReg = getSPReg(STI);
+-  Register BPReg = RISCVABI::getBPReg();
++  Register BPReg = getBPReg(MF);
+
+   // Debug location must be unknown since the first debug location is used
+   // to determine the end of the prologue.
+@@ -756,7 +765,7 @@
+     // | VarSize objects          | |
+     // |--------------------------| -- <-- SP
+     if (hasBP(MF)) {
+-      FrameReg = RISCVABI::getBPReg();
++      FrameReg = getBPReg(MF);
+     } else {
+       // VarSize objects must be empty in this case!
+       assert(!MFI.hasVarSizedObjects());
+@@ -800,7 +809,7 @@
+
+   // This case handles indexing off both SP and BP.
+   // If indexing off SP, there must not be any var sized objects
+-  assert(FrameReg == RISCVABI::getBPReg() || !MFI.hasVarSizedObjects());
++  assert(FrameReg == getBPReg(MF) || !MFI.hasVarSizedObjects());
+
+   // When using SP to access frame objects, we need to add RVV stack size.
+   //
+@@ -863,9 +872,11 @@
+     SavedRegs.set(RISCV::X1);
+     SavedRegs.set(RISCV::X8);
+   }
+-  // Mark BP as used if function has dedicated base pointer.
++  // Mark BP as used if function has dedicated base pointer. EDDI's t1 is
++  // caller-owned and absent from the ordinary ABI save list; COMPAS preserves
++  // it and its shadow at each returning call instead of adding an ABI promise.
+   if (hasBP(MF))
+-    SavedRegs.set(RISCVABI::getBPReg());
++    SavedRegs.set(getBPReg(MF));
+
+   // If interrupt is enabled and there are calls in the handler,
+   // unconditionally save all Caller-saved registers and
+@@ -998,6 +1009,7 @@
 
  void RISCVFrameLowering::processFunctionBeforeFrameFinalized(
      MachineFunction &MF, RegScavenger *RS) const {
@@ -192,7 +248,7 @@ diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp b/llvm/lib/Target/RISC
    const RISCVRegisterInfo *RegInfo =
        MF.getSubtarget<RISCVSubtarget>().getRegisterInfo();
    MachineFrameInfo &MFI = MF.getFrameInfo();
-@@ -1098,6 +1100,17 @@
+@@ -1098,6 +1110,17 @@
        // Ensure the stack remains aligned after adjustment.
        Amount = alignSPAdjust(Amount);
 
@@ -210,7 +266,7 @@ diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp b/llvm/lib/Target/RISC
        if (MI->getOpcode() == RISCV::ADJCALLSTACKDOWN)
          Amount = -Amount;
 
-@@ -1228,6 +1241,11 @@
+@@ -1228,6 +1251,11 @@
  }
 
  bool RISCVFrameLowering::enableShrinkWrapping(const MachineFunction &MF) const {
@@ -391,13 +447,22 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/
    unsigned getVarArgsSaveSize() const { return VarArgsSaveSize; }
    void setVarArgsSaveSize(int Size) { VarArgsSaveSize = Size; }
 diff --git a/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp b/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
-index 0c9219076498..ca13459d1214 100644
 --- a/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
 +++ b/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
-@@ -108,6 +108,103 @@ BitVector RISCVRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
+@@ -95,7 +95,7 @@
+   // Reserve the base register if we need to realign the stack and allocate
+   // variable-sized objects at runtime.
+   if (TFI->hasBP(MF))
+-    markSuperRegs(Reserved, RISCVABI::getBPReg()); // bp
++    markSuperRegs(Reserved, TFI->getBPReg(MF)); // bp
+
+   // V registers for code generation. We handle them manually.
+   markSuperRegs(Reserved, RISCV::VL);
+@@ -107,6 +107,103 @@
+   // Floating point environment registers.
    markSuperRegs(Reserved, RISCV::FRM);
    markSuperRegs(Reserved, RISCV::FFLAGS);
-
++
 +  if (riscv_common::inCSString(llvm::cl::enable_cfcss,
 +                               std::string{MF.getName()}) ||
 +      riscv_common::inCSString(llvm::cl::enable_rasm,
@@ -494,10 +559,9 @@ index 0c9219076498..ca13459d1214 100644
 +    markSuperRegs(Reserved, RISCV::F30_H);
 +    markSuperRegs(Reserved, RISCV::F31_H);
 +  }
-+
+
    assert(checkAllSuperRegsMarked(Reserved));
    return Reserved;
- }
 diff --git a/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp b/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
 --- a/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
 +++ b/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
@@ -538,3 +602,15 @@ diff --git a/llvm/lib/Target/RISCV/RISCVInstrInfo.td b/llvm/lib/Target/RISCV/RIS
  // Pessimistically assume the stack pointer will be clobbered
  let Defs = [X2], Uses = [X2] in {
  def ADJCALLSTACKDOWN : Pseudo<(outs), (ins i32imm:$amt1, i32imm:$amt2),
+diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.h b/llvm/lib/Target/RISCV/RISCVFrameLowering.h
+--- a/llvm/lib/Target/RISCV/RISCVFrameLowering.h
++++ b/llvm/lib/Target/RISCV/RISCVFrameLowering.h
+@@ -45,6 +45,8 @@
+
+   bool hasBP(const MachineFunction &MF) const;
+
++  Register getBPReg(const MachineFunction &MF) const;
++
+   bool hasReservedCallFrame(const MachineFunction &MF) const override;
+   MachineBasicBlock::iterator
+   eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,

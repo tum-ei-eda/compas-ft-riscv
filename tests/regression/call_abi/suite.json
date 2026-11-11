@@ -141,6 +141,18 @@
       "functions": ["abi_dynamic_small_frame"]
     },
     {
+      "name": "realigned_dynamic_stack_arguments",
+      "defines": ["TEST_CASE=19"],
+      "modes": ["EDDI"],
+      "functions": ["abi_realigned_dynamic_frame", "abi_dynamic_pointer_middle", "abi_dynamic_pointer_leaf", "abi_ten_args"]
+    },
+    {
+      "name": "realigned_dynamic_stack_arguments_caller_only",
+      "defines": ["TEST_CASE=19"],
+      "modes": ["EDDI"],
+      "functions": ["abi_realigned_dynamic_frame"]
+    },
+    {
       "name": "libcall_stack_arguments",
       "defines": ["TEST_CASE=16"],
       "modes": ["EDDI", "SWIFT"],

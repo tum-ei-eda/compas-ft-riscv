@@ -16,11 +16,11 @@ python3 tests/regression/run.py --case 'stack_args/*' \
   --verify-machineinstrs --build-dir build/tests-todo-stack
 ```
 
-## EDDI: realigned dynamic frames
+## Other DMR modes: realigned dynamic frames
 
-- [ ] Give realigned variable-sized EDDI frames a separate base-pointer contract.
+- [ ] Support realigned variable-sized frames in SWIFT and NZDC modes.
 
-VLAs requiring additional stack realignment, such as a runtime-sized `__attribute__((aligned(64)))` local array, are explicitly rejected with `realigned EDDI dynamic frames require a separate base pointer`. LLVM uses `x9`/`s1` as a base pointer for this combination, conflicting with EDDI's shadow SP. Supporting it requires distinct base-pointer ownership and corresponding primary/shadow addressing; accepting the current register assignment would overwrite an allocated bank.
+SWIFT, NZDC, NZDC+NEMESIS and NZDC+NEMESEC still abort with `reg not found in P2S_` for a runtime-sized `__attribute__((aligned(64)))` local array on RV32/RV64 with both backends. These modes retain LLVM's `x9`/`s1` base pointer, conflicting with the monitor's shadow SP and lacking a primary-to-shadow register mapping. Extending support requires distinct base-pointer ownership and corresponding address tracking and call preservation. The realigned dynamic regression cases explicitly select EDDI only.
 
 ## Call-boundary instrumentation
 

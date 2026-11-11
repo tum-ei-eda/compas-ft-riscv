@@ -8,7 +8,7 @@ typedef unsigned long word;
 typedef unsigned long long wide;
 
 #if TEST_CASE == 4 || (TEST_CASE >= 7 && TEST_CASE <= 9) || \
-    TEST_CASE == 14 || TEST_CASE == 15
+    TEST_CASE == 14 || TEST_CASE == 15 || TEST_CASE == 19
 NOINLINE word abi_ten_args(word a, word b, word c, word d, word e,
                           word f, word g, word h, word i, word j)
 {
@@ -23,7 +23,7 @@ NOINLINE word abi_leaf(word value)
 }
 #endif
 
-#if TEST_CASE == 6 || TEST_CASE == 13
+#if TEST_CASE == 6 || TEST_CASE == 13 || TEST_CASE == 19
 /* Intentionally unprotected: inspect SP without duplicating inline assembly. */
 NOINLINE word abi_stack_pointer(void)
 {
@@ -357,7 +357,7 @@ int main(void)
     return 42;
 }
 
-#elif TEST_CASE == 15
+#elif TEST_CASE == 15 || TEST_CASE == 19
 volatile word abi_inputs[] = {1, 7, 13};
 volatile word abi_first_counts[] = {3, 8, 17};
 volatile word abi_second_counts[] = {9, 4, 21};
@@ -371,6 +371,11 @@ NOINLINE word abi_dynamic_pointer_leaf(const volatile word *array,
 NOINLINE word abi_dynamic_pointer_middle(const volatile word *array,
                                         word count, word bias)
 {
+#if TEST_CASE == 19
+    /* The noinline boundary observes the actual fixed/VLA address. */
+    if (((word)array & 63UL) != 0)
+        return 0;
+#endif
     word leaf = abi_dynamic_pointer_leaf(array, count, bias);
     word ten = abi_ten_args(array[0], array[count - 1], bias, count,
                            bias + 2, bias + 3, bias + 4, bias + 5,
@@ -379,6 +384,7 @@ NOINLINE word abi_dynamic_pointer_middle(const volatile word *array,
     return leaf + ten + array[count / 2];
 }
 
+#if TEST_CASE == 15
 NOINLINE word abi_dynamic_small_frame(word value, word first_count,
                                      word second_count)
 {
@@ -429,6 +435,93 @@ int main(void)
     }
     return 42;
 }
+
+#else
+volatile word abi_realigned_dynamic_residues;
+
+/* Counts arrive in the ninth and tenth integer argument slots. */
+NOINLINE word abi_realigned_dynamic_frame(word a, word b, word c, word d,
+                                         word e, word f, word g, word h,
+                                         word first_count, word second_count)
+{
+    volatile word fixed[33] __attribute__((aligned(64)));
+    word index;
+    for (index = 0; index != 33; ++index)
+        fixed[index] = 2*a + 3*index + 7;
+
+    volatile word first[first_count] __attribute__((aligned(64)));
+    for (index = 0; index != first_count; ++index)
+        first[index] = a + 2*index + 5;
+    word first_result = abi_dynamic_pointer_middle(first, first_count, a + 1);
+
+    /* Both arrays and the aligned fixed object remain live after allocation. */
+    volatile word second[second_count] __attribute__((aligned(64)));
+    for (index = 0; index != second_count; ++index)
+        second[index] = 3*a + 5*index + 11;
+    word second_result = abi_dynamic_pointer_middle(second, second_count,
+                                                  a + 3);
+    word third_result = abi_dynamic_pointer_middle(first, first_count, a + 5);
+    word fixed_result = abi_dynamic_pointer_middle(fixed, 33, a + 7);
+    word passed = abi_ten_args(a, b, c, d, e, f, g, h,
+                              first_count, second_count);
+    word result = first_result + 2*second_result + 3*third_result +
+                  4*fixed_result + 5*passed;
+    for (index = 0; index != 33; ++index)
+        result += fixed[index] * (index + 1);
+    for (index = 0; index != first_count; ++index)
+        result += first[index] * (index + 1);
+    for (index = 0; index != second_count; ++index)
+        result += second[index] * (index + 1);
+    return result;
+}
+
+/* Ordinary callers vary entry alignment without protecting the SP probe. */
+NOINLINE word abi_realigned_dynamic_entry(word value, word first_count,
+                                         word second_count, word pad_words)
+{
+    volatile word padding[pad_words];
+    padding[0] = 0x12345UL;
+    padding[pad_words - 1] = 0x6789UL;
+    word before = abi_stack_pointer();
+    word result = abi_realigned_dynamic_frame(value, value + 1, value + 2,
+        value + 3, value + 4, value + 5, value + 6, value + 7,
+        first_count, second_count);
+    word after = abi_stack_pointer();
+    if ((before & 15UL) != 0 || before != after ||
+        padding[0] != 0x12345UL || padding[pad_words - 1] != 0x6789UL)
+        return 0;
+    abi_realigned_dynamic_residues |= 1UL << ((before & 63UL) >> 4);
+    return result;
+}
+
+int main(void)
+{
+    /* Middle = 2*a[0]+4*a[n/2]+7*a[n-1]+49*bias+4*n+220.
+     * Add four weighted middle results, 5*(36*x+168+9*n+10*m),
+     * and the independent weighted checksums of all three arrays. */
+    const word expected[] = {55692UL, 67115UL, 114728UL};
+    unsigned int round;
+    for (round = 0; round != 2; ++round) {
+        unsigned int residue;
+        for (residue = 0; residue != 4; ++residue) {
+            word pad_words = 2 + residue * (16 / sizeof(word));
+            unsigned int index;
+            for (index = 0; index != 3; ++index) {
+                if (abi_realigned_dynamic_entry(abi_inputs[index],
+                        abi_first_counts[index], abi_second_counts[index],
+                        pad_words) != expected[index])
+                    return 17;
+            }
+        }
+    }
+#if defined(__riscv)
+    /* The fixed outgoing call area shifts every residue by the same amount. */
+    if (abi_realigned_dynamic_residues != 15UL)
+        return 17;
+#endif
+    return 42;
+}
+#endif
 
 #elif TEST_CASE == 16 || TEST_CASE == 17
 volatile word abi_inputs[] = {1, 7, 13};

@@ -33,6 +33,8 @@ complete literal stdout; the other cases produce no output.
 |`large_fixed_stack_arguments_caller_only` |Only the owner of the large fixed frame is protected, while the ten-argument helper uses the ordinary ABI.
 |`dynamic_stack_arguments_small_frame` |A small fixed frame and two simultaneously live VLAs retain independent contents across nested pointer calls and ten-word stack-argument calls.
 |`dynamic_stack_arguments_small_frame_caller_only` |Only the VLA owner is protected, checking runtime stack movement across ordinary nested callees.
+|`realigned_dynamic_stack_arguments` |An EDDI-protected ten-argument owner retains a 64-byte-aligned fixed array and two aligned VLAs across protected pointer helpers and outgoing stack-argument calls, with ordinary callers covering every entry-SP residue modulo 64.
+|`realigned_dynamic_stack_arguments_caller_only` |Only the realigned VLA owner is protected; pointer helpers and the ten-argument leaf use the ordinary ABI.
 |`libcall_stack_arguments` |A freestanding variadic `printf` shim receives ten character arguments, checking stack arguments, distinct return counts and live fixed locals across two calls.
 |`libcall_dynamic_stack_arguments` |The same calls retain fixed locals and a runtime-sized array, checking libcall preservation with a moving SP.
 |`duplicated_libcall` |A freestanding `memcmp` shim compares local/global and local/local buffers, retaining zero, negative and positive results and whole-buffer checksums across calls.
@@ -96,6 +98,22 @@ Outgoing stack arguments use separate primary/shadow call storage at the ABI
 offsets; returning from the call restores the caller's prior stack context.
 The small-frame cases exercise these operations while both arrays remain live.
 
+The realigned dynamic cases reuse the pointer helpers and size pairs, adding
+a runtime-indexed 33-word fixed array and 64-byte alignment to all three
+arrays. A noinline helper checks each actual array address. The VLA counts
+arrive as incoming stack arguments and remain live across nested calls;
+the owner also forwards all ten original arguments through an outgoing call.
+Both VLAs coexist while the first is read again and the fixed array is passed
+to a helper. Literal results include every array element after all calls.
+An ordinary wrapper repeats each input for all four ABI-valid caller-SP
+residues modulo 64, checking its SP and padding after return. These cases
+select EDDI only.
+Realigned dynamic EDDI frames use `t1`/`x6` as the primary fixed-frame base and
+`t5`/`x30` as its shadow while SP moves for VLAs. Each base pointer is preserved
+independently across returning calls; `s1` remains the shadow SP. Incoming
+scalar stack arguments use the stable frame-pointer context rather than a
+realigned or moving SP.
+
 The libcall cases give their unprotected shims the real `printf` and `memcmp`
 signatures and symbol names, so COMPAS handles them as recognized libcalls.
 Only callers are selected, for EDDI and SWIFT. The `printf` shim implements
@@ -135,8 +153,8 @@ padding for alignment rounding. Spilled frame addresses retain their known
 primary-to-shadow offset; ordinary scalar stores still require equal values.
 An ordinary caller checks return values, ABI-preserved registers and control
 state after a protected call. Discarded caller-clobbered temporaries fall outside
-that return contract. Incoming stack arguments in realigned callees, VLAs
-requiring additional stack realignment and save/restore libcalls remain separate
+that return contract. Stack-passed pointer formals and save/restore libcalls
+remain separate
 follow-ups in link:../../TODO.md[the test TODO].
 
 The signature-join case exercises preservation of both the running signature and

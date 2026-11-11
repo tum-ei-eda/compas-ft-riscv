@@ -784,11 +784,6 @@ void RISCVDmr::calc_framesize() {
           .getRegisterInfo()
           ->hasStackRealignment(*MF_)) {
     const auto &frame = MF_->getFrameInfo();
-    // LLVM uses s1 as a base pointer for this combination. It is already
-    // EDDI's shadow SP, so accepting it would overwrite an allocated bank.
-    if (frame.hasVarSizedObjects())
-      llvm::report_fatal_error(
-          "COMPAS: realigned EDDI dynamic frames require a separate base pointer");
     const uint64_t alignment = frame.getMaxAlign().value();
     // Aligning SP can move a frame down by A-1 bytes, while CSI and fixed
     // objects remain relative to the pre-alignment SP/FP. Leave a full guard
@@ -838,6 +833,7 @@ void RISCVDmr::analyzeStackArguments() {
   const Value unknown{Relation::Unsupported, {}, all_bits};
   const bool runtime_origins = riscv_common::usesPointerProvenance(*MF_);
   const bool dynamic_frame = MF_->getFrameInfo().hasVarSizedObjects();
+  const bool base_pointer = riscv_common::usesEddiBasePointer(*MF_);
   auto runtimeOrigin = [&](unsigned key) {
     const unsigned slot = key < register_count ? key - llvm::RISCV::X0
                                                : 32 + key - register_count;
@@ -1025,7 +1021,9 @@ void RISCVDmr::analyzeStackArguments() {
     // Read all sources before killing destinations, including reused registers.
     for (auto &item : state)
       if (item.first < register_count && MI.modifiesRegister(item.first, TRI_) &&
-          !(dynamic_frame && MI.isCall() && item.first == riscv_common::kSP))
+          !(MI.isCall() &&
+            ((dynamic_frame && item.first == riscv_common::kSP) ||
+             (base_pointer && item.first == riscv_common::kEddiBP))))
         assign(item.first, result);
     if (MI.mayStore() && spill != spills.end())
       assign(spill->second.key, stored);
@@ -1598,10 +1596,11 @@ void RISCVDmr::duplicateInstructions() {
 unsigned RISCVDmr::pointerContextSlot(unsigned index) const {
   const auto *info = MF_->getInfo<llvm::RISCVMachineFunctionInfo>();
   const int bank = info->getCompasPointerDeltaFrameIndex();
-  if (index >= 3 || bank >= 0 || !MF_->getFrameInfo().hasVarSizedObjects())
+  const unsigned words = riscv_common::usesEddiBasePointer(*MF_) ? 5 : 3;
+  if (index >= words || bank >= 0 || !MF_->getFrameInfo().hasVarSizedObjects())
     llvm::report_fatal_error("COMPAS: dynamic stack context was not prepared");
   return MF_->getFrameInfo().getObjectSize(bank) / isa_config_.word_length -
-         info->getCompasIncomingPointerRegs().size() - 3 + index;
+         info->getCompasIncomingPointerRegs().size() - words + index;
 }
 
 void RISCVDmr::expandDynamicStack() {
@@ -1697,6 +1696,7 @@ void RISCVDmr::preserveDynamicStackAcrossCalls() {
   // Preserve the actual caller state, independently of the checked delta.
   const auto scratch = P2S_.at(riscv_common::k0);
   const auto shadow_sp = P2S_.at(riscv_common::kSP);
+  const bool base_pointer = riscv_common::usesEddiBasePointer(*MF_);
   for (auto &MBB : *MF_) {
     if (&MBB == err_bb_)
       continue;
@@ -1706,10 +1706,28 @@ void RISCVDmr::preserveDynamicStackAcrossCalls() {
       addOffset(MBB, MI.getIterator(), *TII_, scratch, shadow_sp, 0,
                 MI.getDebugLoc());
       storePointerDelta(&MBB, MI.getIterator(), pointerContextSlot(2));
+      if (base_pointer) {
+        // BP records the aligned fixed-frame base while SP moves for VLAs.
+        // Preserve each actual bank independently of its expected separation.
+        addOffset(MBB, MI.getIterator(), *TII_, scratch,
+                  riscv_common::kEddiBP, 0, MI.getDebugLoc());
+        storePointerDelta(&MBB, MI.getIterator(), pointerContextSlot(3));
+        addOffset(MBB, MI.getIterator(), *TII_, scratch,
+                  P2S_.at(riscv_common::kEddiBP), 0, MI.getDebugLoc());
+        storePointerDelta(&MBB, MI.getIterator(), pointerContextSlot(4));
+      }
       addOffset(MBB, MI.getIterator(), *TII_, scratch, riscv_common::k0, 0);
       const auto after = std::next(MI.getIterator());
       loadPointerDelta(&MBB, after, {PointerOrigin::Kind::Context, 2});
       addOffset(MBB, after, *TII_, shadow_sp, scratch, 0, MI.getDebugLoc());
+      if (base_pointer) {
+        loadPointerDelta(&MBB, after, {PointerOrigin::Kind::Context, 3});
+        addOffset(MBB, after, *TII_, riscv_common::kEddiBP, scratch, 0,
+                  MI.getDebugLoc());
+        loadPointerDelta(&MBB, after, {PointerOrigin::Kind::Context, 4});
+        addOffset(MBB, after, *TII_, P2S_.at(riscv_common::kEddiBP), scratch, 0,
+                  MI.getDebugLoc());
+      }
       addOffset(MBB, after, *TII_, scratch, riscv_common::k0, 0);
     }
   }
