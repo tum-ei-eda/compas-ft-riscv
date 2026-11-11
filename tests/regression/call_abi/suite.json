@@ -25,6 +25,56 @@
       "functions": ["abi_caller", "abi_leaf"]
     },
     {
+      "name": "dmr_callee_cfp_caller",
+      "defines": ["TEST_CASE=1"],
+      "functions": ["abi_leaf"],
+      "cfp_functions": ["abi_caller"],
+      "cfp_modes": ["CFCSS", "RASM", "RACFED"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "dmr_caller_cfp_callee",
+      "defines": ["TEST_CASE=1"],
+      "functions": ["abi_caller"],
+      "cfp_functions": ["abi_leaf"],
+      "cfp_modes": ["CFCSS", "RASM", "RACFED"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "nested_dmr_callee_cfp_callers",
+      "defines": ["TEST_CASE=2"],
+      "functions": ["abi_leaf"],
+      "cfp_functions": ["abi_nested_top", "abi_nested_middle"],
+      "cfp_modes": ["CFCSS", "RASM", "RACFED"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "nested_dmr_callers_cfp_callee",
+      "defines": ["TEST_CASE=2"],
+      "functions": ["abi_nested_top", "abi_nested_middle"],
+      "cfp_functions": ["abi_leaf"],
+      "cfp_modes": ["CFCSS", "RASM", "RACFED"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "split_dmr_callee_cfp_caller",
+      "sources": ["call_abi.c", "selective_leaf.c"],
+      "defines": ["TEST_CASE=20"],
+      "functions": ["abi_selective_leaf"],
+      "cfp_functions": ["abi_selective_caller"],
+      "cfp_modes": ["CFCSS", "RASM", "RACFED"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "split_dmr_both_cfp_caller",
+      "sources": ["call_abi.c", "selective_leaf.c"],
+      "defines": ["TEST_CASE=20"],
+      "functions": ["abi_selective_caller", "abi_selective_leaf"],
+      "cfp_functions": ["abi_selective_caller"],
+      "cfp_modes": ["CFCSS", "RASM", "RACFED"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
       "name": "nested_live_values",
       "defines": ["TEST_CASE=2"],
       "functions": ["abi_nested_top", "abi_nested_middle", "abi_leaf"]

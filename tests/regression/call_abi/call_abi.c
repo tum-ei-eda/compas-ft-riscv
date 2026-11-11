@@ -55,6 +55,48 @@ int main(void)
            abi_caller(abi_inputs[1]) == 0x1377UL ? 42 : 17;
 }
 
+#elif TEST_CASE == 20
+volatile word abi_inputs[] = {2, 7, 10, 19};
+volatile word abi_selective_trace;
+
+/* Compiled separately: this module has no definition of the DMR-only leaf. */
+word abi_selective_leaf(word value);
+
+NOINLINE word abi_selective_caller(word value)
+{
+    word live = value ^ 0x2468UL;
+    word first = abi_selective_leaf(value + 1);
+    word second;
+    if ((value & 1UL) != 0) {
+        abi_selective_trace += value;
+        second = abi_selective_leaf(value + 7);
+    } else {
+        second = abi_selective_leaf(value + 11);
+        abi_selective_trace ^= second;
+    }
+    /* The volatile effects keep a real branch and join around these calls. */
+    word third = abi_selective_leaf(value + second);
+    return live + first + 2*second + third;
+}
+
+int main(void)
+{
+    /* (x ^ 0x2468) + 21*x + (odd ? 143 : 203), evaluated independently. */
+    const word expected[] = {9567UL, 9617UL, 9727UL, 9881UL};
+    const word traces[][4] = {{44UL, 51UL, 119UL, 138UL},
+                             {166UL, 173UL, 233UL, 252UL}};
+    unsigned int round;
+    for (round = 0; round != 2; ++round) {
+        unsigned int index;
+        for (index = 0; index != 4; ++index) {
+            if (abi_selective_caller(abi_inputs[index]) != expected[index] ||
+                abi_selective_trace != traces[round][index])
+                return 17;
+        }
+    }
+    return 42;
+}
+
 #elif TEST_CASE == 2
 volatile word abi_inputs[] = {1, 4, 7, 13};
 

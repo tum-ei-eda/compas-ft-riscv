@@ -11,6 +11,12 @@ complete literal stdout; the other cases produce no output.
 |`caller_only` |A protected caller invokes an unprotected callee, retaining a live value across the call.
 |`callee_only` |An unprotected caller invokes a protected callee.
 |`caller_and_callee` |Both sides of the same boundary are protected.
+|`dmr_callee_cfp_caller` |The caller has only control-flow protection and the leaf only data protection, checking that callee balance checks respect caller-owned signature state.
+|`dmr_caller_cfp_callee` |The reciprocal selection checks a data-protected caller invoking a leaf with only control-flow protection.
+|`nested_dmr_callee_cfp_callers` |Two control-flow-protected callers make repeated calls to a data-protected leaf while retaining their own live values and signatures.
+|`nested_dmr_callers_cfp_callee` |The reciprocal nested selection protects the two callers with DMR and only the leaf with CFP.
+|`split_dmr_callee_cfp_caller` |A caller with only CFP invokes a separately compiled DMR leaf before a branch, within either branch and after their join.
+|`split_dmr_both_cfp_caller` |The same separate compilation also selects the caller for DMR, checking the overlapping selection against the DMR-only callee.
 |`nested_live_values` |Repeated nested calls retain values across multiple calls and stack frames.
 |`indirect_calls` |A volatile function pointer invokes two distinct targets, then restores the first target for the next invocation.
 |`ten_integer_arguments` |Ten word-sized arguments require argument passing on the stack as well as in registers.
@@ -61,6 +67,26 @@ The stack-argument cases also check that DMR boundary wrappers and control-flow
 signature preservation do not move the outgoing arguments from the ABI offsets
 observed by the callee. Caller-only and callee-only selections exercise the two
 directions of the selective-hardening boundary with the same arithmetic oracle.
+The asymmetric cases set `functions` and `cfp_functions` independently, covering
+both directions with CFCSS, RASM and RACFED under both schedules. They reuse
+the direct and nested scenarios and their independent literal results, so a
+fault-free balance check must accept the monitor's reserved register values
+without weakening the application-result oracle. The split cases compile the
+arithmetic leaf in a second source file, so its compiler pass sees the configured
+CFP caller's name without seeing that caller's definition. Volatile effects on
+opposite sides of the branch calls retain a real branch and join. Both paths
+run twice; literal results check the three calls, a value live across them and
+the complete sequence of volatile effects. The overlap case selects both
+functions for DMR while only the caller owns CFP state.
+
+The mixed-boundary contract excludes CFP-owned `t0`/`t4` from endpoint balance
+checks and from DMR shadow initialization at that call boundary. Incoming UC3
+checks also exempt this pair whenever any CFP function is selected: a separately
+compiled callee cannot inspect the caller's definition to determine ownership.
+Neither register carries an ordinary ABI argument. Other incoming data checks,
+application argument and result checks, and function-internal DMR checks remain
+active.
+
 The forced-FP variants reuse the direct and nested arithmetic scenarios. They
 check that incoming fixed stack slots retain their entry-frame addresses when
 EDDI allocates separate primary and shadow frames. The nested variants

@@ -67,6 +67,22 @@ options is provided in Table~\ref{tab:sihft-options}.
 The final step in code generation is to use \texttt{gcc} for RISCV architectures to assemble and link the
 assembly code for a particular RISCV processor.
 
+\subsubsection{Selective data and control-flow protection}
+DMR and CFP can select different functions. Pass the same function selections
+to each translation unit so that the compiler can prepare direct calls to
+protected functions even when their definitions are compiled separately.
+The \texttt{x5}/\texttt{x29} (\texttt{t0}/\texttt{t4}) pair can hold
+independent control-flow state rather than equal data values. Selective-call
+setup and balance checks exclude this pair when either endpoint owns CFP state.
+The CFP pass preserves the caller's actual signature state; an outer DMR
+restore must not replace that state with an earlier snapshot.
+
+NZDC's full-bank entry check also excludes \texttt{t0}/\texttt{t4} whenever
+any CFP selection is enabled, since a separately compiled callee cannot know
+whether its caller uses this pair for a signature. These caller-clobbered
+registers carry no formal ABI argument. Argument and result checks remain,
+as do ordinary DMR instruction and data checks within functions without CFP.
+
 \subsubsection{Stack pointer arguments}
 EDDI allocates separate primary and shadow stack frames. For call arguments
 derived from the current frame, the argument check compares the shadow address

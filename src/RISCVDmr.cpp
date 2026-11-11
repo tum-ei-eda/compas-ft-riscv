@@ -24,6 +24,7 @@
 #include "RISCVMachineFunctionInfo.h"
 #include "RISCVSubtarget.h"
 #include "common.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -81,6 +82,16 @@ bool isFullWidthFPRegister(llvm::Register reg,
     return riscv_common::getRegType(reg) == riscv_common::RegType::FD;
   return subtarget.hasStdExtF() &&
          riscv_common::getRegType(reg) == riscv_common::RegType::FS;
+}
+
+bool mayReceiveSignatureState(llvm::Register primary) {
+  // A separately compiled UC3 callee cannot know whether its caller owns
+  // t0/t4 as CFP state. This caller-clobbered pair carries no ABI argument;
+  // keep it out of the incoming full-bank equality contract whenever CFP
+  // is enabled. Ordinary DMR data checks inside the callee still apply.
+  return primary == llvm::RISCV::X5 &&
+         (!llvm::cl::enable_cfcss.empty() || !llvm::cl::enable_rasm.empty() ||
+          !llvm::cl::enable_racfed.empty());
 }
 
 bool incomingStackArgumentOffset(const llvm::MachineInstr &MI,
@@ -426,6 +437,7 @@ void RISCVDmr::finalizeCallingConvention() {
   const bool caller_dmr = is_func_dmr(fname_);
   const bool caller_eddi =
       riscv_common::inCSString(llvm::cl::enable_eddi, fname_);
+  const auto caller_state = riscv_common::signatureRegisters(*MF_);
   const auto &subtarget = MF_->getSubtarget<llvm::RISCVSubtarget>();
   auto callName = [](const llvm::MachineInstr &MI) {
     for (const auto &operand : MI.operands()) {
@@ -482,6 +494,9 @@ void RISCVDmr::finalizeCallingConvention() {
             addRegister(MI, P2S_.at(reg), false);
           for (const auto &pair : P2S_) {
             if (!integerRegister(pair.first))
+              continue;
+            if (llvm::is_contained(caller_state, pair.first) ||
+                llvm::is_contained(caller_state, pair.second))
               continue;
             if (invariant(pair.first) || pair.first == riscv_common::kFP ||
                 pair.first == riscv_common::kRA || !caller_eddi) {
@@ -543,7 +558,8 @@ void RISCVDmr::finalizeCallingConvention() {
             mask[pair.second / 32] &= ~bit;
           if (integerRegister(pair.first) &&
               (invariant(pair.first) || bank_boundary) &&
-              pair.first != riscv_common::kRA) {
+              pair.first != riscv_common::kRA &&
+              !mayReceiveSignatureState(pair.first)) {
             uses.insert(pair.first);
             uses.insert(pair.second);
           }
@@ -2336,6 +2352,15 @@ void RISCVDmr::updateSelectiveCalls() {
       auto callee_func_name{getCalledFuncName(MI)};
       auto callee_is_dmr = is_func_dmr(callee_func_name);
       auto caller_is_dmr = is_func_dmr(fname_);
+      const auto caller_state = riscv_common::signatureRegisters(*MF_);
+      const auto callee_state =
+          riscv_common::signatureRegisters(callee_func_name);
+      auto signature_pair = [&](const auto &pair) {
+        return llvm::is_contained(caller_state, pair.first) ||
+               llvm::is_contained(caller_state, pair.second) ||
+               llvm::is_contained(callee_state, pair.first) ||
+               llvm::is_contained(callee_state, pair.second);
+      };
 
       if (callee_is_dmr) {   // the callee is a DMRed function
         if (caller_is_dmr) { // the caller is a DMRed function, so we do not
@@ -2406,6 +2431,11 @@ void RISCVDmr::updateSelectiveCalls() {
                                   // it with a `call+ret` to allow restoration
                                   // of non-DMR context before return
           }
+          // The later CFP pass preserves the caller's actual state. Do not
+          // overwrite it with an outer DMR snapshot after the CFP restore.
+          // Callee-only state can still hold ordinary live caller context.
+          for (const auto reg : caller_state)
+            spill_regs.erase(reg);
 #ifdef DBG
           for (const auto &sr : spill_regs) {
             llvm::outs() << "sr: x" << sr - llvm::RISCV::X0 << "\n";
@@ -2426,6 +2456,8 @@ void RISCVDmr::updateSelectiveCalls() {
           // insert the default duplication segment, i.e., move all primaries
           // into their shadows
           for (const auto &regpair : P2S_) {
+            if (signature_pair(regpair))
+              continue;
             if (riscv_common::getRegType(regpair.first) ==
                     riscv_common::RegType::I ||
                 isFullWidthFPRegister(
@@ -2462,6 +2494,8 @@ void RISCVDmr::updateSelectiveCalls() {
           const bool eddi_callee =
               riscv_common::inCSString(llvm::cl::enable_eddi, callee_func_name);
           for (const auto &regpair : P2S_) {
+            if (signature_pair(regpair))
+              continue;
             if (riscv_common::getRegType(regpair.first) ==
                 riscv_common::RegType::I) {
               // An EDDI callee may leave distinct frame pointers in discarded
@@ -2779,13 +2813,8 @@ void RISCVDmr::protectCalls() {
         if (r == riscv_common::kRA) {
           continue;
         }
-        if (riscv_common::inCSString(llvm::cl::enable_cfcss, fname_) ||
-            riscv_common::inCSString(llvm::cl::enable_rasm, fname_) ||
-            riscv_common::inCSString(llvm::cl::enable_racfed, fname_)) {
-          if (r == llvm::RISCV::X5) {
-            continue;
-          }
-        }
+        if (mayReceiveSignatureState(r))
+          continue;
 
         // UC3 checks the incoming monitor bank even for registers which are
         // not ordinary arguments. These are intentional convention inputs.

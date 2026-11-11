@@ -30,6 +30,13 @@ def function_list(value):
     return [part.strip() for part in re.split("[,;]", value) if part.strip()]
 
 
+def function_selections(args, case):
+    functions = args.functions if args.functions is not None else case.get("functions", [])
+    cfp_functions = (args.cfp_functions if args.cfp_functions is not None
+                     else case.get("cfp_functions", functions))
+    return functions, cfp_functions
+
+
 def parser(default_suite):
     cli = argparse.ArgumentParser(description=__doc__)
     cli.add_argument("--suite", choices=("all", "regression", "apps"), default=default_suite)
@@ -137,7 +144,7 @@ def discover(args):
                         values = config.get(field, default)
                         if not isinstance(values, list) or not values or any(value not in choices for value in values):
                             raise ValueError(f"{field} must be a nonempty list drawn from {choices}")
-                    for field in ("functions", "defines"):
+                    for field in ("functions", "cfp_functions", "defines"):
                         values = config.get(field, [])
                         if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
                             raise ValueError(f"{field} must be a list of strings")
@@ -327,7 +334,8 @@ def attach_verification(result, verification):
 
 
 def known_failure(case, arch, mode, cfp, schedule, functions, cfp_functions, target):
-    if functions != case.get("functions", []) or cfp_functions != case.get("functions", []):
+    if (functions != case.get("functions", [])
+            or cfp_functions != case.get("cfp_functions", case.get("functions", []))):
         return None
     for failure in case.get("known_failures", []):
         if (failure["case"] == case["case_name"] and failure["mode"] == mode
@@ -360,8 +368,7 @@ def emit(results, result):
 
 def execute(args, tools, cases, results):
     for case in cases:
-        functions = args.functions if args.functions is not None else case.get("functions", [])
-        cfp_functions = args.cfp_functions if args.cfp_functions is not None else functions
+        functions, cfp_functions = function_selections(args, case)
         configurations = list(dict.fromkeys(itertools.product(
             args.mode or case.get("modes", ["EDDI", "SWIFT"]),
             args.cfp or case.get("cfp_modes", ["none"]),
@@ -432,6 +439,7 @@ def main(default_suite="all"):
         cases = discover(args)
         if args.list:
             for case in cases:
+                functions, cfp_functions = function_selections(args, case)
                 profiles = [f"{target['isa']}/{target['abi']}/{target['code_model']}"
                             + ("/no-relax" if not target["relax"] else "")
                             + ("/frame-pointer" if target.get("frame_pointer", False) else "")
@@ -439,6 +447,7 @@ def main(default_suite="all"):
                 print(f"{case['name']} [{case['adapter']}] arch={','.join(case['selected_arches'])} "
                       f"modes={','.join(args.mode or case.get('modes', []))} "
                       f"cfp={','.join(args.cfp or case.get('cfp_modes', ['none']))} "
+                      f"functions={','.join(functions)} cfp-functions={','.join(cfp_functions)} "
                       f"schedules={','.join(args.schedule or case.get('schedules', ['cgs']))} "
                       f"verify={args.verify_machineinstrs if args.verify_machineinstrs is not None else case.get('verify_machineinstrs', False)} "
                       f"targets={';'.join(profiles) if profiles else 'CMake toolchain'}")

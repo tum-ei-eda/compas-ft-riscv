@@ -72,6 +72,7 @@ unsigned pointerProvenanceSlots(const llvm::MachineFunction &MF);
 // assigning signatures to the continuation blocks introduced here.
 void normalizeControlFlow(llvm::MachineFunction &MF);
 // Runtime control-flow state owned by the selected signature scheme.
+std::vector<llvm::Register> signatureRegisters(const std::string &name);
 std::vector<llvm::Register> signatureRegisters(const llvm::MachineFunction &MF);
 // Preserve actual signature state in the preallocated fixed frame, without
 // moving the outgoing argument area at the call. Scratch must be reserved.

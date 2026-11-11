@@ -350,14 +350,18 @@ riscv_common::RegType riscv_common::getRegType(llvm::Register r) {
 }
 
 std::vector<llvm::Register>
-riscv_common::signatureRegisters(const llvm::MachineFunction &MF) {
-  const std::string name{MF.getName()};
+riscv_common::signatureRegisters(const std::string &name) {
   if (inCSString(llvm::cl::enable_cfcss, name))
     return {llvm::RISCV::X5, llvm::RISCV::X29};
   if (inCSString(llvm::cl::enable_rasm, name) ||
       inCSString(llvm::cl::enable_racfed, name))
     return {llvm::RISCV::X5};
   return {};
+}
+
+std::vector<llvm::Register>
+riscv_common::signatureRegisters(const llvm::MachineFunction &MF) {
+  return signatureRegisters(std::string{MF.getName()});
 }
 
 void riscv_common::preserveSignatureAcrossCall(
