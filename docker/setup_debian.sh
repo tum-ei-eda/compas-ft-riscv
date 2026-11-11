@@ -7,10 +7,13 @@ get_apt_deps() {
   echo "${compas_apt_dep} ${llvm_apt_dep}"
 }
 setup_env() {
-  apt update
+  # APT otherwise treats failed index downloads as warnings and can return
+  # success with no usable package lists. Retry transient network failures,
+  # then stop here instead of reporting misleading package-not-found errors.
+  apt-get -o Acquire::Retries=5 -o APT::Update::Error-Mode=any update || return
   for pkg in "$(get_apt_deps)"
   do
-    apt install --no-install-recommends -y ${pkg}
+    apt-get -o Acquire::Retries=5 install --no-install-recommends -y ${pkg}
   done
 }
 get_testenv_apt_deps() {
@@ -19,10 +22,10 @@ get_testenv_apt_deps() {
   echo "${base_apt_dep} ${spike_apt_dep}"
 }
 setup_testenv() {
-  apt update
+  apt-get -o Acquire::Retries=5 -o APT::Update::Error-Mode=any update || return
   for pkg in "$(get_testenv_apt_deps)"
   do
-    apt install --no-install-recommends -y ${pkg}
+    apt-get -o Acquire::Retries=5 install --no-install-recommends -y ${pkg}
   done
 }
 ########################################################################################################################
