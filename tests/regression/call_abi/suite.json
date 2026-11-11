@@ -10,6 +10,63 @@
   "expected": {"exit": 42, "stdout": ""},
   "cases": [
     {
+      "name": "selective_eddi_musttail",
+      "sources": ["tail_musttail.ll"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "cfp_modes": ["none"],
+      "functions": ["abi_tail_musttail_leaf"],
+      "expected_build_diagnostic": {
+        "source": "tail_musttail.ll",
+        "modes": ["EDDI"],
+        "functions": ["abi_tail_musttail_leaf"],
+        "message": "COMPAS: musttail calls across selective EDDI boundaries are unsupported"
+      }
+    },
+    {
+      "name": "converted_tail_word_callee_only",
+      "sources": ["tail_calls.c"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "schedules": ["cgs", "fgs"],
+      "functions": ["abi_tail_leaf"]
+    },
+    {
+      "name": "converted_tail_wide_callee_only",
+      "sources": ["tail_calls.c"],
+      "defines": ["TAIL_WIDE=1"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "schedules": ["cgs", "fgs"],
+      "functions": ["abi_tail_leaf"]
+    },
+    {
+      "name": "converted_tail_word_cfp_caller",
+      "sources": ["tail_calls.c"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "cfp_modes": ["CFCSS", "RASM", "RACFED"],
+      "schedules": ["cgs", "fgs"],
+      "functions": ["abi_tail_leaf"],
+      "cfp_functions": ["abi_tail_wrapper"]
+    },
+    {
+      "name": "converted_tail_wide_cfp_caller",
+      "sources": ["tail_calls.c"],
+      "defines": ["TAIL_WIDE=1"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "cfp_modes": ["CFCSS", "RASM", "RACFED"],
+      "schedules": ["cgs", "fgs"],
+      "functions": ["abi_tail_leaf"],
+      "cfp_functions": ["abi_tail_wrapper"]
+    },
+    {
       "name": "caller_only",
       "defines": ["TEST_CASE=1"],
       "functions": ["abi_caller"]

@@ -281,7 +281,15 @@ diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp b/llvm/lib/Target/RISC
 diff --git a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp b/llvm/lib/Target/RISCV/RISCVISelLowering.cpp
 --- a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp
 +++ b/llvm/lib/Target/RISCV/RISCVISelLowering.cpp
-@@ -26,6 +26,7 @@
+@@ -18,6 +18,7 @@
+ #include "RISCVRegisterInfo.h"
+ #include "RISCVSubtarget.h"
+ #include "RISCVTargetMachine.h"
++#include "compas-ft-riscv/include/common.h"
+ #include "llvm/ADT/SmallSet.h"
+ #include "llvm/ADT/Statistic.h"
+ #include "llvm/Analysis/MemoryLocation.h"
+@@ -26,6 +27,7 @@
  #include "llvm/CodeGen/MachineInstrBuilder.h"
  #include "llvm/CodeGen/MachineJumpTableInfo.h"
  #include "llvm/CodeGen/MachineRegisterInfo.h"
@@ -289,7 +297,7 @@ diff --git a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp b/llvm/lib/Target/RISCV
  #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
  #include "llvm/CodeGen/ValueTypes.h"
  #include "llvm/IR/DiagnosticInfo.h"
-@@ -181,7 +182,7 @@
+@@ -181,7 +183,7 @@
                     MVT::i1, Promote);
 
    // TODO: add all necessary setOperationAction calls.
@@ -298,7 +306,7 @@ diff --git a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp b/llvm/lib/Target/RISCV
 
    setOperationAction(ISD::BR_JT, MVT::Other, Expand);
    setOperationAction(ISD::BR_CC, XLenVT, Expand);
-@@ -3090,6 +3091,31 @@
+@@ -3090,6 +3092,31 @@
  SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
                                              SelectionDAG &DAG) const {
    switch (Op.getOpcode()) {
@@ -330,7 +338,7 @@ diff --git a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp b/llvm/lib/Target/RISCV
    default:
      report_fatal_error("unimplemented operand");
    case ISD::GlobalAddress:
-@@ -10968,6 +10994,35 @@
+@@ -10968,6 +10995,35 @@
                       CallConv == CallingConv::Fast ? CC_RISCV_FastCC
                                                     : CC_RISCV);
 
@@ -366,6 +374,31 @@ diff --git a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp b/llvm/lib/Target/RISCV
    for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i) {
      CCValAssign &VA = ArgLocs[i];
      SDValue ArgValue;
+@@ -11179,6 +11235,24 @@
+     analyzeOutputArgs(MF, ArgCCInfo, Outs, /*IsRet=*/false, &CLI,
+                       CallConv == CallingConv::Fast ? CC_RISCV_FastCC
+                                                     : CC_RISCV);
++
++  // An ordinary caller needs a returning wrapper around an EDDI callee.
++  // Keep LLVM's exact result registers, call mask and frame while they are
++  // still available; late tail conversion runs after the original epilogue.
++  const auto *CompasCallee = dyn_cast<GlobalAddressSDNode>(Callee);
++  if (IsTailCall && CompasCallee &&
++      riscv_common::inCSString(cl::enable_eddi,
++                              CompasCallee->getGlobal()->getName().str()) &&
++      !riscv_common::isDmrFunction(MF.getName().str())) {
++    if (CLI.CB && CLI.CB->isMustTailCall()) {
++      MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
++          MF.getFunction(),
++          "COMPAS: musttail calls across selective EDDI boundaries are "
++          "unsupported"});
++    } else {
++      IsTailCall = false;
++    }
++  }
+
+   // Check if it's really possible to do a tail call.
+   if (IsTailCall)
 diff --git a/llvm/lib/Target/RISCV/RISCVMCInstLower.cpp b/llvm/lib/Target/RISCV/RISCVMCInstLower.cpp
 --- a/llvm/lib/Target/RISCV/RISCVMCInstLower.cpp
 +++ b/llvm/lib/Target/RISCV/RISCVMCInstLower.cpp

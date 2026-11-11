@@ -77,8 +77,9 @@ def target_profiles(args, case, arch):
     if case["adapter"] != "freestanding":
         if (args.isa is not None or args.abi is not None or args.code_model
                 or "abi" in case or "code_models" in case or "relax" in case
-                or "frame_pointer" in case):
-            raise ValueError("ISA/ABI overrides, code_models, relax and frame_pointer are supported by the freestanding adapter")
+                or "frame_pointer" in case or "optimization" in case
+                or "sibling_calls" in case):
+            raise ValueError("ISA/ABI overrides, code_models, relax, frame_pointer, optimization and sibling_calls are supported by the freestanding adapter")
         return [None]
     isa = (args.isa if args.isa is not None else case.get("isa", "rv{bits}im")).format(bits=arch[2:])
     match = re.fullmatch(r"rv(32|64)(i[mafdc]*|gc?)", isa)
@@ -98,8 +99,11 @@ def target_profiles(args, case, arch):
     if not relax:
         features.append("-relax")
     frame_pointer = {"frame_pointer": True} if case.get("frame_pointer", False) else {}
+    codegen = {field: case[field] for field, default in
+               (("optimization", 1), ("sibling_calls", False))
+               if case.get(field, default) != default}
     return [dict(isa=isa, abi=abi, code_model=model, relax=relax, features=features,
-                 **frame_pointer)
+                 **frame_pointer, **codegen)
             for model in dict.fromkeys(args.code_model or case.get("code_models", ["medlow"]))]
 
 
@@ -185,6 +189,11 @@ def discover(args):
                         raise ValueError("relax must be a boolean")
                     if not isinstance(config.get("frame_pointer", False), bool):
                         raise ValueError("frame_pointer must be a boolean")
+                    if (type(config.get("optimization", 1)) is not int
+                            or config.get("optimization", 1) not in (1, 2)):
+                        raise ValueError("optimization must be the integer 1 or 2")
+                    if not isinstance(config.get("sibling_calls", False), bool):
+                        raise ValueError("sibling_calls must be a boolean")
                     if args.case and not any(fnmatch.fnmatchcase(name, pattern) for pattern in args.case):
                         continue
                     config["selected_arches"] = [a for a in (args.arch or arches) if a in arches]
@@ -294,19 +303,22 @@ def build_and_run(args, tools, case, arch, mode, cfp, schedule, functions, cfp_f
             flags.append(f"-FGS={','.join(functions)}")
         frame_flags = (["-fno-omit-frame-pointer", "-mno-omit-leaf-frame-pointer"]
                        if target.get("frame_pointer", False) else [])
+        optimization = "-O" + str(target.get("optimization", 1))
+        sibling_flag = ("-foptimize-sibling-calls" if target.get("sibling_calls", False)
+                        else "-fno-optimize-sibling-calls")
         diagnostic = build_diagnostic_for(case, mode, functions)
         for index, source in enumerate(case["sources"]):
             stem = f"source-{index}"
             ir = directory / (stem + ".ll")
             asm = directory / (stem + ".s")
             build([tools["clang"], f"--target=riscv{arch[2:]}", *isa_flags,
-                   "-O1", "-fno-optimize-sibling-calls", "-emit-llvm", "-S",
+                   optimization, sibling_flag, "-emit-llvm", "-S",
                    *frame_flags,
                    *["-D" + define for define in case.get("defines", [])],
                    case["directory"] / source, "-o", ir], stem + ".clang")
             llc = [tools["llc"], f"-march=riscv{arch[2:]}", "-mattr=" + ",".join(target["features"]),
                    "-target-abi=" + abi, "-code-model=" + ("small" if model == "medlow" else "medium"),
-                   "-O1", *flags, ir]
+                   optimization, *flags, ir]
             if diagnostic and source == diagnostic["source"]:
                 label = stem + ".llc"
                 observed = command([*llc, "-o", asm], directory, label,
@@ -404,7 +416,8 @@ def known_failure(case, arch, mode, cfp, schedule, functions, cfp_functions, tar
                 and cfp == failure.get("cfp", "none")):
             if target and any(target.get(field, default) != failure.get(field, default) for field, default in (
                     ("isa", arch + "im"), ("abi", "ilp32" if arch == "rv32" else "lp64"),
-                    ("code_model", "medlow"), ("relax", True), ("frame_pointer", False))):
+                    ("code_model", "medlow"), ("relax", True), ("frame_pointer", False),
+                    ("optimization", 1), ("sibling_calls", False))):
                 continue
             if not failure.get("issue") or not failure.get("reason") or "target_exit" not in failure:
                 raise TestError("known failures require issue, reason and target_exit")
@@ -424,6 +437,10 @@ def emit(results, result):
         config += f" {result['isa']}/{result['abi']}/{result['code_model']}"
         if result.get("frame_pointer", False):
             config += "/frame-pointer"
+        if result.get("optimization", 1) != 1:
+            config += "/O" + str(result["optimization"])
+        if result.get("sibling_calls", False):
+            config += "/sibling-calls"
     print(f"{result['status']:6} {result['name']} {result['arch']} {config}: {result['detail']}", flush=True)
 
 
@@ -450,8 +467,12 @@ def execute(args, tools, cases, results):
                     profile += "-no-relax"
                 if target.get("frame_pointer", False):
                     profile += "-frame-pointer"
+                if target.get("optimization", 1) != 1:
+                    profile += "-O" + str(target["optimization"])
+                if target.get("sibling_calls", False):
+                    profile += "-sibling-calls"
                 root /= profile
-                base.update({field: target[field] for field in ("isa", "abi", "code_model", "relax", "frame_pointer")
+                base.update({field: target[field] for field in ("isa", "abi", "code_model", "relax", "frame_pointer", "optimization", "sibling_calls")
                              if field in target})
             reference = dict(base, mode="reference", cfp="none", schedule="cgs", logdir=str(root / "reference"))
             try:
@@ -518,6 +539,8 @@ def main(default_suite="all"):
                 profiles = [f"{target['isa']}/{target['abi']}/{target['code_model']}"
                             + ("/no-relax" if not target["relax"] else "")
                             + ("/frame-pointer" if target.get("frame_pointer", False) else "")
+                            + ("/O" + str(target["optimization"]) if target.get("optimization", 1) != 1 else "")
+                            + ("/sibling-calls" if target.get("sibling_calls", False) else "")
                             for targets in case["targets"].values() for target in targets if target]
                 print(f"{case['name']} [{case['adapter']}] arch={','.join(case['selected_arches'])} "
                       f"modes={','.join(args.mode or case.get('modes', []))} "

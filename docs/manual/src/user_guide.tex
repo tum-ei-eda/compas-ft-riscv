@@ -131,6 +131,17 @@ point into separate caller frames whose size is unknown to the callee. The
 exception is identified from the saved-register spill metadata. Ordinary data
 stores, including values held in \texttt{s0}, retain their value checks.
 
+\subsubsection{Selective EDDI tail-call boundaries}
+An ordinary caller invoking an EDDI callee must regain control to check the
+results and restore its saved context. Such direct calls are lowered as ordinary
+returning calls before frame layout, even when sibling-call optimization is
+enabled. LLVM supplies the call-preserved mask, actual ABI result registers and
+return operands, and the selective wrapper runs before the caller's epilogue.
+Balance checks retain the results and preserved state while excluding discarded
+caller-clobbered temporaries, which may hold distinct primary and shadow
+addresses. Calls marked \texttt{musttail} across this boundary are rejected
+because the required returning wrapper cannot preserve their tail-call contract.
+
 \subsubsection{Machine-instruction metadata}
 Indirect calls from protected functions declare the shadow arguments, results
 and convention inputs consumed by a compatible protected target. When the target

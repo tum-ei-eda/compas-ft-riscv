@@ -27,29 +27,10 @@ SWIFT, NZDC, NZDC+NEMESIS and NZDC+NEMESEC still abort with `reg not found in P2
 
 ## Call-boundary instrumentation
 
-- [ ] Correct caller-clobbered balance checks in late-converted EDDI tail calls.
 - [ ] Audit repair-mode preservation that moves SP around calls.
 - [ ] Make signature instrumentation aware of `+save-restore` prologue/epilogue helpers.
 
-Late tail wrappers run after the original epilogue restores FP and still use legacy `saveRegs`/`loadRegs` preservation. Their EDDI post-call checks compare discarded caller-clobbered temporaries because the filtering used for ordinary returning calls is conditional on `fixed_call_frame`. A callee returning a value from a runtime-indexed local array can leave correctly separated pointers in `a1`/`s9`; a tail-converted ordinary caller then rejects them despite matching results in `a0`/`s8`. This reproduces on RV32/RV64 with LLVM13/16, passes machine verification, and produces target `-512` instead of `42` with only `protected_callee` EDDI-selected:
-
-```c
-typedef unsigned long word;
-__attribute__((noinline)) word protected_callee(word a) {
-    volatile word local[4];
-    for (word i = 0; i < 4; ++i) local[i] = a + i;
-    return local[a & 3];
-}
-__attribute__((noinline)) word wrapper(word a) {
-    volatile word scratch[9];
-    scratch[0] = a;
-    return protected_callee(scratch[0]);
-}
-volatile word input = 7;
-int main(void) { return wrapper(input) == 10 ? 42 : 17; }
-```
-
-Compile at `-O2` with sibling-call optimization enabled; the shared freestanding runner currently disables it. Both backends reject RISC-V tail calls with stack-passed arguments, so the earlier outgoing-stack-argument displacement claim is a latent layout concern rather than a reproduced tail-call failure. Moving SP in remaining repair-mode call preservation still needs review. Returning libcalls already use separate fixed caller-context and result banks without moving outgoing arguments.
+Moving SP in repair-mode call preservation still needs review, including its effect on outgoing stack arguments. Remaining late tail-conversion paths use legacy `saveRegs`/`loadRegs` after the original epilogue has restored FP; they require a separate preservation contract. Ordinary-to-EDDI direct calls now use returning wrappers prepared before frame layout.
 
 Compiler-generated `__riscv_save_*` calls execute before FP setup and can clobber G/RTS in `t0`. Signature initialization and preservation must account for their prologue placement.
 
