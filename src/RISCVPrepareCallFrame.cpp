@@ -94,9 +94,10 @@ bool needs_incoming_shadow_sp(const llvm::MachineFunction &MF) {
 bool needs_pointer_deltas(const llvm::MachineFunction &MF) {
   return riscv_common::inCSString(llvm::cl::enable_eddi,
                                   std::string{MF.getName()}) &&
-         !MF.getInfo<llvm::RISCVMachineFunctionInfo>()
-              ->getCompasIncomingPointerRegs()
-              .empty();
+         (!MF.getInfo<llvm::RISCVMachineFunctionInfo>()
+               ->getCompasIncomingPointerRegs()
+               .empty() ||
+          riscv_common::usesPointerProvenance(MF));
 }
 
 unsigned dmr_frame_size(const llvm::MachineFunction &MF) {
@@ -211,7 +212,10 @@ void llvm::reserveRISCVCompasCallFrame(llvm::MachineFunction &MF) {
     info->setCompasIncomingShadowSPFrameIndex(reserve(word_size, word_size));
   if (pointer_deltas)
     // Each formal pointer can address a different caller bank. Preserve one
-    // independent shadow-minus-primary relation for every recorded register.
+    // independent shadow-minus-primary relation for every recorded register,
+    // followed by mutable per-location expectations when paths can merge.
     info->setCompasPointerDeltaFrameIndex(reserve(
-        word_size * info->getCompasIncomingPointerRegs().size(), word_size));
+        word_size * (info->getCompasIncomingPointerRegs().size() +
+                     riscv_common::pointerProvenanceSlots(MF)),
+        word_size));
 }

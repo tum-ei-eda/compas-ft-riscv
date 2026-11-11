@@ -648,6 +648,8 @@ void RISCVDmr::init() {
   frame_address_stores_.clear();
   shadow_pcrel_symbols_.clear();
   stack_address_call_args_.clear();
+  pointer_delta_updates_.clear();
+  pointer_delta_entry_.clear();
   use_shadow_for_stack_ops_ =
       !riscv_common::inCSString(llvm::cl::enable_eddi, fname_);
   frame_size_ = 0;
@@ -775,13 +777,13 @@ void RISCVDmr::analyzeStackArguments() {
     return;
 
   // Analyze originals before inserting shadow code or call-preservation stores.
-  // Each address carries either this frame's constant separation or the saved
-  // entry separation of one pointer argument. Distinct origins cannot be
-  // merged.
+  // A runtime origin follows the value's register/private spill, independently
+  // of its primary and shadow addresses. Each reaching definition supplies
+  // the proven expectation; joins never measure the pair being checked.
   enum class Relation { Equal, FrameAddress, Unsupported };
   struct Value {
     Relation relation;
-    llvm::Register origin;
+    PointerOrigin origin;
     uint64_t bits;
 
     bool operator==(const Value &other) const {
@@ -796,16 +798,23 @@ void RISCVDmr::analyzeStackArguments() {
   const uint64_t all_bits = width == 64 ? ~uint64_t{0} : 0xffffffffULL;
   const uint64_t separation = shadow_frame_offset_;
   const uint64_t unchanged_low_bits = (separation & -separation) - 1;
-  const Value unknown{Relation::Unsupported, 0, all_bits};
+  const Value unknown{Relation::Unsupported, {}, all_bits};
+  const bool runtime_origins = riscv_common::usesPointerProvenance(*MF_);
+  auto runtimeOrigin = [&](unsigned key) {
+    const unsigned slot = key < register_count ? key - llvm::RISCV::X0
+                                               : 32 + key - register_count;
+    return PointerOrigin{PointerOrigin::Kind::Runtime, slot};
+  };
   State entry;
   for (const auto &pair : P2S_)
     if (riscv_common::getRegType(pair.first) == riscv_common::RegType::I)
-      entry.emplace(pair.first, Value{Relation::Equal, 0, all_bits});
+      entry.emplace(pair.first, Value{Relation::Equal, {}, all_bits});
   entry.at(riscv_common::k0).bits = 0;
   entry.at(riscv_common::kSP).relation = Relation::FrameAddress;
   for (const auto reg : MF_->getInfo<llvm::RISCVMachineFunctionInfo>()
                             ->getCompasIncomingPointerRegs())
-    entry.at(reg) = {Relation::FrameAddress, reg, all_bits};
+    entry.at(reg) = {
+        Relation::FrameAddress, {PointerOrigin::Kind::Incoming, reg}, all_bits};
 
   // Private register-allocation spill objects cannot alias source-program
   // pointers. Track exact XLEN stores/reloads; partial writes invalidate the
@@ -825,11 +834,12 @@ void RISCVDmr::analyzeStackArguments() {
       const auto *slot =
           llvm::dyn_cast_or_null<llvm::FixedStackPseudoSourceValue>(
               memory->getPseudoValue());
-      if (!slot || !frame.isSpillSlotObjectIndex(slot->getFrameIndex()) ||
+      if (!slot || slot->getFrameIndex() < 0 ||
+          !frame.isSpillSlotObjectIndex(slot->getFrameIndex()) ||
           frame.getObjectSize(slot->getFrameIndex()) != isa_config_.word_length)
         continue;
-      auto inserted = spill_keys.emplace(slot->getFrameIndex(),
-                                         register_count + spill_keys.size());
+      auto inserted = spill_keys.emplace(
+          slot->getFrameIndex(), register_count + slot->getFrameIndex());
       const unsigned key = inserted.first->second;
       entry.emplace(key, unknown);
       spills.emplace(
@@ -839,13 +849,15 @@ void RISCVDmr::analyzeStackArguments() {
 
   auto value = [&](const State &state, llvm::Register reg) {
     auto found = state.find(reg);
-    return found == state.end() ? Value{Relation::Equal, 0, all_bits}
+    return found == state.end() ? Value{Relation::Equal, {}, all_bits}
                                 : found->second;
   };
-  auto transfer = [&](const llvm::MachineInstr &MI, State &state) {
+  std::map<const llvm::MachineInstr *, PointerDeltaUpdates> updates;
+  auto transfer = [&](const llvm::MachineInstr &MI, State &state,
+                      PointerDeltaUpdates *writes = nullptr) {
     if (MI.isDebugInstr())
       return;
-    Value result{Relation::Equal, 0, all_bits};
+    Value result{Relation::Equal, {}, all_bits};
     const auto spill = spills.find(&MI);
     if (MI.mayLoad() && spill != spills.end() && spill->second.full_word)
       result = state.at(spill->second.key);
@@ -888,7 +900,7 @@ void RISCVDmr::analyzeStackArguments() {
                    left.relation == Relation::FrameAddress &&
                    right.relation == Relation::FrameAddress &&
                    left.origin == right.origin)
-          result = {Relation::Equal, 0, all_bits};
+          result = {Relation::Equal, {}, all_bits};
       }
       if (MI.getNumOperands() >= 3 && MI.getOperand(1).isReg()) {
         const auto left = value(state, MI.getOperand(1).getReg());
@@ -908,16 +920,18 @@ void RISCVDmr::analyzeStackArguments() {
           result.bits = left.bits | right.bits;
           // Only this frame's D is statically known. Inherited deltas must
           // not borrow its low-bit guarantee for arbitrary pointer ORs.
-          if (left.relation == Relation::FrameAddress && !left.origin &&
+          if (left.relation == Relation::FrameAddress &&
+              left.origin.kind == PointerOrigin::Kind::Frame &&
               right.relation == Relation::Equal &&
               !(right.bits & ~unchanged_low_bits)) {
             result.relation = Relation::FrameAddress;
-            result.origin = 0;
+            result.origin = {};
           } else if (right.relation == Relation::FrameAddress &&
-                     !right.origin && left.relation == Relation::Equal &&
+                     right.origin.kind == PointerOrigin::Kind::Frame &&
+                     left.relation == Relation::Equal &&
                      !(left.bits & ~unchanged_low_bits)) {
             result.relation = Relation::FrameAddress;
-            result.origin = 0;
+            result.origin = {};
           } else if (left.relation == Relation::FrameAddress &&
                      right.relation == Relation::Equal && right.bits == 0) {
             result.relation = Relation::FrameAddress;
@@ -935,15 +949,26 @@ void RISCVDmr::analyzeStackArguments() {
                                  MI.getNumOperands() && MI.getOperand(0).isReg()
                              ? value(state, MI.getOperand(0).getReg())
                              : unknown;
+    auto assign = [&](unsigned key, Value assigned) {
+      if (writes && assigned.relation != Relation::Unsupported)
+        writes->emplace(runtimeOrigin(key).index,
+                        assigned.relation == Relation::Equal
+                            ? PointerOrigin{PointerOrigin::Kind::Equal, 0}
+                            : assigned.origin);
+      if (assigned.relation == Relation::FrameAddress &&
+          assigned.origin.kind == PointerOrigin::Kind::Runtime)
+        assigned.origin = runtimeOrigin(key);
+      state.at(key) = assigned;
+    };
     // Read all sources before killing destinations, including reused registers.
     for (auto &item : state)
       if (item.first < register_count && MI.modifiesRegister(item.first, TRI_))
-        item.second = result;
+        assign(item.first, result);
     if (MI.mayStore() && spill != spills.end())
-      state.at(spill->second.key) = stored;
-    state.at(riscv_common::k0) = {Relation::Equal, 0, 0};
+      assign(spill->second.key, stored);
+    state.at(riscv_common::k0) = {Relation::Equal, {}, 0};
     state.at(riscv_common::kSP).relation = Relation::FrameAddress;
-    state.at(riscv_common::kSP).origin = 0;
+    state.at(riscv_common::kSP).origin = {};
   };
 
   // An unvisited loop backedge must not erase its incoming provenance.
@@ -970,8 +995,15 @@ void RISCVDmr::analyzeStackArguments() {
             const auto &other = found->second.at(item.first);
             if (item.second.relation != other.relation ||
                 item.second.origin != other.origin) {
-              item.second.relation = Relation::Unsupported;
-              item.second.origin = 0;
+              if (runtime_origins &&
+                  item.second.relation != Relation::Unsupported &&
+                  other.relation != Relation::Unsupported) {
+                item.second.relation = Relation::FrameAddress;
+                item.second.origin = runtimeOrigin(item.first);
+              } else {
+                item.second.relation = Relation::Unsupported;
+                item.second.origin = {};
+              }
             }
             item.second.bits |= other.bits;
           }
@@ -991,6 +1023,7 @@ void RISCVDmr::analyzeStackArguments() {
     }
   } while (changed);
 
+  std::map<const llvm::MachineInstr *, std::set<unsigned>> uses;
   for (auto &MBB : *MF_) {
     auto found = inputs.find(&MBB);
     if (found == inputs.end())
@@ -1021,8 +1054,60 @@ void RISCVDmr::analyzeStackArguments() {
                 fname_);
         }
       }
-      transfer(MI, state);
+      // A runtime check reads the location's independently propagated delta.
+      auto useOrigin = [&](PointerOrigin origin) {
+        if (origin.kind == PointerOrigin::Kind::Runtime)
+          uses[&MI].insert(origin.index);
+      };
+      const auto store = frame_address_stores_.find(&MI);
+      if (store != frame_address_stores_.end())
+        useOrigin(store->second);
+      const auto call = stack_address_call_args_.find(&MI);
+      if (call != stack_address_call_args_.end())
+        for (const auto &argument : call->second)
+          useOrigin(argument.second);
+      transfer(MI, state, &updates[&MI]);
     }
+  }
+
+  // Backward delta liveness selects only definitions feeding a checked use.
+  // In particular, do not add FP-relative writes after the epilogue restores
+  // FP, or transport irrelevant scalar/architectural context through calls.
+  std::map<const llvm::MachineBasicBlock *, std::set<unsigned>> live_in;
+  do {
+    changed = false;
+    for (auto block = MF_->rbegin(); block != MF_->rend(); ++block) {
+      std::set<unsigned> needed;
+      for (const auto *successor : block->successors())
+        needed.insert(live_in[successor].begin(), live_in[successor].end());
+      for (auto MI = block->rbegin(); MI != block->rend(); ++MI) {
+        const auto &writes = updates[&*MI];
+        std::set<unsigned> sources;
+        for (const auto &write : writes)
+          if (needed.erase(write.first)) {
+            pointer_delta_updates_[&*MI][write.first] = write.second;
+            if (write.second.kind == PointerOrigin::Kind::Runtime)
+              sources.insert(write.second.index);
+          }
+        needed.insert(sources.begin(), sources.end());
+        needed.insert(uses[&*MI].begin(), uses[&*MI].end());
+      }
+      if (live_in[&*block] != needed) {
+        live_in[&*block] = std::move(needed);
+        changed = true;
+      }
+    }
+  } while (changed);
+  for (const auto &item : entry) {
+    const unsigned slot = runtimeOrigin(item.first).index;
+    if (!live_in[&MF_->front()].count(slot))
+      continue;
+    if (item.second.relation == Relation::Unsupported)
+      llvm::report_fatal_error("COMPAS: undefined EDDI pointer provenance");
+    pointer_delta_entry_.emplace(
+        slot, item.second.relation == Relation::Equal
+                  ? PointerOrigin{PointerOrigin::Kind::Equal, 0}
+                  : item.second.origin);
   }
 }
 
@@ -1171,7 +1256,8 @@ void RISCVDmr::duplicateInstructions() {
           incoming_stack_loads.emplace(&MI, nullptr);
       }
     if (!incoming_stack_loads.empty() ||
-        !info->getCompasIncomingPointerRegs().empty()) {
+        !info->getCompasIncomingPointerRegs().empty() ||
+        !pointer_delta_updates_.empty() || !pointer_delta_entry_.empty()) {
       // The existing EDDI frame expansion supports one fixed allocation.
       // Reject other prologues explicitly rather than reconstructing entry
       // addresses from a partial/split allocation or a save/restore libcall.
@@ -1387,6 +1473,8 @@ void RISCVDmr::duplicateInstructions() {
     }
   }
 
+  emitPointerDeltaUpdates();
+
 #ifdef DBG
   llvm::outs() << "COMPAS_DBG: duplicateInstructions() done\n";
 #endif
@@ -1459,54 +1547,143 @@ void RISCVDmr::saveIncomingPointerDeltas(llvm::MachineInstr *before) {
       .setMIFlag(llvm::MachineInstr::FrameSetup);
 }
 
-void RISCVDmr::checkFrameAddress(llvm::MachineInstr *MI, llvm::Register reg,
-                                 llvm::Register incoming_origin) {
+void RISCVDmr::loadPointerDelta(llvm::MachineBasicBlock *MBB,
+                                llvm::MachineBasicBlock::iterator insert,
+                                PointerOrigin origin) {
   const auto scratch = P2S_.at(riscv_common::k0);
-  if (incoming_origin) {
-    if (MI->isCall() && TII_->isTailCall(*MI))
+  if (origin.kind == PointerOrigin::Kind::Equal ||
+      origin.kind == PointerOrigin::Kind::Frame) {
+    if (origin.kind == PointerOrigin::Kind::Frame &&
+        shadow_frame_offset_ > 2047)
       llvm::report_fatal_error(
-          "COMPAS: forwarded EDDI pointers require a returning call");
-    const auto *info = MF_->getInfo<llvm::RISCVMachineFunctionInfo>();
-    const auto pointers = info->getCompasIncomingPointerRegs();
+          "COMPAS: EDDI frame address separation exceeds ADDI range");
+    llvm::BuildMI(*MBB, insert, llvm::DebugLoc(), TII_->get(llvm::RISCV::ADDI),
+                  scratch)
+        .addReg(riscv_common::k0)
+        .addImm(origin.kind == PointerOrigin::Kind::Equal
+                    ? 0
+                    : shadow_frame_offset_);
+    return;
+  }
+  const auto *info = MF_->getInfo<llvm::RISCVMachineFunctionInfo>();
+  const auto pointers = info->getCompasIncomingPointerRegs();
+  const int bank = info->getCompasPointerDeltaFrameIndex();
+  if (bank >= 0)
+    llvm::report_fatal_error("COMPAS: pointer delta frame was not prepared");
+  unsigned index;
+  if (origin.kind == PointerOrigin::Kind::Incoming) {
     const auto found =
-        std::find(pointers.begin(), pointers.end(), incoming_origin);
-    const int bank = info->getCompasPointerDeltaFrameIndex();
-    if (found == pointers.end() || bank >= 0)
+        std::find(pointers.begin(), pointers.end(), origin.index);
+    if (found == pointers.end())
       llvm::report_fatal_error(
           "COMPAS: incoming pointer origin was not prepared");
-    const unsigned offset =
-        std::distance(pointers.begin(), found) * isa_config_.word_length;
-    llvm::Register base;
-    const auto slot = MF_->getSubtarget<llvm::RISCVSubtarget>()
-                          .getFrameLowering()
-                          ->getFrameIndexReference(*MF_, bank, base);
-    if (slot.getScalable() || base != riscv_common::kFP)
-      llvm::report_fatal_error(
-          "COMPAS: pointer delta frame requires stable FP");
-    int64_t displacement = slot.getFixed() + offset;
-    while (!llvm::isInt<12>(displacement)) {
-      const int64_t step = displacement > 0 ? 2047 : -2048;
-      llvm::BuildMI(*MI->getParent(), MI->getIterator(), MI->getDebugLoc(),
-                    TII_->get(llvm::RISCV::ADDI), scratch)
-          .addReg(base)
-          .addImm(step);
-      base = scratch;
-      displacement -= step;
-    }
-    auto *memory = MF_->getMachineMemOperand(
-        llvm::MachinePointerInfo::getFixedStack(*MF_, bank, offset),
-        llvm::MachineMemOperand::MOLoad, isa_config_.word_length,
-        llvm::Align(isa_config_.word_length));
-    llvm::BuildMI(*MI->getParent(), MI->getIterator(), MI->getDebugLoc(),
-                  TII_->get(isa_config_.load_opcode), scratch)
-        .addReg(base)
-        .addImm(displacement)
-        .addMemOperand(memory);
-    llvm::BuildMI(*MI->getParent(), MI->getIterator(), MI->getDebugLoc(),
-                  TII_->get(llvm::RISCV::ADD), scratch)
-        .addReg(reg)
-        .addReg(scratch);
+    index = std::distance(pointers.begin(), found);
   } else {
+    index = pointers.size() + origin.index;
+  }
+  const unsigned offset = index * isa_config_.word_length;
+  if (offset + isa_config_.word_length >
+      MF_->getFrameInfo().getObjectSize(bank))
+    llvm::report_fatal_error(
+        "COMPAS: pointer provenance slot was not prepared");
+  llvm::Register base;
+  const auto slot = MF_->getSubtarget<llvm::RISCVSubtarget>()
+                        .getFrameLowering()
+                        ->getFrameIndexReference(*MF_, bank, base);
+  if (slot.getScalable() || base != riscv_common::kFP)
+    llvm::report_fatal_error("COMPAS: pointer delta frame requires stable FP");
+  int64_t displacement = slot.getFixed() + offset;
+  while (!llvm::isInt<12>(displacement)) {
+    const int64_t step = displacement > 0 ? 2047 : -2048;
+    llvm::BuildMI(*MBB, insert, llvm::DebugLoc(), TII_->get(llvm::RISCV::ADDI),
+                  scratch)
+        .addReg(base)
+        .addImm(step);
+    base = scratch;
+    displacement -= step;
+  }
+  auto *memory = MF_->getMachineMemOperand(
+      llvm::MachinePointerInfo::getFixedStack(*MF_, bank, offset),
+      llvm::MachineMemOperand::MOLoad, isa_config_.word_length,
+      llvm::Align(isa_config_.word_length));
+  llvm::BuildMI(*MBB, insert, llvm::DebugLoc(),
+                TII_->get(isa_config_.load_opcode), scratch)
+      .addReg(base)
+      .addImm(displacement)
+      .addMemOperand(memory);
+}
+
+void RISCVDmr::storePointerDelta(llvm::MachineBasicBlock *MBB,
+                                 llvm::MachineBasicBlock::iterator insert,
+                                 unsigned index) {
+  const auto *info = MF_->getInfo<llvm::RISCVMachineFunctionInfo>();
+  const int bank = info->getCompasPointerDeltaFrameIndex();
+  const unsigned offset =
+      (info->getCompasIncomingPointerRegs().size() + index) *
+      isa_config_.word_length;
+  if (bank >= 0 || offset + isa_config_.word_length >
+                       MF_->getFrameInfo().getObjectSize(bank))
+    llvm::report_fatal_error(
+        "COMPAS: pointer provenance slot was not prepared");
+  llvm::Register base;
+  const auto slot = MF_->getSubtarget<llvm::RISCVSubtarget>()
+                        .getFrameLowering()
+                        ->getFrameIndexReference(*MF_, bank, base);
+  const int64_t displacement = slot.getFixed() + offset;
+  if (slot.getScalable() || base != riscv_common::kFP ||
+      !llvm::isInt<12>(displacement))
+    llvm::report_fatal_error(
+        "COMPAS: runtime pointer provenance requires encodable FP slots");
+  auto *memory = MF_->getMachineMemOperand(
+      llvm::MachinePointerInfo::getFixedStack(*MF_, bank, offset),
+      llvm::MachineMemOperand::MOStore, isa_config_.word_length,
+      llvm::Align(isa_config_.word_length));
+  llvm::BuildMI(*MBB, insert, llvm::DebugLoc(),
+                TII_->get(isa_config_.store_opcode))
+      .addReg(P2S_.at(riscv_common::k0))
+      .addReg(base)
+      .addImm(displacement)
+      .addMemOperand(memory);
+}
+
+void RISCVDmr::emitPointerDeltaUpdates() {
+  auto emit = [&](llvm::MachineBasicBlock *MBB,
+                  llvm::MachineBasicBlock::iterator insert,
+                  const PointerDeltaUpdates &updates) {
+    for (const auto &update : updates) {
+      // In-place pointer arithmetic preserves this location's expectation.
+      if (update.second.kind == PointerOrigin::Kind::Runtime &&
+          update.second.index == update.first)
+        continue;
+      loadPointerDelta(MBB, insert, update.second);
+      storePointerDelta(MBB, insert, update.first);
+      llvm::BuildMI(*MBB, insert, llvm::DebugLoc(),
+                    TII_->get(llvm::RISCV::ADDI), P2S_.at(riscv_common::k0))
+          .addReg(riscv_common::k0)
+          .addImm(0);
+    }
+  };
+  if (!pointer_delta_entry_.empty()) {
+    auto insert = entry_bb_->end();
+    for (auto &MI : *entry_bb_)
+      if (MI.getFlag(llvm::MachineInstr::FrameSetup) &&
+          MI.getOpcode() == llvm::RISCV::ADDI && MI.getNumOperands() >= 3 &&
+          MI.getOperand(0).isReg() &&
+          MI.getOperand(0).getReg() == riscv_common::kFP)
+        insert = std::next(MI.getIterator());
+    if (insert == entry_bb_->end())
+      llvm::report_fatal_error("COMPAS: pointer provenance requires FP setup");
+    emit(entry_bb_, insert, pointer_delta_entry_);
+  }
+  for (const auto &update : pointer_delta_updates_)
+    emit(update.first->getParent(), std::next(update.first->getIterator()),
+         update.second);
+}
+
+void RISCVDmr::checkFrameAddress(llvm::MachineInstr *MI, llvm::Register reg,
+                                 PointerOrigin origin) {
+  const auto scratch = P2S_.at(riscv_common::k0);
+  if (origin.kind == PointerOrigin::Kind::Frame) {
     if (shadow_frame_offset_ > 2047)
       llvm::report_fatal_error(
           "COMPAS: EDDI frame address separation exceeds ADDI range");
@@ -1514,6 +1691,15 @@ void RISCVDmr::checkFrameAddress(llvm::MachineInstr *MI, llvm::Register reg,
                   TII_->get(llvm::RISCV::ADDI), scratch)
         .addReg(reg)
         .addImm(shadow_frame_offset_);
+  } else {
+    if (MI->isCall() && TII_->isTailCall(*MI))
+      llvm::report_fatal_error(
+          "COMPAS: forwarded EDDI pointers require a returning call");
+    loadPointerDelta(MI->getParent(), MI->getIterator(), origin);
+    llvm::BuildMI(*MI->getParent(), MI->getIterator(), MI->getDebugLoc(),
+                  TII_->get(llvm::RISCV::ADD), scratch)
+        .addReg(reg)
+        .addReg(scratch);
   }
   llvm::BuildMI(*MI->getParent(), MI->getIterator(), MI->getDebugLoc(),
                 TII_->get(llvm::RISCV::BNE))

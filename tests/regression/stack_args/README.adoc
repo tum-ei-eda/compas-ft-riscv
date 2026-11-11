@@ -20,6 +20,8 @@ The manifest runs EDDI and SWIFT with coarse- and fine-grained scheduling.
 |`forwarded_frames_frame_pointer` |The same nested calls force FP, covering stable frame addressing independently of control-flow protection.
 |`forwarded_wide` |A 64-bit tag and scalar precede an inherited pointer, checking its actual ABI register after arguments split differently on RV32 and RV64.
 |`mixed_pointer` |A control-flow merge selects global or local storage inside one function.
+|`mixed_pointer_loop` |A loop selects global or local array elements, or retains its previous pointer across a backedge, before the same helper call.
+|`mixed_pointer_origins` |Independent pointer joins select between two inherited roots, the helper's own local storage and globals across nested calls with distinct frames.
 |===
 
 The nested frame cases call the same helpers from separate local and global
@@ -52,7 +54,34 @@ result. With the default ABIs, the pointer is passed in `a3` on RV32 and `a2`
 on RV64. Separate local and global callers exercise the same forwarding helper;
 each result is checked twice against a literal oracle.
 
-The separate `mixed_pointer` case covers a pointer merge within one function;
-its outcome must be tracked independently. Remaining failures and verifier debt
-are recorded in link:../../TODO.md[the test TODO]. Fault-free equivalence does
-not establish fault-detection coverage.
+The mixed-pointer cases share one fixture. The original case retains its
+literal `12`/`8` oracle. The loop case runs all three selector phases twice for
+each of three inputs, including a negative input. One phase retains the
+previous pointer, requiring its relationship to survive a backedge rather than
+being replaced at every iteration.
+
+The origins case calls the same helper with local/global, global/local and
+local/local pointer pairs. Inside that helper, one pointer independently joins
+two incoming roots and its own frame while the other joins an incoming root
+with a global address. Both pointers remain in use across two nested calls;
+private volatile frame values also remain live. Eight selection masks and two
+inputs run twice, with every result checked against a literal weighted-sum
+oracle. The caller and helper own different arrays, so inherited and current
+frame separations must remain distinct. Source-level pointer variables are not
+stored into arbitrary shared memory.
+
+For pointer-typed IR PHI/select merges, EDDI propagates an independent expected
+primary/shadow address difference through registers and exact full-word private
+spills. Global pointers use zero, current-frame pointers use the frame separation,
+and inherited pointers use their immutable entry snapshots. The expectation is
+kept in a fixed FP-relative metadata bank; only definitions needed by pointer
+checks receive transport instructions. Checks do not derive a new expectation
+from the pointer pair they are validating. Integer-encoded pointer merges,
+unsupported pointer arithmetic and arbitrary memory reloads remain outside this
+tracking contract. Runtime metadata requires the supported single fixed-frame
+prologue and encodable FP-relative stores.
+
+The manifest enables machine-instruction verification. Remaining unsupported
+configurations and metadata work are recorded in
+link:../../TODO.md[the test TODO]. Fault-free equivalence does not establish
+fault-detection coverage.

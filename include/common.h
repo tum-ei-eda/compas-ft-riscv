@@ -58,6 +58,10 @@ const unsigned kFP{llvm::RISCV::X8};
 
 RegType getRegType(llvm::Register);
 bool isDmrFunction(const std::string &name);
+// Stable before/after RA: identify EDDI callers with pointer-typed IR merges.
+// Their bank appends GPR deltas and one delta per ordinary FI.
+bool usesPointerProvenance(const llvm::MachineFunction &MF);
+unsigned pointerProvenanceSlots(const llvm::MachineFunction &MF);
 // Finalize emitted instrumentation without changing instruction order or
 // assigning signatures to the continuation blocks introduced here.
 void normalizeControlFlow(llvm::MachineFunction &MF);

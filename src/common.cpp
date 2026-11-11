@@ -31,6 +31,8 @@
 #include "llvm/CodeGen/MachineMemOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/Config/llvm-config.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -263,6 +265,40 @@ bool riscv_common::isDmrFunction(const std::string &name) {
          inCSString(llvm::cl::enable_nzdc, name) ||
          inCSString(llvm::cl::enable_nzdc_nemesis, name) ||
          inCSString(llvm::cl::enable_nzdc_nemesec, name);
+}
+
+bool riscv_common::usesPointerProvenance(const llvm::MachineFunction &MF) {
+  if (!inCSString(llvm::cl::enable_eddi, std::string{MF.getName()}))
+    return false;
+
+  // Machine blocks and spill objects can change during register allocation.
+  // Use the unchanged IR to choose a conservative candidate before reserving
+  // FP, then make the same choice when allocating its fixed bank after RA.
+  const auto &function = MF.getFunction();
+  bool has_call = false;
+  bool can_merge = false;
+  for (const auto &block : function)
+    for (const auto &instruction : block) {
+      can_merge |= instruction.getType()->isPointerTy() &&
+                   (llvm::isa<llvm::PHINode>(instruction) ||
+                    llvm::isa<llvm::SelectInst>(instruction));
+      if (const auto *call = llvm::dyn_cast<llvm::CallBase>(&instruction)) {
+        const auto *callee = call->getCalledFunction();
+        if (!call->isInlineAsm() && (!callee || !callee->isIntrinsic()))
+          has_call = true;
+      }
+    }
+  return has_call && can_merge;
+}
+
+unsigned
+riscv_common::pointerProvenanceSlots(const llvm::MachineFunction &MF) {
+  if (!usesPointerProvenance(MF))
+    return 0;
+  // Register slots use architectural x0..x31 numbering. Spill metadata uses
+  // 32 + FI, including holes in the frame-index space. Fixed objects have
+  // negative indices and the immutable incoming-pointer prefix is separate.
+  return 32 + std::max(0, MF.getFrameInfo().getObjectIndexEnd());
 }
 
 bool riscv_common::inCSString(std::string cs_string, std::string x) {

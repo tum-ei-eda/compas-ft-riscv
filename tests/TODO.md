@@ -6,16 +6,14 @@ Run commands from the repository root after [configuring the tools](README.adoc#
 
 ## Stack-pointer arguments: issue #14
 
-- [ ] Define support for mixed global/local stack-address merges.
-- [ ] Remove stale stack-argument failure allowances after reviewing the passing configurations.
 - [ ] Extend inherited-pointer tracking beyond ordinary register formals and private full-word spills.
 
-In [`stack_args`](regression/stack_args/suite.json) ([issue #14](https://github.com/tum-ei-eda/compas-ft-riscv/issues/14)), EDDI `mixed_pointer` reports the unsupported/mixed-address diagnostic. Stack-passed/byval pointer formals and inherited-pointer tail calls are explicitly unsupported; pointer returns and reloads from arbitrary memory are not tracked. The CFP-disabled EDDI/SWIFT matrix retains 34 stale `XPASS` entries.
+In [`stack_args`](regression/stack_args/suite.json) ([issue #14](https://github.com/tum-ei-eda/compas-ft-riscv/issues/14)), stack-passed/byval pointer formals and inherited-pointer tail calls are explicitly unsupported; pointer returns and reloads from arbitrary memory are not tracked. Runtime provenance currently requires pointer-typed IR PHI/select candidates, supported affine pointer operations, a single fixed-frame prologue and encodable FP-relative metadata stores. Integer-encoded pointer merges and nonlinear operations on runtime origins remain unsupported.
 
 ```sh
 python3 tests/regression/run.py --case 'stack_args/*' \
   --mode EDDI --mode SWIFT --schedule cgs --schedule fgs --cfp none \
-  --no-verify-machineinstrs --build-dir build/tests-todo-stack
+  --verify-machineinstrs --build-dir build/tests-todo-stack
 ```
 
 ## EDDI: large and dynamic frames
