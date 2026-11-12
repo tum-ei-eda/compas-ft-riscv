@@ -210,7 +210,8 @@ void riscv_common::normalizeControlFlow(llvm::MachineFunction &MF) {
   // barriers: unreachable trap jumps deliberately detect skipped branches.
   for (auto &MBB : MF) {
     for (auto &MI : MBB) {
-      if ((!MI.isTerminator() && !MI.isBarrier()) ||
+      if (frameHelper(MI) == FrameHelper::Save ||
+          (!MI.isTerminator() && !MI.isBarrier()) ||
           std::next(MI.getIterator()) == MBB.end())
         continue;
       auto *continuation = MBB.splitAt(MI, false);
@@ -238,7 +239,8 @@ void riscv_common::normalizeControlFlow(llvm::MachineFunction &MF) {
         for (const auto &operand : MI.operands())
           if (operand.isMBB())
             targets.insert(operand.getMBB());
-      if (MI.isBarrier() || MI.isReturn() || tii->isTailCall(MI)) {
+      if ((MI.isBarrier() && frameHelper(MI) != FrameHelper::Save) ||
+          MI.isReturn() || tii->isTailCall(MI)) {
         falls_through = false;
         break;
       }
@@ -427,6 +429,44 @@ riscv_common::signatureRegisters(const std::string &name) {
 std::vector<llvm::Register>
 riscv_common::signatureRegisters(const llvm::MachineFunction &MF) {
   return signatureRegisters(std::string{MF.getName()});
+}
+
+riscv_common::FrameHelper
+riscv_common::frameHelper(const llvm::MachineInstr &MI) {
+  const bool save = MI.getOpcode() == llvm::RISCV::PseudoCALLReg &&
+                    MI.getFlag(llvm::MachineInstr::FrameSetup) &&
+                    MI.getNumOperands() && MI.getOperand(0).isReg() &&
+                    MI.getOperand(0).isDef() &&
+                    MI.getOperand(0).getReg() == llvm::RISCV::X5;
+  const bool restore = MI.getOpcode() == llvm::RISCV::PseudoTAIL &&
+                       MI.getFlag(llvm::MachineInstr::FrameDestroy);
+  if (!save && !restore)
+    return FrameHelper::None;
+  for (const auto &operand : MI.operands()) {
+    if (!operand.isSymbol())
+      continue;
+    llvm::StringRef name(operand.getSymbolName());
+    unsigned count;
+    if (name.consume_front(save ? "__riscv_save_" : "__riscv_restore_") &&
+        !name.getAsInteger(10, count) && count <= 12)
+      return save ? FrameHelper::Save : FrameHelper::Restore;
+  }
+  return FrameHelper::None;
+}
+
+llvm::MachineBasicBlock::iterator
+riscv_common::signatureEntryInsertion(llvm::MachineFunction &MF) {
+  auto insert = MF.front().begin();
+  for (auto &MBB : MF)
+    for (auto &MI : MBB)
+      if (frameHelper(MI) == FrameHelper::Save) {
+        if (&MBB != &MF.front())
+          llvm::report_fatal_error(
+              "COMPAS: shrink-wrapped save/restore helpers are unsupported "
+              "with control-flow signatures");
+        insert = std::next(MI.getIterator());
+      }
+  return insert;
 }
 
 void riscv_common::preserveSignatureAcrossCall(

@@ -267,13 +267,22 @@ diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp b/llvm/lib/Target/RISC
        if (MI->getOpcode() == RISCV::ADJCALLSTACKDOWN)
          Amount = -Amount;
 
-@@ -1228,6 +1251,11 @@
+@@ -1228,6 +1251,20 @@
  }
 
  bool RISCVFrameLowering::enableShrinkWrapping(const MachineFunction &MF) const {
 +  // EDDI reserves its paired frame at function entry and releases it at every
 +  // return. Keep that allocation on all paths, including register-only leaves.
 +  if (riscv_common::inCSString(cl::enable_eddi, MF.getName().str()))
++    return false;
++
++  // A save helper links through t0 before FP setup. Signature initialization
++  // follows this entry helper; moving it into the body would erase incoming
++  // signature history or require preservation before a frame exists.
++  if (MF.getSubtarget<RISCVSubtarget>().enableSaveRestore() &&
++      (riscv_common::inCSString(cl::enable_cfcss, MF.getName().str()) ||
++       riscv_common::inCSString(cl::enable_rasm, MF.getName().str()) ||
++       riscv_common::inCSString(cl::enable_racfed, MF.getName().str())))
 +    return false;
 +
    // Keep the conventional code flow when not optimizing.

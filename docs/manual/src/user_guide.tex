@@ -83,6 +83,27 @@ whether its caller uses this pair for a signature. These caller-clobbered
 registers carry no formal ABI argument. Argument and result checks remain,
 as do ordinary DMR instruction and data checks within functions without CFP.
 
+\subsubsection{Compiler save/restore helpers}
+Signature-only CFCSS, RASM and RACFED functions support
+\texttt{-msave-restore} (\texttt{+save-restore} in \texttt{llc}). Link against
+the target toolchain's matching \texttt{libgcc}, which supplies
+\texttt{\_\_riscv\_save\_*} and \texttt{\_\_riscv\_restore\_*}.
+These compiler-generated helpers have a special calling convention: the save
+helper links through \texttt{t0} before FP setup, while the restore helper
+removes the frame and returns directly to the caller.
+
+Signatures start immediately after the entry save helper. RACFED monitors the
+remaining prologue and body instructions; the helper prefix and helper bodies
+are outside this signature region. Ordinary calls retain fixed-frame signature
+preservation. RASM and RACFED perform their final return check before the
+restore-helper tail transfer.
+
+LLVM15/16 keep save/restore prologues at entry for selected signature functions
+by disabling shrink-wrapping. LLVM13/14 already disable it by default.
+A non-entry save helper is rejected because preserving incoming signature
+history there requires a separate contract. Support for these helpers in DMR
+modes remains separate; EDDI retains its explicit unsupported diagnostic.
+
 \subsubsection{REPAIR call boundaries}
 \texttt{-REPAIR} changes the live shadow-register pairing in NZDC,
 NZDC+NEMESIS and NZDC+NEMESEC functions. Before a returning call, COMPAS checks

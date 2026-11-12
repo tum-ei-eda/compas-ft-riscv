@@ -803,7 +803,8 @@ void RISCVDmr::analyze_function() {
     }
 
     for (auto &MI : MBB) {
-      if (isCompilerBarrier(MI))
+      if (isCompilerBarrier(MI) ||
+          riscv_common::frameHelper(MI) != riscv_common::FrameHelper::None)
         continue;
       if (MI.mayStore()) {
         stores_.emplace(&MI);

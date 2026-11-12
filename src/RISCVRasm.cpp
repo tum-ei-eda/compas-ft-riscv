@@ -464,7 +464,7 @@ void RISCVRasm::generate_signature_checks() {
 
     if (MBB.pred_empty()) {
       // for entryBB we dont check RTS
-      llvm::BuildMI(MF_->front(), std::begin(MF_->front()),
+      llvm::BuildMI(MF_->front(), riscv_common::signatureEntryInsertion(*MF_),
                     std::begin(MF_->front())->getDebugLoc(),
                     TII_->get(llvm::RISCV::ADDI))
           .addReg(kRTS, llvm::RegState::Define)
@@ -543,7 +543,11 @@ void RISCVRasm::generate_traversal_adjustments() {
     bool falls_through = true;
     for (auto *MI : instructions) {
       auto *target = direct_branch_target(*MI);
-      if (MI->isCall() && !is_local_unconditional_jump(*MI)) {
+      const auto helper = riscv_common::frameHelper(*MI);
+      if (helper == riscv_common::FrameHelper::Save)
+        continue; // RTS starts after this helper, before FP setup.
+      if (MI->isCall() && !is_local_unconditional_jump(*MI) &&
+          helper != riscv_common::FrameHelper::Restore) {
         // Non-local no-link jumps and tail calls do not return to this block.
         if ((MI->getNumOperands() && MI->getOperand(0).isReg() &&
              MI->getOperand(0).getReg() == llvm::RISCV::X0) ||
@@ -593,7 +597,7 @@ void RISCVRasm::generate_traversal_adjustments() {
         break;
       }
 
-      if (MI->isReturn()) {
+      if (MI->isReturn() || helper == riscv_common::FrameHelper::Restore) {
         short adjust_value = 0, rand = 0;
         const short current_signature = mbb_sigs_.at(&MBB).first +
                                         mbb_sum_ii_sigs_.at(&MBB) +
@@ -716,12 +720,21 @@ void RISCVRacfed::generate_intrablock_signature_updates() {
     std::vector<llvm::MachineInstr *> orig_instrs;
 
     short sum_ii_rvs = 0;
+    const auto start = &MBB == &MF_->front()
+                           ? riscv_common::signatureEntryInsertion(*MF_)
+                           : MBB.begin();
+    bool monitoring = false;
     for (auto &MI : MBB) {
+      if (MI.getIterator() == start)
+        monitoring = true;
+      if (!monitoring)
+        continue; // Entry prefix through the save helper has no active RTS.
       llvm::outs() << "> mi[" << &MI << "]: " << MI
                    << "back?: " << (&MI == &(MBB.back())) << "mback["
                    << &(MBB.instr_back()) << "]" << MBB.instr_back() << "\n";
 
-      if (MI.isMetaInstruction() || // metadata emits no monitored instruction
+      if (riscv_common::frameHelper(MI) != riscv_common::FrameHelper::None ||
+          MI.isMetaInstruction() || // metadata emits no monitored instruction
           (MI.isBranch() && !MI.isConditionalBranch()) ||
           is_local_unconditional_jump(MI) ||
           (MI.isConditionalBranch() &&

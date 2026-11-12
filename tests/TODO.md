@@ -25,11 +25,11 @@ python3 tests/regression/run.py --case 'stack_args/*' \
 ## Call-boundary instrumentation
 
 - [ ] Define preservation for remaining late tail-conversion paths and REPAIR tail calls.
-- [ ] Make signature instrumentation aware of `+save-restore` prologue/epilogue helpers.
+- [ ] Define DMR support for `+save-restore` prologue/epilogue helpers.
 
 Remaining late tail-conversion paths use legacy `saveRegs`/`loadRegs` after the original epilogue has restored FP; they require a separate preservation contract. REPAIR rejects tail calls because its fixed caller snapshot requires a live frame; use `-fno-optimize-sibling-calls` for returning calls. Ordinary-to-EDDI direct calls use returning wrappers prepared before frame layout.
 
-Compiler-generated `__riscv_save_*` calls execute before FP setup and can clobber G/RTS in `t0`. Signature initialization and preservation must account for their prologue placement.
+Signature-only CFCSS, RASM and RACFED support is covered by the [save/restore suite](regression/save_restore/README.adoc). DMR support requires a separate contract for the helpers' opaque register spills/restores and their `t0` link convention. EDDI retains its explicit unsupported diagnostic; the other DMR modes still need an audit before enabling this profile.
 
 ## Floating-point checks
 

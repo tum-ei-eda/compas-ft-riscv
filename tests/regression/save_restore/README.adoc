@@ -1,0 +1,27 @@
+= Signature monitoring with GNU save/restore helpers
+
+These RV32/RV64 cases enable LLVM's `+save-restore` feature and apply CFCSS,
+RASM or RACFED with DMR disabled. Each executable links the GNU toolchain's
+real `__riscv_save_*` and `__riscv_restore_*` implementations from `libgcc`.
+
+The leaf case has no source-level call; an empty assembly statement with explicit
+callee-saved clobbers forces spills and therefore the compiler-generated helpers. The other
+cases retain values across repeated ordinary calls, exercise several source
+returns, and place register use in a cold branch that could otherwise receive
+a shrink-wrapped prologue. The ordinary helper deliberately overwrites `t0`.
+Three volatile inputs run twice against literal arithmetic results.
+
+The manifest's `save_restore_functions` lists the protected functions in which
+both a save-helper transfer and a restore-helper transfer must actually appear.
+The shared runner checks normal and machine-verifier assembly and retains
+`save-restore.json` and `save-restore.verify.json` as evidence. An ordinary
+inline prologue cannot satisfy this check.
+
+[,bash]
+----
+python3 tests/regression/run.py --case 'save_restore/*'
+----
+
+References enable the same helper-based ABI without signature monitoring.
+Every successful executable exits with `42` and produces no output. DMR with
+these helpers remains outside this suite's supported configuration.

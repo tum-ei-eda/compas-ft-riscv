@@ -79,6 +79,17 @@ void normalizeControlFlow(llvm::MachineFunction &MF);
 // Runtime control-flow state owned by the selected signature scheme.
 std::vector<llvm::Register> signatureRegisters(const std::string &name);
 std::vector<llvm::Register> signatureRegisters(const llvm::MachineFunction &MF);
+// Compiler-generated prologue/epilogue helpers have a special calling
+// convention: the save helper links through t0 before FP exists, and restore
+// tail-returns after removing the frame. Ordinary calls with similar names
+// must retain their normal handling.
+enum class FrameHelper { None, Save, Restore };
+FrameHelper frameHelper(const llvm::MachineInstr &);
+// Signatures start after an entry save helper, before the remaining prologue.
+// A forced shrink-wrapped helper needs preservation of incoming signature
+// history, which this entry-only contract cannot provide.
+llvm::MachineBasicBlock::iterator
+signatureEntryInsertion(llvm::MachineFunction &);
 // Preserve actual signature state in the preallocated fixed frame, without
 // moving the outgoing argument area at the call. Scratch must be reserved.
 void preserveSignatureAcrossCall(llvm::MachineInstr *call,

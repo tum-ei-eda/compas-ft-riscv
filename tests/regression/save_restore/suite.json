@@ -1,0 +1,38 @@
+{
+  "name": "save_restore",
+  "adapter": "freestanding",
+  "architectures": ["rv32", "rv64"],
+  "modes": ["none"],
+  "cfp_modes": ["CFCSS", "RASM", "RACFED"],
+  "schedules": ["cgs"],
+  "save_restore": true,
+  "verify_machineinstrs": true,
+  "sources": ["calls.c", "ordinary_helper.c"],
+  "expected": {"exit": 42, "stdout": ""},
+  "cases": [
+    {
+      "name": "helper_only_leaf",
+      "sources": ["leaf.c"],
+      "functions": ["helper_only_leaf"],
+      "save_restore_functions": ["helper_only_leaf"]
+    },
+    {
+      "name": "repeated_calls",
+      "defines": ["TEST_CASE=1"],
+      "functions": ["helper_repeated_calls"],
+      "save_restore_functions": ["helper_repeated_calls"]
+    },
+    {
+      "name": "return_paths",
+      "defines": ["TEST_CASE=2"],
+      "functions": ["helper_return_paths"],
+      "save_restore_functions": ["helper_return_paths"]
+    },
+    {
+      "name": "cold_branch",
+      "defines": ["TEST_CASE=3"],
+      "functions": ["helper_cold_branch"],
+      "save_restore_functions": ["helper_cold_branch"]
+    }
+  ]
+}
