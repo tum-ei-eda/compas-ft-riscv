@@ -427,6 +427,16 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
 
   auto ignore = ignoreMF();
   if (!ignore) {
+    // DMR selects explicit callee-saved spills before frame layout, even when
+    // the subtarget requests save/restore helpers. A late MIR pipeline must not
+    // bypass that choice and leave an opaque helper modifying monitor state.
+    for (const auto &MBB : *MF_)
+      for (const auto &MI : MBB)
+        if (riscv_common::frameHelper(MI) != riscv_common::FrameHelper::None) {
+          MI.emitError("COMPAS: DMR requires explicit save/restore spills; "
+                       "regenerate the frame with DMR enabled");
+          return false;
+        }
     if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_))
       for (const auto &MBB : *MF_)
         for (const auto &MI : MBB)
@@ -885,10 +895,6 @@ void RISCVDmr::calc_framesize() {
     // also be divisible by A to preserve the separation after both ANDIs.
     const uint64_t separation = llvm::alignTo(
         static_cast<uint64_t>(frame_size_) + alignment - 1, alignment);
-    if (MF_->getInfo<llvm::RISCVMachineFunctionInfo>()->useSaveRestoreLibCalls(
-            *MF_))
-      llvm::report_fatal_error(
-          "COMPAS: realigned EDDI save/restore libcalls are unsupported");
     shadow_frame_offset_ = separation;
   }
 
@@ -1470,16 +1476,12 @@ void RISCVDmr::duplicateInstructions() {
   preparePCRelativeAddresses();
   std::map<llvm::MachineInstr *, llvm::MachineInstr *> incoming_stack_loads;
   if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_)) {
-    const auto *info = MF_->getInfo<llvm::RISCVMachineFunctionInfo>();
     for (auto &MBB : *MF_)
       for (auto &MI : MBB) {
         int64_t offset = 0;
         if (incomingStackArgumentOffset(MI, offset))
           incoming_stack_loads.emplace(&MI, nullptr);
       }
-    if (info->useSaveRestoreLibCalls(*MF_))
-      llvm::report_fatal_error(
-          "COMPAS: EDDI save/restore libcalls are unsupported");
   }
   std::map<llvm::MachineInstr *, llvm::MachineInstr *> shadows;
   auto shadow_instruction = [&](llvm::MachineInstr &MI) {

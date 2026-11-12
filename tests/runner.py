@@ -225,10 +225,9 @@ def discover(args):
                                 skipped_repair_modes = True
                                 continue
                     if config.get("save_restore", False):
-                        if any(mode != "none" for mode in config.get("modes", ["EDDI", "SWIFT"])):
-                            raise ValueError("save_restore currently requires mode none")
                         if args.mode:
-                            config["selected_modes"] = [mode for mode in args.mode if mode == "none"]
+                            allowed = config.get("modes", ["EDDI", "SWIFT"])
+                            config["selected_modes"] = [mode for mode in args.mode if mode in allowed]
                             if not config["selected_modes"]:
                                 skipped_save_restore_modes = True
                                 continue
@@ -243,7 +242,7 @@ def discover(args):
         suffix = ("; REPAIR cases require NZDC, NZDC+NEMESIS or NZDC+NEMESEC modes"
                   if skipped_repair_modes else "")
         if skipped_save_restore_modes:
-            suffix += "; save_restore cases currently require mode none"
+            suffix += "; save_restore cases require a mode declared by their manifest"
         raise TestError("no cases match the requested suite, case and architecture selection" + suffix)
     return selected
 
@@ -325,8 +324,8 @@ def check_build_diagnostic(observed, diagnostic, directory, label):
                         f"status {observed['host_exit']}; see {directory / (label + '.stderr')}")
 
 
-def check_save_restore_helpers(assembly, functions, report):
-    """Require real helper transfers in each named function's emitted body."""
+def check_save_restore_helpers(assembly, functions, report, dmr_functions=()):
+    """Check GNU helpers or explicit callee saves for each named function."""
     bodies = "\n".join(path.read_text() for path in assembly)
     evidence = {}
     for function in functions:
@@ -338,7 +337,24 @@ def check_save_restore_helpers(assembly, functions, report):
                              r"(__riscv_(?:save|restore)_\d+)\b", match[1], re.MULTILINE)
         evidence[function] = dict(save=sorted({value for value in helpers if "_save_" in value}),
                                   restore=sorted({value for value in helpers if "_restore_" in value}))
-        if not evidence[function]["save"] or not evidence[function]["restore"]:
+        protected = function in dmr_functions or tuple(dmr_functions) == ("-1",)
+        evidence[function]["policy"] = "explicit_spills" if protected else "gnu_helpers"
+        if protected:
+            if helpers:
+                raise TestError(f"expected explicit DMR spills in {function!r}; observed {helpers}")
+            registers = ["s0"]
+            if re.search(r"^\s*(?:call|jal|jalr)\s", match[1], re.MULTILINE):
+                registers.append("ra")
+            spills = {}
+            for register in registers:
+                save = re.findall(r"^\s*s[wd]\s+" + register + r",[^\n]*", match[1], re.MULTILINE)
+                restore = re.findall(r"^\s*l[wd]\s+" + register + r",[^\n]*", match[1], re.MULTILINE)
+                if not save or not restore:
+                    raise TestError(f"expected explicit {register} save and restore in {function!r}")
+                spills[register] = dict(save=[line.strip() for line in save],
+                                        restore=[line.strip() for line in restore])
+            evidence[function]["spills"] = spills
+        elif not evidence[function]["save"] or not evidence[function]["restore"]:
             raise TestError(f"expected GNU save and restore helper transfers in {function!r}; "
                             f"observed {helpers}")
     report.write_text(json.dumps(evidence, indent=2) + "\n")
@@ -423,11 +439,13 @@ def build_and_run(args, tools, case, arch, mode, cfp, schedule, functions, cfp_f
             assembly.append(asm)
         required_helpers = case.get("save_restore_functions", [])
         if required_helpers:
-            check_save_restore_helpers(assembly, required_helpers, directory / "save-restore.json")
+            dmr_functions = functions if mode != "none" else []
+            check_save_restore_helpers(assembly, required_helpers, directory / "save-restore.json",
+                                       dmr_functions)
             if verify and verification["status"] == "PASS":
                 try:
                     check_save_restore_helpers(verified_assembly, required_helpers,
-                                               directory / "save-restore.verify.json")
+                                               directory / "save-restore.verify.json", dmr_functions)
                 except TestError as error:
                     verification["status"] = "ERROR"
                     verification["errors"].append(str(error))
