@@ -27,6 +27,8 @@ The link:regression/multi_function/README.adoc[multiple-function suite] compiles
 
 The link:regression/hard_float/README.adoc[hard-float suite] checks exact FP results and live values with RV32/RV64 F/D ISA and ABI profiles, including XLEN/FLEN mismatches. It enables the hardening matrix and separate machine verifier.
 
+The link:regression/rsm_layering/README.adoc[RSM instruction-selection suite] checks all seven combinations of original instructions, DMR instructions and balance checks on RV32/RV64. It combines functional equivalence with assembly assertions around entry checks, NEMESIS/NEMESEC duplicate branches and RACFED updates for original and duplicated arithmetic.
+
 See the link:TODO.md[deferred hardening TODO] for failing compiler configurations, observed results and reproduction commands to investigate later.
 
 [[running-tests]]
@@ -77,6 +79,8 @@ python3 tests/regression/run.py --case 'hard_float/*'
 
 `--case` accepts a glob matching `suite/case`; quote it to prevent shell expansion. Repeat `--case`, `--arch`, `--mode`, `--schedule` or `--cfp` to select multiple values. Available DMR modes are `none`, `EDDI`, `SWIFT`, `NZDC`, `NZDC+NEMESIS` and `NZDC+NEMESEC`; schedules are coarse-grained (`cgs`) and fine-grained (`fgs`); control-flow selections are `none`, `CFCSS`, `RASM` and `RACFED`. Use `--mode none --cfp RASM`, for example, to check control-flow protection alone. `--functions` and `--cfp-functions` override manifest function selections with comma- or semicolon-separated lists. An explicit empty string passes an empty selection, allowing the selective-hardening combinations used by CI to be reproduced. Manifests may select CFP independently through `cfp_functions`; when omitted, CFP follows the effective DMR function selection, including `--functions`. `--cfp-functions` always takes precedence. Listing cases shows both effective selections.
 
+Repeat `--rsm-instructions orig`, `--rsm-instructions orig+dmr` and `--rsm-instructions all` to compare link:../docs/rsm-layering.adoc[instruction-class selections]. All seven nonempty combinations of `orig`, `dmr` and `balance` are supported; class order is normalized and the full set is `all`. Manifests select `rsm_instructions`, defaulting to `["all"]`. Each selection has its own build directory and JSON result. Explicit suffixes in `--cfp-functions 'foo:orig+dmr,bar:balance'` take precedence over the convenience selection. Known failures also match `rsm_instructions`; entries without that field apply only to `all`. Configurations with CFP disabled run once regardless of the selected masks.
+
 Tool paths can also be supplied directly:
 
 [cols="1,1",options="header"]
@@ -125,7 +129,7 @@ an expectation, just as with explicit per-function save/restore checks.
 
 Freestanding cases compare the target exit value recorded in QEMU's syscall trace and program stdout. This preserves target error values such as `-512`, which can otherwise wrap to host status zero. CMake applications compare the Spike process status and complete stdout against their reference and independent oracle. CRC requires all four output lines, including both CRC results and the final completion line, so a truncated execution cannot pass just by returning host status zero.
 
-Known failures are declared explicitly in a manifest with the affected case, architecture, mode and schedule, an issue link, a reason and the observed target exit value. Only that matching runtime failure is `XFAIL`. A missing tool, a build failure, an invalid reference result or a different runtime failure still fails the run. When a known failure starts passing it is `XPASS`, which fails by default so that stale expectations are reviewed. `--allow-xpass` permits exploratory validation while updating the manifest.
+Known failures are declared explicitly in a manifest with the affected case, architecture, mode and schedule, an issue or TODO reference, a reason and the observed target exit value. Only that matching runtime failure is `XFAIL`. A missing tool, a build failure, an invalid reference result or a different runtime failure still fails the run. When a known failure starts passing it is `XPASS`, which fails by default so that stale expectations are reviewed. `--allow-xpass` permits exploratory validation while updating the manifest.
 
 Known-failure expectations preserve visible evidence of functional behavior; they do not claim fault-detection coverage. Remove or update an expectation when its underlying issue is fixed and the relevant configuration is verified.
 
@@ -183,6 +187,8 @@ Freestanding manifests can set `verify_machineinstrs: true` to compile each IR s
 
 `--verify-machineinstrs` enables verification for a selected freestanding run; `--no-verify-machineinstrs` disables the extra compilation for a functional-only investigation. The independent oracle and reference comparisons still apply. Verifier failures and newly observed runtime failures belong in the TODO while compiler fixes are deferred.
 
+Freestanding manifests can also set `assembly_checks` to a Python validator path relative to the manifest. The runner invokes it with `--request <json-file>`, passing assembly paths, the selected architecture, protections, functions and instruction classes under `instructions`. The validator emits JSON with `status` (`PASS`, `FAIL` or `SKIP`), `detail` and optional `checks`, and exits nonzero for a failure. Its result is retained as `verification.assembly`. An assembly failure makes the result an `ERROR` while execution still supplies the independent `functional_status`; `--no-verify-machineinstrs` does not disable these structural assertions.
+
 == Adding cases and suites
 
 Create a directory below `regression/` or `apps/` with a `suite.json` file, source files and any expected-output files. Manifests are discovered recursively. Add cases to an existing manifest when they share a build adapter and configuration. A new case does not need a Python runner.
@@ -215,4 +221,4 @@ Suite-level `sources`, `functions`, `cfp_functions`, `defines`, `expected` and t
 
 Use `adapter: "cmake"` for an application with a CMake project. The link:apps/crc/suite.json[CRC manifest] is the initial example: it declares the executable, ISA, protected functions and a case whose expected stdout comes from link:apps/crc/expected.stdout[expected.stdout]. Its CMake project uses the repository's `compas_source()` helper and accepts `DMR_MOD`, `DMR_FUNCTIONS`, `CFP_MOD`, `CFP_FUNCTIONS` and `COMPAS_FINE_GRAINED` from the runner.
 
-Imported benchmarks and test suites belong in this structure too. Select deterministic inputs, retain their license and attribution, and record the expected observable result. Keep generated IR, assembly, binaries and logs in the build directory. Add fault injection or code-generation checks as separate future capabilities when needed; the shared suite currently checks functional equivalence.
+Imported benchmarks and test suites belong in this structure too. Select deterministic inputs, retain their license and attribution, and record the expected observable result. Keep generated IR, assembly, binaries and logs in the build directory. Assembly assertions can check a compiler option's requested structure; fault-injection campaigns remain a separate capability.

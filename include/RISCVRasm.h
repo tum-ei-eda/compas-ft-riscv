@@ -16,10 +16,12 @@
 
 #pragma once
 
+#include <memory>
 #include <random>
 
 #include "RISCV.h"
 #include "RISCVDmr.h"
+#include "RISCVRsm.h"
 #include "common.h"
 
 class RISCVRasm : public RISCVDmr {
@@ -52,6 +54,7 @@ protected:
   std::uniform_int_distribution<short> unif_dist_{-500, 500};
   // for convenience
   std::set<llvm::MachineBasicBlock *> err_bbs_{};
+  std::unique_ptr<riscv_common::RsmRegions> regions_;
 
   // for initialization purposes
   virtual void init() override;
@@ -71,8 +74,6 @@ protected:
   virtual void generate_intrablock_signature_updates();
   void generate_signature_checks();
   void generate_traversal_adjustments();
-  // Split instrumentation checks and restore machine CFG/liveness metadata.
-  void normalize_control_flow();
 
   // map containing the signature check instruction for each MBB
   std::map<const llvm::MachineBasicBlock *, llvm::MachineInstr *>

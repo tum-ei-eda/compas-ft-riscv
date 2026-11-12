@@ -1,0 +1,76 @@
+{
+  "name": "rsm_layering",
+  "adapter": "freestanding",
+  "architectures": [
+    "rv32",
+    "rv64"
+  ],
+  "modes": [
+    "NZDC+NEMESIS",
+    "NZDC+NEMESEC"
+  ],
+  "cfp_modes": [
+    "CFCSS",
+    "RASM",
+    "RACFED"
+  ],
+  "schedules": [
+    "cgs"
+  ],
+  "sources": [
+    "rsm_layering.c"
+  ],
+  "functions": [
+    "layering_entry",
+    "layering_branches"
+  ],
+  "expected": {
+    "exit": 42,
+    "stdout": ""
+  },
+  "assembly_checks": "check_assembly.py",
+  "cases": [
+    {
+      "name": "orig",
+      "rsm_instructions": [
+        "orig"
+      ]
+    },
+    {
+      "name": "dmr",
+      "rsm_instructions": [
+        "dmr"
+      ]
+    },
+    {
+      "name": "balance",
+      "rsm_instructions": [
+        "balance"
+      ]
+    },
+    {
+      "name": "orig_dmr",
+      "rsm_instructions": [
+        "orig+dmr"
+      ]
+    },
+    {
+      "name": "orig_balance",
+      "rsm_instructions": [
+        "orig+balance"
+      ]
+    },
+    {
+      "name": "dmr_balance",
+      "rsm_instructions": [
+        "dmr+balance"
+      ]
+    },
+    {
+      "name": "all",
+      "rsm_instructions": [
+        "all"
+      ]
+    }
+  ]
+}

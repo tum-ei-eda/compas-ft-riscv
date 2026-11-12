@@ -1,0 +1,36 @@
+= RSM instruction-selection regressions
+
+These cases run the same deterministic program with all seven nonempty
+combinations of `orig`, `dmr` and `balance` instructions. `all` selects the
+full set and is the compiler default. The manifest combines NZDC+NEMESIS and
+NZDC+NEMESEC with CFCSS/RASM/RACFED on RV32 and RV64, producing 98 executions
+per backend including fourteen unprotected references.
+
+The program checks independently calculated arithmetic results, branch and
+loop results, and volatile side effects. It returns `42` on success or `17`
+on a mismatch and produces no output. The leaf `layering_entry` has no
+application branches. Its fourteen entry checks distinguish selections that
+include `balance`. The separate `layering_branches` function retains
+application branches and a loop, allowing the assembly validator to pair
+primary conditions with shadow duplicates. Calls use only register arguments.
+
+The shared runner invokes `check_assembly.py` through the manifest's
+`assembly_checks` field. It checks signature comparisons between entry checks
+when `balance` is selected and before paired duplicate branches when `dmr`
+is selected. RACFED assertions separately check per-instruction signature
+updates for original and shadow arithmetic according to `orig` and `dmr`.
+Structural transitions between application CFG regions remain necessary in
+all selections. The validator avoids exact basic-block labels and whole-file
+instruction counts, and excludes terminal error-handler arithmetic.
+
+Assembly results are recorded separately from the functional result.
+Overriding the protected functions to omit either fixture skips structural
+checks. CFCSS exercises the functional oracle; its XOR-based signature
+structure is outside this validator's RASM/RACFED assertions.
+
+[source,sh]
+----
+python3 tests/regression/run.py --case 'rsm_layering/*'
+----
+
+All configurations require the functional oracle to pass.

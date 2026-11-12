@@ -61,6 +61,8 @@ Detailed instructions on compiler installation and usage can be found in link:do
 
 The manual provides details on how to install LLVM compiler with our SIHFT passes. Further, the manual provides usage instructions on how to harden a given C/C++ project using SIHFT transformations.
 
+See link:docs/rsm-layering.adoc[RSM instruction selection] for composing signature coverage of original instructions, DMR instructions and balance checks through per-function protection selections.
+
 .Docs outdated? Rebuild them like so...
 [example%collapsible]
 ====

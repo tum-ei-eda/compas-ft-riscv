@@ -21,6 +21,7 @@ TESTS = Path(__file__).resolve().parent
 MODES = ("none", "EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC")
 REPAIR_MODES = ("NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC")
 CFPS = ("none", "CFCSS", "RASM", "RACFED")
+RSM_INSTRUCTION_SETS = ("orig", "dmr", "balance", "orig+dmr", "orig+balance", "dmr+balance", "all")
 
 
 class TestError(Exception):
@@ -38,6 +39,37 @@ def function_selections(args, case):
     return functions, cfp_functions
 
 
+def rsm_instructions(value):
+    """Normalize a nonempty set of instruction classes; all is the full set."""
+    if value == "all":
+        return "all"
+    parts = value.split("+") if isinstance(value, str) else []
+    if not parts or any(part not in ("orig", "dmr", "balance") for part in parts):
+        raise ValueError("RSM instructions must combine orig, dmr and balance with '+' or use all")
+    selected = set(parts)
+    if len(selected) != len(parts):
+        raise ValueError("RSM instruction classes must not contain duplicates")
+    return "all" if len(selected) == 3 else "+".join(part for part in ("orig", "dmr", "balance") if part in selected)
+
+
+def cfp_selection(functions, instructions):
+    """Keep explicit function masks and apply the convenience mask to bare names."""
+    selections = []
+    for selection in functions:
+        name, separator, mask = selection.partition(":")
+        if not name:
+            raise TestError("CFP function selections require a function name")
+        if separator:
+            try:
+                rsm_instructions(mask)
+            except ValueError as error:
+                raise TestError(f"invalid CFP function selection {selection!r}: {error}") from error
+            selections.append(selection)
+        else:
+            selections.append(name if instructions == "all" else f"{name}:{instructions}")
+    return ",".join(selections)
+
+
 def parser(default_suite):
     cli = argparse.ArgumentParser(description=__doc__)
     cli.add_argument("--suite", choices=("all", "regression", "apps"), default=default_suite)
@@ -47,8 +79,11 @@ def parser(default_suite):
     cli.add_argument("--mode", action="append", choices=MODES)
     cli.add_argument("--schedule", action="append", choices=("cgs", "fgs"))
     cli.add_argument("--cfp", action="append", choices=CFPS)
+    cli.add_argument("--rsm-instructions", action="append", type=rsm_instructions,
+                     choices=RSM_INSTRUCTION_SETS,
+                     help="repeatable RSM instruction classes joined with '+' (default: manifest or all)")
     cli.add_argument("--functions", type=function_list, help="override DMR functions (comma/semicolon list)")
-    cli.add_argument("--cfp-functions", type=function_list, help="override CFP functions (comma/semicolon list)")
+    cli.add_argument("--cfp-functions", type=function_list, help="override CFP selections: function[:orig+dmr+balance] (comma/semicolon list)")
     cli.add_argument("--isa", help="freestanding ISA override; {bits} expands to 32 or 64")
     cli.add_argument("--abi", help="freestanding ABI override (ilp32, ilp32f, ilp32d, lp64, lp64f, lp64d)")
     cli.add_argument("--code-model", action="append", choices=("medlow", "medany"),
@@ -155,6 +190,10 @@ def discover(args):
                         values = config.get(field, default)
                         if not isinstance(values, list) or not values or any(value not in choices for value in values):
                             raise ValueError(f"{field} must be a nonempty list drawn from {choices}")
+                    masks = config.get("rsm_instructions", ["all"])
+                    if not isinstance(masks, list) or not masks:
+                        raise ValueError("rsm_instructions must be a nonempty list of instruction sets")
+                    config["rsm_instructions"] = list(dict.fromkeys(rsm_instructions(mask) for mask in masks))
                     for field in ("functions", "cfp_functions", "defines"):
                         values = config.get(field, [])
                         if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
@@ -224,6 +263,11 @@ def discover(args):
                         raise ValueError("save_restore_functions must be a list of nonempty function names")
                     if required_helpers and not config.get("save_restore", False):
                         raise ValueError("save_restore_functions requires save_restore: true")
+                    if "assembly_checks" in config and (
+                            not isinstance(config["assembly_checks"], str) or not config["assembly_checks"]):
+                        raise ValueError("assembly_checks must name a Python validator script")
+                    if "assembly_checks" in config and config["adapter"] != "freestanding":
+                        raise ValueError("assembly_checks is supported by the freestanding adapter")
                     if args.case and not any(fnmatch.fnmatchcase(name, pattern) for pattern in args.case):
                         continue
                     if config.get("repair", False):
@@ -392,7 +436,8 @@ def check_save_restore_helpers(assembly, functions, report, dmr_functions=()):
     report.write_text(json.dumps(evidence, indent=2) + "\n")
 
 
-def build_and_run(args, tools, case, arch, mode, cfp, schedule, functions, cfp_functions, directory, target):
+def build_and_run(args, tools, case, arch, mode, cfp, schedule, functions, cfp_functions, directory, target,
+                  instructions="all"):
     directory.mkdir(parents=True, exist_ok=True)
     build = lambda argv, label: command(argv, directory, label, args.build_timeout)
     verify = args.verify_machineinstrs if args.verify_machineinstrs is not None else case.get("verify_machineinstrs", False)
@@ -408,7 +453,7 @@ def build_and_run(args, tools, case, arch, mode, cfp, schedule, functions, cfp_f
         verified_assembly = []
         flags = [] if mode == "none" else [f"-{mode}={','.join(functions)}"]
         if cfp != "none":
-            flags.append(f"-{cfp}={','.join(cfp_functions)}")
+            flags.append(f"-{cfp}={cfp_selection(cfp_functions, instructions)}")
         if schedule == "fgs" and mode != "none":
             flags.append(f"-FGS={','.join(functions)}")
         if target.get("repair", False) and mode != "none":
@@ -492,6 +537,30 @@ def build_and_run(args, tools, case, arch, mode, cfp, schedule, functions, cfp_f
                 except TestError as error:
                     verification["status"] = "ERROR"
                     verification["errors"].append(str(error))
+        if cfp != "none" and "assembly_checks" in case:
+            request = directory / "assembly-check.request.json"
+            request.write_text(json.dumps(dict(
+                assemblies=[str(path) for path in assembly], directory=str(directory),
+                instructions=instructions, mode=mode, cfp=cfp, arch=arch,
+                functions=functions, cfp_functions=cfp_functions), indent=2) + "\n")
+            try:
+                checked = command([sys.executable, case["directory"] / case["assembly_checks"],
+                                   "--request", request], directory, "assembly-check",
+                                  args.build_timeout, check=False)
+                validation = json.loads(checked["stdout"])
+                if validation["status"] not in ("PASS", "FAIL", "SKIP"):
+                    raise ValueError("validator did not report PASS, FAIL or SKIP")
+                if checked["host_exit"] and validation["status"] != "FAIL":
+                    raise ValueError("validator status disagrees with its exit code")
+            except (TestError, ValueError, KeyError, TypeError) as error:
+                validation = dict(status="FAIL", detail=f"invalid assembly validator output: {error}")
+            if verification is None:
+                verification = {"status": "PASS", "errors": []}
+            verification["assembly"] = validation
+            if validation["status"] == "FAIL":
+                verification["status"] = "ERROR"
+                verification["errors"].append(
+                    f"assembly validation failed: {validation.get('detail', '')}; see {directory / 'assembly-check.stdout'}")
         elf = directory / "test.elf"
         build([tools["cc"], *isa_flags, "-nostdlib", "-static", "-no-pie",
                "-Wl,--build-id=none", "-Wl,-Ttext=0x10000", TESTS / "support/start.S",
@@ -520,6 +589,7 @@ def build_and_run(args, tools, case, arch, mode, cfp, schedule, functions, cfp_f
                "-DDMR_FUNCTIONS=" + ";".join(functions),
                "-DCFP_MOD=" + (cfp if cfp != "none" else ""),
                "-DCFP_FUNCTIONS=" + ";".join(cfp_functions),
+               "-DCOMPAS_RSM_INSTRUCTIONS=" + instructions,
                "-DCOMPAS_FINE_GRAINED=" + ("ON" if schedule == "fgs" and mode != "none" else "OFF")], "configure")
         # compas_source() does not track every source/tool change as a Make
         # dependency. Rebuild generated IR/assembly instead of trusting stale outputs.
@@ -543,14 +613,15 @@ def attach_verification(result, verification):
             result["status"] = "ERROR"
 
 
-def known_failure(case, arch, mode, cfp, schedule, functions, cfp_functions, target):
+def known_failure(case, arch, mode, cfp, schedule, functions, cfp_functions, target, instructions="all"):
     if (functions != case.get("functions", [])
             or cfp_functions != case.get("cfp_functions", case.get("functions", []))):
         return None
     for failure in case.get("known_failures", []):
         if (failure["case"] == case["case_name"] and failure["mode"] == mode
                 and failure["schedule"] == schedule and arch in failure["architectures"]
-                and cfp == failure.get("cfp", "none")):
+                and cfp == failure.get("cfp", "none")
+                and instructions == rsm_instructions(failure.get("rsm_instructions", "all"))):
             if target and any(target.get(field, default) != failure.get(field, default) for field, default in (
                     ("isa", arch + "im"), ("abi", "ilp32" if arch == "rv32" else "lp64"),
                     ("code_model", "medlow"), ("relax", True), ("frame_pointer", False),
@@ -571,6 +642,8 @@ def oracle_matches(case, outcome):
 def emit(results, result):
     results.append(result)
     config = f"{result['mode']}/{result['cfp']}/{result['schedule']}"
+    if result.get("cfp", "none") != "none":
+        config += "/" + result.get("rsm_instructions", "all")
     if "isa" in result:
         config += f" {result['isa']}/{result['abi']}/{result['code_model']}"
         if result.get("frame_pointer", False):
@@ -589,15 +662,19 @@ def emit(results, result):
 def execute(args, tools, cases, results):
     for case in cases:
         functions, cfp_functions = function_selections(args, case)
-        configurations = list(dict.fromkeys(itertools.product(
+        configurations = list(dict.fromkeys(
+            (mode, cfp, schedule, instructions if cfp != "none" else "all")
+            for mode, cfp, schedule, instructions in itertools.product(
             case.get("selected_modes", args.mode or case.get("modes", ["EDDI", "SWIFT"])),
             args.cfp or case.get("cfp_modes", ["none"]),
-            args.schedule or case.get("schedules", ["cgs"]))))
-        for mode, cfp, schedule in configurations:
+            args.schedule or case.get("schedules", ["cgs"]),
+            args.rsm_instructions or case.get("rsm_instructions", ["all"]))))
+        for mode, cfp, schedule, instructions in configurations:
             if mode not in MODES or cfp not in CFPS or schedule not in ("cgs", "fgs"):
                 raise TestError(f"invalid configuration in {case['name']}: {mode}/{cfp}/{schedule}")
         verify = args.verify_machineinstrs if args.verify_machineinstrs is not None else case.get("verify_machineinstrs", False)
-        identity = hashlib.sha256(json.dumps([functions, cfp_functions, tools, verify, case["targets"]], sort_keys=True).encode()).hexdigest()[:10]
+        identity = hashlib.sha256(json.dumps([functions, cfp_functions, tools, verify, case["targets"],
+                                              args.rsm_instructions or case.get("rsm_instructions", ["all"])], sort_keys=True).encode()).hexdigest()[:10]
         for arch, target in ((arch, target) for arch in dict.fromkeys(case["selected_arches"])
                              for target in case["targets"][arch]):
             root = args.build_dir / case["group"] / case["name"] / arch / identity
@@ -635,19 +712,20 @@ def execute(args, tools, cases, results):
                 emit(results, reference)
                 continue
             emit(results, reference)
-            for mode, cfp, schedule in configurations:
+            for mode, cfp, schedule, instructions in configurations:
                 if mode == "none" and cfp == "none":
                     continue  # The reference already checks this configuration.
-                directory = root / f"{mode}-{cfp}-{schedule}"
-                result = dict(base, mode=mode, cfp=cfp, schedule=schedule, logdir=str(directory))
+                directory = root / f"{mode}-{cfp}-{schedule}-{instructions}"
+                result = dict(base, mode=mode, cfp=cfp, schedule=schedule,
+                              rsm_instructions=instructions, logdir=str(directory))
                 if build_diagnostic_for(case, mode, functions):
                     result["kind"] = "build_diagnostic"
                 try:
-                    failure = known_failure(case, arch, mode, cfp, schedule, functions, cfp_functions, target)
+                    failure = known_failure(case, arch, mode, cfp, schedule, functions, cfp_functions, target, instructions)
                     if failure:
                         result["known_failure"] = failure
                     observed, verification = build_and_run(args, tools, case, arch, mode, cfp, schedule,
-                                                           functions, cfp_functions, directory, target)
+                                                           functions, cfp_functions, directory, target, instructions)
                     if "build_diagnostic" in observed:
                         diagnostic = observed["build_diagnostic"]
                         result["build_diagnostic"] = diagnostic
@@ -696,6 +774,7 @@ def main(default_suite="all"):
                       f"modes={','.join(case.get('selected_modes', args.mode or case.get('modes', [])))} "
                       f"cfp={','.join(args.cfp or case.get('cfp_modes', ['none']))} "
                       f"functions={','.join(functions)} cfp-functions={','.join(cfp_functions)} "
+                      f"rsm={','.join(args.rsm_instructions or case.get('rsm_instructions', ['all']))} "
                       f"schedules={','.join(args.schedule or case.get('schedules', ['cgs']))} "
                       f"verify={args.verify_machineinstrs if args.verify_machineinstrs is not None else case.get('verify_machineinstrs', False)} "
                       f"targets={';'.join(profiles) if profiles else 'CMake toolchain'}")

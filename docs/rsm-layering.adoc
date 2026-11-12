@@ -1,0 +1,59 @@
+= RSM instruction selection
+
+CFCSS, RASM and RACFED accept an instruction-class selection after each protected function name. The default is `all`: original application instructions, DMR instructions and balance checks. CompaSeC's composition is selected with `orig+dmr`.
+
+[cols="1,3",options="header"]
+|===
+| Class | Instructions monitored by the signature scheme
+| `orig` | Original application instructions.
+| `dmr` | DMR-generated instructions, including duplicated computations, shadow copies and NEMESIS/NEMESEC duplicate branches.
+| `balance` | Protection checks, including entry balance checks and load/store guards, together with their checking regions.
+|===
+
+Join classes with `+`. The seven selections are `orig`, `dmr`, `balance`, `orig+dmr`, `orig+balance`, `dmr+balance` and `all`. Class order does not matter; `orig+dmr+balance` is equivalent to `all`.
+
+This selection applies to whole instructions. RACFED's per-instruction signature updates follow the selected classes, so `orig` excludes updates for duplicated computation and `orig+dmr` includes them. RASM and CFCSS use the selected branch instructions to choose signature regions. Structural signature transitions across the application CFG remain necessary in every selection; excluding a class does not remove every signature operation near its instructions.
+
+DMR checks continue executing regardless of the signature selection. Error handlers remain terminal destinations, and each signature pass excludes its own newly inserted checks from recursive instrumentation. The compiler normalizes the physical machine CFG and recomputes liveness after instrumentation. These selections do not promise to preserve the frontend's exact basic-block count.
+
+== Compiler options
+
+Use the existing protection-function option with `FUNCTION:CLASSES` entries:
+
+[,bash]
+----
+llc -NZDC+NEMESEC=foo,bar -RACFED=foo:orig+dmr,bar:all \
+  input.ll -o hardened.s
+----
+
+The same syntax applies to `-RASM` and `-CFCSS`. Bare function names select `all`, and the existing `-1` function wildcard also accepts a suffix, such as `-RASM=-1:orig+dmr`. Names are exact compiler symbol names; the last matching selector wins. The suffix selects signature coverage for that function and does not enable a DMR technique by itself.
+
+Apply the updated LLVM integration patch for the selected version and rebuild the RISC-V backend and COMPAS library. Instruction provenance lives in the target's machine-function metadata; rebuilding only COMPAS against an older patched LLVM header is insufficient. The maintained patches cover LLVM 13.0.1, 14.0.6, 15.0.7 and 16.0.6.
+
+== CMake integration
+
+`COMPAS_RSM_INSTRUCTIONS` supplies the selection for bare `CFP_FUNCTIONS` names and defaults to `all`. A `compas_source()` call can override it with `RSM_INSTRUCTIONS`. Explicit function suffixes take precedence:
+
+[,cmake]
+----
+compas_source(app
+    SOURCES app.c
+    DMR_MOD NZDC+NEMESEC DMR_FUNCTIONS foo bar
+    CFP_MOD RASM CFP_FUNCTIONS foo bar:balance
+    RSM_INSTRUCTIONS orig+dmr)
+----
+
+This generates `-RASM=foo:orig+dmr,bar:balance` using the existing compiler option.
+
+== Regression checks
+
+The link:../tests/regression/rsm_layering/README.adoc[instruction-selection regression suite] exercises all seven selections with functional comparisons and assembly checks for entry balance coverage, duplicate branch coverage and RACFED computation updates. The shared runner accepts repeatable convenience selections:
+
+[,bash]
+----
+python3 tests/regression/run.py --case 'control_flow/*' \
+  --mode NZDC+NEMESEC --cfp RACFED \
+  --rsm-instructions orig --rsm-instructions orig+dmr --rsm-instructions all
+----
+
+Use `--cfp-functions 'foo:orig+dmr,bar:balance'` for explicit per-function selections. These checks establish program behavior and instrumentation structure. Fault-injection coverage and the tradeoff between code size and detection remain separate experiments.

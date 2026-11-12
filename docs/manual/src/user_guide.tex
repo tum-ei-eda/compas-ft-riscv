@@ -67,6 +67,34 @@ options is provided in Table~\ref{tab:sihft-options}.
 The final step in code generation is to use \texttt{gcc} for RISCV architectures to assemble and link the
 assembly code for a particular RISCV processor.
 
+\subsubsection{Runtime signature instruction selection}
+The existing CFCSS, RASM and RACFED function selections accept a suffix
+containing instruction classes: \texttt{orig} for original application
+instructions, \texttt{dmr} for generated DMR instructions, and
+\texttt{balance} for protection checks, including entry and load/store guards.
+Join any nonempty subset with \texttt{+}; class order does not matter.
+The default \texttt{all} means \texttt{orig+dmr+balance}. CompaSeC's
+composition is selected with \texttt{orig+dmr}.
+
+For example, \texttt{-RACFED=foo:orig+dmr,bar:balance} selects original and
+duplicated instructions in \texttt{foo}, and protection checks in \texttt{bar}.
+Bare function names select \texttt{all}. The existing \texttt{-1} wildcard
+also accepts a suffix; the last matching function selector wins.
+DMR techniques are enabled separately using their usual function selections.
+
+RACFED's per-instruction updates follow the selected classes, including
+duplicated computations. RASM and CFCSS use selected branch instructions to
+choose signature regions. Structural signature transitions across the
+application CFG remain necessary in every selection. DMR checks continue
+executing, and a signature pass does not recursively instrument its own checks.
+Physical CFG normalization and liveness recomputation follow instrumentation.
+
+Consumer CMake projects can set \texttt{COMPAS\_RSM\_INSTRUCTIONS}, or pass
+\texttt{RSM\_INSTRUCTIONS} to \texttt{compas\_source()}. This convenience
+setting applies to bare \texttt{CFP\_FUNCTIONS} names; an explicit
+\texttt{function:classes} entry takes precedence. Updated LLVM integration
+headers and the RISC-V backend must be rebuilt together with COMPAS.
+
 \subsubsection{Selective data and control-flow protection}
 DMR and CFP can select different functions. Pass the same function selections
 to each translation unit so that the compiler can prepare direct calls to

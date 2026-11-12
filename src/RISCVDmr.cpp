@@ -38,6 +38,7 @@
 #include "llvm/Support/MathExtras.h"
 
 #include "MCTargetDesc/RISCVBaseInfo.h"
+#include "RISCVRsm.h"
 
 #define SWITCH_VOLATILE
 // #define DBG
@@ -341,7 +342,23 @@ llvm::MachineBasicBlock *splitConditionalBranch(llvm::MachineInstr &branch) {
   // by the conditional left in source. Retain that edge in the tail only if
   // its remaining instructions can actually reach it. False edges otherwise
   // make CFCSS generate conflicting predecessor adjustments.
-  if (tail->isSuccessor(taken) && !reachesBlock(*tail, taken))
+  const bool tail_reaches_taken = reachesBlock(*tail, taken);
+  for (auto &PHI : taken->phis()) {
+    for (unsigned i = 1, end = PHI.getNumOperands(); i != end; i += 2) {
+      if (PHI.getOperand(i + 1).getMBB() != tail)
+        continue;
+      if (tail_reaches_taken) {
+        const auto incoming = PHI.getOperand(i);
+        PHI.addOperand(*source->getParent(), incoming);
+        PHI.addOperand(*source->getParent(),
+                       llvm::MachineOperand::CreateMBB(source));
+      } else {
+        PHI.getOperand(i + 1).setMBB(source);
+      }
+      break;
+    }
+  }
+  if (tail->isSuccessor(taken) && !tail_reaches_taken)
     tail->removeSuccessor(taken, true);
   if (!source->isSuccessor(taken))
     source->addSuccessor(taken);
@@ -408,6 +425,13 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
 
   MF_ = &MF;
   fname_ = std::string{MF_->getName()};
+  // This snapshot must precede every DMR mutation, including call-boundary
+  // wrappers added to otherwise unprotected functions.
+  riscv_common::captureOriginalRsmInstructions(MF);
+  using RsmCategory = riscv_common::RsmCategory;
+  auto record_new = [&](RsmCategory category) {
+    riscv_common::recordNewRsmInstructions(MF, category);
+  };
   auto add_errorBB_once = [&]() {
     if (err_bb_ == nullptr) {
       if (config_.eds == riscv_common::ErrorDetectionStrategy::ED0 ||
@@ -423,6 +447,7 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
   // if this function is not to be transformed then return early
   init(); // FIXME: init() will insert errorBBs for all functions (non-DMR, DMR,
           // and DMR calling non-DMRs alike)
+  record_new(RsmCategory::Balance);
 
   auto ignore = ignoreMF();
   // Selective boundaries require a returning call while the caller's frame is
@@ -477,22 +502,32 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
       llvm::report_fatal_error(
           "COMPAS: unsupported EDDI pointer-argument calling convention");
     add_errorBB_once();
+    record_new(RsmCategory::Balance);
     analyze_function();
     calc_framesize();
     analyzeStackArguments();
     duplicateInstructions();
+    record_new(RsmCategory::Dmr);
     protectCalls();
+    record_new(RsmCategory::Balance);
     protectStores();
+    record_new(RsmCategory::Balance);
     protectLoads();
+    record_new(RsmCategory::Balance);
     protectBranches();
+    record_new(config_.psb == ProtectStrategyBranch::B1 ? RsmCategory::Balance
+                                                     : RsmCategory::Dmr);
     if (llvm::cl::enable_repair) {
       repair();
+      record_new(RsmCategory::Dmr);
     }
     protectGP();
+    record_new(RsmCategory::Balance);
   } else {
     analyze_function(); // FIXME
     if (calls_dmr_user_func_) {
       add_errorBB_once();
+      record_new(RsmCategory::Balance);
     }
     calc_framesize();
   }
@@ -504,6 +539,7 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
     // only if we are in a non-DMRed function we now need to force an ErrorBlock
     // insertion
     updateSelectiveCalls();
+    record_new(RsmCategory::Balance);
   }
 
   if (!ignore && MF_->getFrameInfo().hasVarSizedObjects() &&
@@ -512,6 +548,7 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
   else if (!ignore && !llvm::cl::enable_repair &&
            riscv_common::usesDmrBasePointer(*MF_))
     preserveBasePointerAcrossCalls();
+  record_new(RsmCategory::Balance);
 
   return !ignore;
 }
@@ -1637,6 +1674,7 @@ void RISCVDmr::duplicateInstructions() {
       if (shadow == shadows.end())
         llvm::report_fatal_error(
             "COMPAS: EDDI frame allocation was not duplicated");
+      riscv_common::rsmFunctionInfo(*MF_).instructions.erase(shadow->second);
       shadow->second->eraseFromParent();
       auto insert = std::next(primary_sp->getIterator());
       auto *extra_allocation =
@@ -1701,6 +1739,7 @@ void RISCVDmr::duplicateInstructions() {
                         TII_->get(llvm::TargetOpcode::CFI_INSTRUCTION))
               .addCFIIndex(MF_->addFrameInst(adjusted))
               .setMIFlags(MI.getFlags());
+          riscv_common::rsmFunctionInfo(*MF_).instructions.erase(&MI);
           MI.eraseFromParent();
         }
       }
@@ -1851,6 +1890,7 @@ void RISCVDmr::expandDynamicStack() {
       storePointerDelta(&MBB, insert, stack_slot);
     }
     addOffset(MBB, insert, *TII_, scratch, riscv_common::k0, 0, DL);
+    riscv_common::rsmFunctionInfo(*MF_).instructions.erase(MI);
     MI->eraseFromParent();
   }
   dynamic_sp_origins_.clear();
@@ -2394,6 +2434,9 @@ void RISCVDmr::protectStores() {
 
       auto si{MF_->CloneMachineInstr(MI)};
       MI->getParent()->insertAfter(MI, si);
+      // This is the EDDI shadow store itself, rather than a store check.
+      riscv_common::setRsmInstructionCategory(
+          *si, riscv_common::RsmCategory::Dmr);
 
       for (auto &op : si->operands()) {
         if (op.isImm()) {
@@ -2544,21 +2587,29 @@ void RISCVDmr::moveIntoShadow(llvm::MachineBasicBlock *MBB,
                               llvm::Register rp, llvm::Register rs) {
   const auto DLL = MBB->empty() ? llvm::DebugLoc() : MBB->front().getDebugLoc();
 
+  llvm::MachineInstr *copy = nullptr;
   if (riscv_common::getRegType(rp) == riscv_common::RegType::I) {
-    llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::ADDI), rs)
-        .addReg(rp)
-        .addImm(0);
+    copy = llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::ADDI), rs)
+               .addReg(rp)
+               .addImm(0)
+               .getInstr();
   } else if (riscv_common::getRegType(rp) == riscv_common::RegType::FS) {
-    llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::FSGNJ_S), rs)
-        .addReg(rp)
-        .addReg(rp);
+    copy = llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::FSGNJ_S), rs)
+               .addReg(rp)
+               .addReg(rp)
+               .getInstr();
   } else if (riscv_common::getRegType(rp) == riscv_common::RegType::FD) {
-    llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::FSGNJ_D), rs)
-        .addReg(rp)
-        .addReg(rp);
+    copy = llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::FSGNJ_D), rs)
+               .addReg(rp)
+               .addReg(rp)
+               .getInstr();
   } else if (riscv_common::getRegType(rp) == riscv_common::RegType::FH) {
     assert(0 && "TODO");
   }
+  // Every use propagates application data into its redundant copy, including
+  // copies needed around calls and when repairing register assignments.
+  if (copy)
+    riscv_common::setRsmInstructionCategory(*copy, riscv_common::RsmCategory::Dmr);
 }
 
 bool RISCVDmr::is_func_dmr(const std::string &func_name) {
@@ -2920,7 +2971,10 @@ void RISCVDmr::protectCalls() {
     riscv_common::loadCallRegs(caller_regs, MBB, after);
     for (const auto reg : arg_regs)
       moveIntoShadow(MBB, after, P2S_.at(reg), reg);
-    MBB->insert(after, MF_->CloneMachineInstr(MI));
+    auto *duplicate_call = MF_->CloneMachineInstr(MI);
+    MBB->insert(after, duplicate_call);
+    riscv_common::setRsmInstructionCategory(
+        *duplicate_call, riscv_common::RsmCategory::Dmr);
     riscv_common::loadCallRegs(caller_regs, MBB, after);
     // Retain the original result in primary and the independent result in
     // shadow. Copy the duplicate before reloading the first call's result.
@@ -3119,6 +3173,8 @@ void RISCVDmr::protectBranches() {
 
         nemesis_nottaken_BB->addSuccessor(nottaken_BB);
         nemesis_bbs_.emplace(nemesis_nottaken_BB);
+        riscv_common::rsmFunctionInfo(*MF_).duplicate_blocks.insert(
+            nemesis_nottaken_BB);
 
         si->getOperand(2).setMBB(err_bb_);
         nemesis_nottaken_BB->push_back(si);
@@ -3130,6 +3186,8 @@ void RISCVDmr::protectBranches() {
         MBB->replaceSuccessor(taken_BB, nemesis_taken_BB);
         nemesis_taken_BB->addSuccessor(taken_BB);
         nemesis_bbs_.emplace(nemesis_taken_BB);
+        riscv_common::rsmFunctionInfo(*MF_).duplicate_blocks.insert(
+            nemesis_taken_BB);
 
         si = MF_->CloneMachineInstr(si);
         si->getOperand(2).setMBB(taken_BB);
@@ -3196,6 +3254,8 @@ void RISCVDmr::protectBranches() {
             nemesec_nottaken_BB); // maybe instead replaceSuccessor()
         nemesec_nottaken_BB->addSuccessor(nottaken_BB);
         nemesis_bbs_.emplace(nemesec_nottaken_BB);
+        riscv_common::rsmFunctionInfo(*MF_).duplicate_blocks.insert(
+            nemesec_nottaken_BB);
 
         si->getOperand(2).setMBB(err_bb_);
         nemesec_nottaken_BB->push_back(si);
@@ -3216,6 +3276,8 @@ void RISCVDmr::protectBranches() {
             taken_BB, nemesis_taken_BB); // maybe instead replaceSuccessor()
         nemesis_taken_BB->addSuccessor(taken_BB);
         nemesis_bbs_.emplace(nemesis_taken_BB);
+        riscv_common::rsmFunctionInfo(*MF_).duplicate_blocks.insert(
+            nemesis_taken_BB);
 
         si = MF_->CloneMachineInstr(si);
         si->getOperand(2).setMBB(taken_BB);
@@ -3261,6 +3323,7 @@ void RISCVDmr::protectBranches() {
 void RISCVDmr::insertErrorBB() {
   err_bb_ = MF_->CreateMachineBasicBlock();
   MF_->push_back(err_bb_);
+  riscv_common::rsmFunctionInfo(*MF_).error_blocks.insert(err_bb_);
 
   const auto DLL = MF_->front().empty() ? llvm::DebugLoc()
                                         : MF_->front().front().getDebugLoc();
@@ -3725,7 +3788,10 @@ void RISCVDmr::repair() {
                 shadow_args[before.at(reg)] = reg;
             riscv_common::loadCallRegsAs(saved, shadow_args, &MBB, next,
                                          riscv_common::CallFrameBank::Repair);
-            MBB.insert(next, MF_->CloneMachineInstr(&MI));
+            auto *duplicate_call = MF_->CloneMachineInstr(&MI);
+            MBB.insert(next, duplicate_call);
+            riscv_common::setRsmInstructionCategory(
+                *duplicate_call, riscv_common::RsmCategory::Dmr);
             shadow_results = primary_results;
           }
           riscv_common::saveCallRegs(
@@ -3932,6 +3998,8 @@ void RISCVDmr::repair() {
         }
       }
       for (auto MI : to_remove) {
+        auto &rsm_info = riscv_common::rsmFunctionInfo(*MF_);
+        rsm_info.instructions.erase(MI);
         MBB.erase_instr(MI);
       }
 

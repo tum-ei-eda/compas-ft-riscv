@@ -27,6 +27,19 @@ llvm::DebugLoc blockDebugLoc(const llvm::MachineBasicBlock &MBB) {
   return MBB.empty() ? llvm::DebugLoc() : MBB.front().getDebugLoc();
 }
 
+llvm::MachineBasicBlock *branchTarget(const llvm::MachineInstr &MI) {
+  const bool local_jump =
+      MI.getOpcode() == llvm::RISCV::JAL && MI.getNumOperands() >= 2 &&
+      MI.getOperand(0).isReg() && MI.getOperand(0).getReg() == llvm::RISCV::X0;
+  if (!MI.isBranch() && !local_jump)
+    return nullptr;
+  for (const auto &operand : MI.operands()) {
+    if (operand.isMBB())
+      return operand.getMBB();
+  }
+  return nullptr;
+}
+
 } // namespace
 
 llvm::FunctionPass *llvm::createRISCVCfcss() { return new RISCVCfcss(); }
@@ -55,6 +68,8 @@ bool RISCVCfcss::runOnMachineFunction(llvm::MachineFunction &MF) {
     }
   }
 
+  regions_ = std::make_unique<riscv_common::RsmRegions>(
+      MF, llvm::cl::enable_cfcss.getValue());
   init();
   harden();
 
@@ -85,24 +100,24 @@ void RISCVCfcss::init() {
     // there could be err-BBs from other passes
     // the convention is if a BB keeps jumping to itself then this is also
     // an error-BB
-    if (MBB.succ_size() == 1 && &MBB == *MBB.succ_begin()) {
+    if ((MBB.succ_size() == 1 && &MBB == *MBB.succ_begin()) ||
+        regions_->isTransparent(&MBB)) {
       continue;
     }
 
-    for (auto PBB : MBB.predecessors()) {
-      mbb_info_[&MBB].predecessors.emplace(PBB);
-    }
+    mbb_info_[&MBB].predecessors = regions_->predecessors(&MBB);
     if (mbb_info_[&MBB].predecessors.size() > 1) {
       mbb_info_[&MBB].is_fanin = true;
     }
     mbb_info_[&MBB].s = cnt++;
   }
   for (auto &MBB : *MF_) {
-    if (mbb_info_[&MBB].predecessors.empty())
+    auto info = mbb_info_.find(&MBB);
+    if (info == mbb_info_.end() || info->second.predecessors.empty())
       continue;
-    auto PBB{*std::begin(mbb_info_[&MBB].predecessors)};
-    mbb_info_[&MBB].s_i1 = mbb_info_[PBB].s;
-    mbb_info_[&MBB].d = mbb_info_[PBB].s ^ mbb_info_[&MBB].s;
+    auto PBB{*info->second.predecessors.begin()};
+    info->second.s_i1 = mbb_info_.at(PBB).s;
+    info->second.d = mbb_info_.at(PBB).s ^ info->second.s;
   }
 
   auto insert = riscv_common::signatureEntryInsertion(*MF_);
@@ -119,7 +134,8 @@ void RISCVCfcss::harden() {
   // iterating over all MBBs in MF
   for (auto &MBB : *MF_) {
     // ignoring entryBB
-    if (MBB.pred_empty()) {
+    if (&MBB == &MF_->front() || mbb_info_.find(&MBB) == mbb_info_.end() ||
+        mbb_info_.at(&MBB).predecessors.empty()) {
       continue;
     }
 
@@ -155,7 +171,8 @@ void RISCVCfcss::harden() {
 
   // special processing for fanin basicblocks
   for (auto &MBB : *MF_) {
-    if (mbb_info_[&MBB].is_fanin) {
+    if (mbb_info_.find(&MBB) != mbb_info_.end() &&
+        mbb_info_.at(&MBB).is_fanin) {
       // G = G ^ D at start
       llvm::BuildMI(MBB, std::next(std::begin(MBB)),
                     std::begin(MBB)->getDebugLoc(), TII_->get(llvm::RISCV::XOR))
@@ -171,9 +188,12 @@ void RISCVCfcss::harden() {
 
         // in case the PBB is not entry BB then we want to move insert to
         // the instruction point after CFCSS BNE check
-        if (!PBB->pred_empty()) {
+        if (PBB != &MF_->front() && !mbb_info_.at(PBB).predecessors.empty()) {
           for (auto &MI : *PBB) {
-            if (MI.isBranch()) {
+            if (MI.getOpcode() == llvm::RISCV::BNE &&
+                MI.getOperand(0).getReg() == kG &&
+                MI.getOperand(1).getReg() == kD &&
+                branchTarget(MI) == cf_err_bb_) {
               insert = std::next(MI.getIterator());
               break;
             }
@@ -183,26 +203,13 @@ void RISCVCfcss::harden() {
         // further, if this PBB has both successors as faninBBs then insert has
         // to be updated corresponding to the path towards MBB
         if (hasMultipleFaninSBB(PBB)) {
-          // here we assume MBB is not on the taken path of PBB
-          if (PBB->back().isUnconditionalBranch()) {
-            // in case last instruction is a jump then we have to update
-            // D before it for taken
-            insert = PBB->back().getIterator();
-          } else {
-            // otherwise just do it at the end
-            insert = std::end(*PBB);
-          }
-
-          // if rather MBB is on the taken path then we have to update insert
-          // before the terminator
-          for (auto RMI = std::rbegin(*PBB); RMI != std::rend(*PBB); ++RMI) {
-            if (RMI->isBranch() && (RMI->getOperand(0).isReg() &&
-                                    RMI->getOperand(0).getReg() != kG)) {
-              assert(RMI->getNumOperands() == 3 && RMI->getOperand(2).isMBB());
-
-              if (RMI->getOperand(2).getMBB() == &MBB) {
-                insert = RMI->getIterator();
-              }
+          // A taken-edge value also executes on the false path; its later
+          // transfer supplies that path's own value. Recognize generated
+          // local JAL x0 transfers as well as ordinary branch terminators.
+          insert = PBB->end();
+          for (auto &MI : *PBB) {
+            if (regions_->resolve(branchTarget(MI)) == &MBB) {
+              insert = MI.getIterator();
               break;
             }
           }
@@ -249,11 +256,14 @@ bool RISCVCfcss::hasMultipleFaninSBB(llvm::MachineBasicBlock *PBB) {
   std::set<int> already_seen{};
 
   for (auto SBB : PBB->successors()) {
+    SBB = regions_->resolve(SBB);
+    if (!SBB)
+      continue;
     if (riscv_common::setmapContains(already_seen, SBB->getNumber())) {
       continue;
     }
 
-    if (mbb_info_[SBB].is_fanin) {
+    if (mbb_info_.find(SBB) != mbb_info_.end() && mbb_info_.at(SBB).is_fanin) {
       num_succ_fanin++;
     }
     already_seen.emplace(SBB->getNumber());
