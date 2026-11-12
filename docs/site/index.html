@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="COMPAS adds software-implemented hardware fault tolerance to LLVM's RISC-V backend. Select functions, layer data- and control-flow protection, and generate hardened RV32 and RV64 assembly.">
+  <meta name="theme-color" content="#26316e">
+  <title>COMPAS — Software fault tolerance for RISC-V</title>
+  <link rel="icon" href="assets/compas.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="shell header-inner">
+      <a class="brand" href="index.html" aria-label="COMPAS home"><img src="assets/compas.svg" width="45" height="45" alt=""><span>COMPAS<span class="brand-subtitle">FT · RISC-V</span></span></a>
+      <nav aria-label="Main navigation">
+        <a href="#workflow">The compiler flow</a>
+        <a href="#get-started">Get started</a>
+        <a href="manual/index.html">Manual</a>
+        <a class="nav-source" href="{{SOURCE_URL}}">GitHub <span aria-hidden="true">↗</span></a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="shell hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> Compiler-assisted fault tolerance</p>
+        <h1 id="hero-title">Fault tolerance,<br>at the <em>instruction</em><br>level.</h1>
+        <p class="hero-description">Add software protection against hardware faults to your RISC-V program. COMPAS extends LLVM’s backend to turn selected functions into hardened assembly.</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="#get-started">Start hardening <span aria-hidden="true">→</span></a>
+          <a class="text-link" href="manual/index.html">Read the manual <span aria-hidden="true">↗</span></a>
+        </div>
+        <p class="hero-meta"><span>RV32 &amp; RV64</span><span>LLVM 13–16</span><span>Open source</span></p>
+      </div>
+
+      <figure class="compiler-flow" id="workflow" aria-labelledby="flow-caption">
+        <div class="flow-heading"><span class="eyebrow">From source to protection</span><span class="flow-file">.c → .s</span></div>
+        <div class="flow-input"><span class="node-marker" aria-hidden="true">IN</span><div><strong>C / C++</strong><span>Clang frontend → LLVM IR</span></div><span class="flow-extension">.ll</span></div>
+        <div class="flow-connector" aria-hidden="true">↓</div>
+        <div class="backend">
+          <div class="backend-heading"><span class="backend-dot" aria-hidden="true"></span><strong>LLVM · RISC-V backend</strong><span class="backend-label">COMPAS</span></div>
+          <p class="machine-instructions">Instruction selection &amp; register allocation</p>
+          <div class="layer layer-dmr"><span class="layer-index">01</span><div><strong>Data-flow protection</strong><span>Duplicate computations. Add checks.</span></div><span class="layer-tag">DMR</span></div>
+          <div class="layer-link" aria-hidden="true">+</div>
+          <div class="layer layer-cfp"><span class="layer-index">02</span><div><strong>Control-flow protection</strong><span>Monitor execution with signatures.</span></div><span class="layer-tag">CFP</span></div>
+          <div class="selection-note"><span aria-hidden="true">↳</span> Select techniques and coverage per function.</div>
+        </div>
+        <div class="flow-connector" aria-hidden="true">↓</div>
+        <div class="flow-output"><span class="node-marker" aria-hidden="true">OUT</span><div><strong>Hardened RISC-V assembly</strong><span>Assemble &amp; link for your target</span></div><span class="flow-extension">.s</span></div>
+        <figcaption id="flow-caption">Protection is inserted into machine instructions in the RISC-V backend, before assembly is emitted.</figcaption>
+      </figure>
+    </section>
+
+    <div class="intro-strip"><div class="shell intro-inner"><p>Your source code. Your target. <strong>Your protection strategy.</strong></p><a href="{{SOURCE_URL}}/tree/main/patches">Explore the LLVM integration <span aria-hidden="true">↗</span></a></div></div>
+
+    <section class="shell section-space why" aria-labelledby="why-title">
+      <div class="section-heading"><p class="eyebrow">Why COMPAS?</p><h2 id="why-title">Make fault tolerance<br>part of compilation.</h2><p>Study software countermeasures without designing a new processor. Choose where to add redundancy, then inspect and evaluate the generated code.</p></div>
+      <div class="benefits">
+        <article><span class="item-index">01 / SELECT</span><h3>Protect the functions that matter.</h3><p>Enable data- and control-flow protection independently for named functions. Keep the scope explicit as you explore code-size and runtime trade-offs.</p></article>
+        <article><span class="item-index">02 / COMPOSE</span><h3>Explore layered countermeasures.</h3><p>Combine instruction duplication and runtime signature monitoring. Control whether signatures cover original instructions, duplicated instructions, protection checks, or their combinations.</p></article>
+        <article><span class="item-index">03 / EVALUATE</span><h3>Start from a functional baseline.</h3><p>Compare hardened programs with unprotected references using the regression suites. Use separate fault-injection experiments to evaluate detection and coverage.</p></article>
+      </div>
+    </section>
+
+    <section class="layers-section section-space" aria-labelledby="layers-title">
+      <div class="shell">
+        <div class="section-heading layers-intro"><p class="eyebrow">Choose the transformation</p><h2 id="layers-title">Two layers.<br>A configurable composition.</h2><p>Data-flow protection checks redundant computations. Control-flow protection uses runtime signatures to check the execution path.</p></div>
+        <div class="protection-layers">
+          <article class="protection-layer"><div class="protection-title"><span class="protection-symbol" aria-hidden="true">×2</span><div><span class="item-index">DATA FLOW / DMR</span><h3>Duplicate and check</h3></div></div><p>Select EDDI, SWIFT, NZDC, NZDC+NEMESIS or NZDC+NEMESEC. REPAIR is available for the NZDC family.</p><p class="layer-detail">Choose coarse- or fine-grained instruction scheduling to explore different instruction arrangements.</p></article>
+          <article class="protection-layer"><div class="protection-title"><span class="protection-symbol signature-symbol" aria-hidden="true">Σ</span><div><span class="item-index">CONTROL FLOW / CFP</span><h3>Track runtime signatures</h3></div></div><p>Select CFCSS, RASM or RACFED, then choose the instruction classes monitored in each function.</p><div class="class-labels" aria-label="Instruction classes"><code>orig</code><span>+</span><code>dmr</code><span>+</span><code>balance</code><span>=</span><code>all</code></div><p class="layer-detail"><code>orig+dmr</code> selects CompaSeC’s composition; <code>all</code> also covers protection checks and is the default.</p></article>
+        </div>
+        <a class="text-link" href="{{SOURCE_URL}}/blob/main/docs/rsm-layering.adoc">Understand signature coverage <span aria-hidden="true">→</span></a>
+      </div>
+    </section>
+
+    <section class="shell section-space getting-started" id="get-started" aria-labelledby="start-title">
+      <div class="section-heading"><p class="eyebrow">Your first hardened function</p><h2 id="start-title">From C to<br>hardened assembly.</h2><p>Use a COMPAS-enabled LLVM toolchain. Emit LLVM IR with its Clang frontend, then select the protection in <code>llc</code>.</p><div class="setup-note"><span class="item-index">01 / SET UP</span><p>Build LLVM with the matching COMPAS integration patch, or use the compiler container.</p><a class="text-link" href="manual/index.html">Installation guide <span aria-hidden="true">→</span></a><a class="text-link" href="{{SOURCE_URL}}/blob/main/docker/README.adoc">Container instructions <span aria-hidden="true">↗</span></a></div><p class="setup-footer">The example uses RV32IM and selects the exact symbol <code>kernel</code> for both protection layers.</p></div>
+      <div class="code-example"><div class="code-heading"><span class="item-index">02 / COMPILE</span><span>shell</span></div><pre tabindex="0" aria-label="Quickstart commands"><code><span class="comment"># Point to your COMPAS-enabled toolchain.</span>
+export COMPAS_LLVM_ROOT="$PWD/build/llvm-build"
+mkdir -p build/quickstart
+cat &gt; build/quickstart/kernel.c &lt;&lt;'EOF'
+unsigned kernel(unsigned x) {
+    return (x * 17u) ^ (x &gt;&gt; 3);
+}
+EOF
+
+<span class="comment"># C → LLVM IR</span>
+"$COMPAS_LLVM_ROOT/bin/clang" \
+  --target=riscv32 -march=rv32im -mabi=ilp32 \
+  -O2 -ffreestanding -S -emit-llvm \
+  build/quickstart/kernel.c -o build/quickstart/kernel.ll
+
+<span class="comment"># LLVM IR → layered, hardened RISC-V assembly</span>
+"$COMPAS_LLVM_ROOT/bin/llc" \
+  -O2 -mtriple=riscv32 -mattr=+m \
+  -NZDC+NEMESEC=kernel -RASM=kernel:orig+dmr \
+  build/quickstart/kernel.ll \
+  -o build/quickstart/kernel.hardened.s</code></pre><div class="code-footer"><span class="output-dot" aria-hidden="true"></span><span>Output: <code>build/quickstart/kernel.hardened.s</code></span></div></div>
+    </section>
+
+    <section class="resources-section" aria-labelledby="resources-title"><div class="shell section-space"><div class="resources-heading"><p class="eyebrow">Keep exploring</p><h2 id="resources-title">The details behind the flow.</h2></div><div class="resource-links">
+      <a href="manual/index.html"><span class="item-index">01 / DOCUMENTATION</span><h3>Read the full manual <span aria-hidden="true">↗</span></h3><p>Installation, compiler options, selective hardening and integration.</p><span class="resource-meta">HTML user guide</span></a>
+      <a href="{{MANUAL_PDF}}"><span class="item-index">02 / OFFLINE REFERENCE</span><h3>Download the manual <span aria-hidden="true">↓</span></h3><p>Keep the versioned PDF alongside your compiler setup.</p><span class="resource-meta">PDF · version {{VERSION}}</span></a>
+      <a href="{{SOURCE_URL}}/blob/main/tests/README.adoc"><span class="item-index">03 / VALIDATION</span><h3>Run the regression suites <span aria-hidden="true">↗</span></h3><p>Check program behavior across architectures and protection configurations.</p><span class="resource-meta">Functional equivalence tests</span></a>
+    </div></div></section>
+
+    <section class="research-section" aria-labelledby="research-title"><div class="shell research-inner"><div><p class="eyebrow">Research &amp; open source</p><h2 id="research-title">Built to explore software<br>fault-tolerance techniques.</h2><p>Developed at the Chair of Electronic Design Automation, Technical University of Munich. If COMPAS supports your work, please cite the relevant publications.</p></div><div class="research-links"><a href="https://doi.org/10.1109/MECO55406.2022.9797144"><span><strong>COMPAS</strong><small>Software-implemented hardware fault tolerance · MECO 2022</small></span><span aria-hidden="true">↗</span></a><a href="https://doi.org/10.1145/3566097.3567925"><span><strong>CompaSeC</strong><small>Countermeasures against instruction-skip attacks · ASP-DAC 2023</small></span><span aria-hidden="true">↗</span></a><a href="https://doi.org/10.1145/3477001"><span><strong>REPAIR</strong><small>Control-flow protection through register pairing · ACM TECS 2021</small></span><span aria-hidden="true">↗</span></a><a class="citation-link" href="{{SOURCE_URL}}#publications">Citation details <span aria-hidden="true">→</span></a></div></div></section>
+  </main>
+
+  <footer class="site-footer"><div class="shell footer-inner"><a class="brand" href="index.html"><img src="assets/compas.svg" width="34" height="34" alt=""><span>COMPAS<span class="brand-subtitle">FT · RISC-V</span></span></a><p>Compiler-assisted Software-implemented<br>Hardware Fault Tolerance</p><nav aria-label="Footer navigation"><a href="{{SOURCE_URL}}/blob/main/LICENSE">Apache 2.0</a><a href="{{SOURCE_URL}}/issues">Report an issue</a><a href="{{SOURCE_URL}}">Source code <span aria-hidden="true">↗</span></a></nav></div></footer>
+</body>
+</html>

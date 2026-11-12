@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="$lang$">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Build and use COMPAS, LLVM backend transformations for software fault tolerance on RISC-V.">
+  <meta name="theme-color" content="#242d65">
+  <title>$title$ · $compas-version$</title>
+  <link rel="icon" href="$asset-prefix$assets/compas.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="$asset-prefix$assets/manual.css">
+$for(header-includes)$
+  $header-includes$
+$endfor$
+</head>
+<body>
+  <a class="skip-link" href="#manual-content">Skip to content</a>
+  <header class="manual-header">
+    <a class="brand" href="$home-url$"><img src="$asset-prefix$assets/compas.svg" alt="" width="36" height="36">COMPAS<span> / Manual</span></a>
+    <nav aria-label="Documentation">
+      <a href="$home-url$">Project home</a>
+      <a href="$pdf-url$">Download PDF</a>
+      <a href="https://github.com/tum-ei-eda/compas-ft-riscv">GitHub</a>
+    </nav>
+  </header>
+  <main class="manual-layout">
+$if(toc)$
+    <aside class="manual-sidebar">
+      <nav aria-label="Manual contents"><p class="eyebrow">Contents</p>$toc$</nav>
+    </aside>
+$endif$
+    <article id="manual-content">
+      <header class="manual-intro">
+        <p class="eyebrow">Reference / Version $compas-version$</p>
+        <h1>COMPAS user manual</h1>
+        <p>Installation, compiler options and the contracts behind the protection passes.</p>
+        <a href="$pdf-url$">Download this manual as a PDF →</a>
+      </header>
+$body$
+    </article>
+  </main>
+</body>
+</html>

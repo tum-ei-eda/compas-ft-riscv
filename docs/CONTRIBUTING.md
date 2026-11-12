@@ -121,6 +121,18 @@ latexmk -cd -pdf -outdir="$(pwd)/build/manual" docs/manual/src/main.tex
 
 The `-cd` option resolves included sources and figures from `docs/manual/src`. Open `build/manual/main.pdf` to review the result. The source contains an `@VERSION@` placeholder that the [documentation workflow](../.github/workflows/doc.yml) replaces for releases. Keep generated build files out of the source directory; update published PDFs only when preparing the corresponding documentation release. Documentation-only changes need link, path and formatting checks, plus a manual build when changing LaTeX sources or build instructions.
 
+To build the complete Pages site, install `latexmk`, `texlive-latex-extra`, `texlive-fonts-recommended`, `pandoc` and `poppler-utils`, then run:
+
+```sh
+sh docs/manual/generate.sh
+python3 docs/manual/check_links.py build/manual/site
+python3 -m http.server 8000 --directory build/manual/site
+```
+
+Preview `http://localhost:8000/` for the project introduction and `/manual/` for the HTML manual. The builder stages [docs/site](site/), copies the shared [COMPAS logo](manual/src/figs/compas.svg), fills in the version from [docker/.env](../docker/.env), and renders the manual with its [HTML template](manual/template.html) and [stylesheet](manual/manual.css). The versioned PDF and HTML filenames remain available at the site root. Generated files go under `build/manual/site`; the script also accepts another output directory as its first argument.
+
+The documentation workflow builds documentation pull requests without deploying them. Documentation changes on `main`, `v*` tags and manual workflow runs publish the Pages artifact. Validate the generated site at desktop and mobile widths, check navigation and download links, and compile the quickstart example when editing its commands.
+
 ## Issues and pull requests
 
 For a bug report, include the expected and observed behavior, COMPAS and LLVM revisions, host compiler, target ISA/ABI, optimization level, code model, protection options and function selections. Provide exact `clang`, `llc`, assembler/linker and runtime commands, diagnostics and a small C/C++ or LLVM IR reproducer. Include emitted assembly or machine IR when it helps locate a pass failure. For runtime failures, identify the simulator or hardware and distinguish an error-handler transfer from a crash or an incorrect result.

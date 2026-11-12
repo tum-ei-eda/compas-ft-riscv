@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build the PDF manual and Pages directory without modifying the sources.
+# Build the project landing page and PDF/HTML manual without modifying sources.
 set -eu
 
 manual_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -13,6 +13,7 @@ case "$version" in
         ;;
 esac
 document_name="compas-ft-riscv_v${version}_manual"
+site_dir="$repo_dir/docs/site"
 
 mkdir -p "$output_dir"
 output_dir=$(CDPATH= cd -- "$output_dir" && pwd)
@@ -27,19 +28,40 @@ latexmk -pdf -interaction=nonstopmode -halt-on-error \
     -outdir="$work_dir/latex" main.tex
 cp "$work_dir/latex/main.pdf" "$output_dir/$document_name.pdf"
 
+cp -R "$site_dir/." "$output_dir/"
+sed -e "s|{{VERSION}}|$version|g" \
+    -e "s|{{MANUAL_PDF}}|$document_name.pdf|g" \
+    -e 's|{{SOURCE_URL}}|https://github.com/tum-ei-eda/compas-ft-riscv|g' \
+    "$site_dir/index.html" > "$output_dir/index.html"
+mkdir -p "$output_dir/assets" "$output_dir/manual"
+cp "$manual_dir/src/figs/compas.svg" "$output_dir/assets/compas.svg"
+cp "$manual_dir/manual.css" "$output_dir/assets/manual.css"
+
 # Browsers display PNG figures directly, including on devices without PDF embeds.
 mkdir -p "$output_dir/figs"
 for figure in figs/*.pdf; do
     pdftoppm -singlefile -png -scale-to 1600 \
         "$figure" "$output_dir/${figure%.pdf}"
 done
-printf '<p><a href="%s.pdf">Download the PDF manual (version %s)</a></p>\n' \
-    "$document_name" "$version" > "$work_dir/download.html"
-pandoc main.tex --from=latex --to=html5 --standalone --toc \
-    --citeproc --bibliography=references.bib \
-    --lua-filter="$manual_dir/html.lua" \
-    --metadata=lang:en --metadata="title:COMPAS-FT-RISCV Manual (version $version)" \
-    --include-before-body="$work_dir/download.html" \
-    --output="$output_dir/$document_name.html"
-cp "$output_dir/$document_name.html" "$output_dir/index.html"
-printf 'Manual site written to %s\n' "$output_dir"
+
+# Keep existing versioned HTML/PDF URLs, and provide a stable /manual/ route.
+# Each HTML file resolves images and navigation relative to its own directory.
+render_manual() {
+    manual_output=$1
+    asset_prefix=$2
+    pandoc main.tex --from=latex --to=html5 --standalone --toc \
+        --shift-heading-level-by=1 --toc-depth=5 \
+        --citeproc --bibliography=references.bib \
+        --lua-filter="$manual_dir/html.lua" \
+        --template="$manual_dir/template.html" \
+        --metadata=lang:en --metadata="title:COMPAS manual" \
+        --metadata="figure-prefix:$asset_prefix" \
+        --variable="asset-prefix:$asset_prefix" \
+        --variable="compas-version:$version" \
+        --variable="pdf-url:$asset_prefix$document_name.pdf" \
+        --variable="home-url:${asset_prefix}index.html" \
+        --output="$manual_output"
+}
+render_manual "$output_dir/$document_name.html" ""
+render_manual "$output_dir/manual/index.html" "../"
+printf 'Project site written to %s\n' "$output_dir"
