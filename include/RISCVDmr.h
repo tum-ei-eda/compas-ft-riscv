@@ -316,7 +316,6 @@ protected:
   std::map<llvm::MCSymbol *, llvm::MCSymbol *> shadow_pcrel_symbols_{};
   std::set<llvm::MachineBasicBlock *> exit_bbs_{};
   llvm::MachineBasicBlock *entry_bb_{nullptr};
-  bool uses_FPregfile_{false};
   const std::set<llvm::Register> reserved_fp_primary_{
       llvm::RISCV::F8_F, llvm::RISCV::F8_D, llvm::RISCV::F8_H};
   std::set<llvm::MachineBasicBlock *> nemesis_bbs_{};

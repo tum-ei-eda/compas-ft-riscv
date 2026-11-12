@@ -25,7 +25,6 @@
 #include "RISCVSubtarget.h"
 #include "common.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
@@ -685,13 +684,6 @@ void RISCVDmr::init() {
   isa_config_ = riscv_common::ISAConfig(*MF_);
   config_.eds = riscv_common::ErrorDetectionStrategy::ED3; // TODO: should be
                                                            // exposed to CLI
-  for (auto &s : llvm::codegen::getMAttrs()) {
-    if (!s.compare(std::string{"+f"}) || !s.compare(std::string{"+d"})) {
-      uses_FPregfile_ = true;
-      break;
-    }
-  }
-
   // how to handle instruction schedule for DMR
   std::string schedule_string{"CGS"};
   if (riscv_common::inCSString(llvm::cl::enable_fgs, fname_)) {
@@ -3007,39 +2999,6 @@ void RISCVDmr::protectCalls() {
       }
 
       // TODO: compare FP reg files at start of func
-      // if (uses_FPregfile_) {
-      //   auto fpr_mvx_opcode{llvm::RISCV::FMV_X_W};
-      //   if (isa_config_.store_opcode == llvm::RISCV::SD) {
-      //     fpr_mvx_opcode = llvm::RISCV::FMV_X_D;
-      //   }
-      //
-      //   for (unsigned r = llvm::RISCV::F0_F; r <= llvm::RISCV::F31_F; ++r)
-      //   {
-      //     if (P2S_.find(r) == P2S_.end()) {
-      //       continue;
-      //     }
-      //
-      //     llvm::BuildMI(entry_BB, insert, insert->getDebugLoc(),
-      //                   TII_->get(fpr_mvx_opcode))
-      //         .addReg(P2S_.at(riscv_common::k0))
-      //         .addReg(r);
-      //     llvm::BuildMI(entry_BB, insert, insert->getDebugLoc(),
-      //                   TII_->get(fpr_mvx_opcode))
-      //         .addReg(P2S_.at(riscv_common::kRA))
-      //         .addReg(P2S_.at(r));
-      //     llvm::BuildMI(entry_BB, insert, insert->getDebugLoc(),
-      //                   TII_->get(llvm::RISCV::BNE))
-      //         .addReg(P2S_.at(riscv_common::k0))
-      //         .addReg(P2S_.at(riscv_common::kRA))
-      //         .addMBB(err_bb_);
-      //   }
-      //
-      //   llvm::BuildMI(entry_BB, insert, insert->getDebugLoc(),
-      //                 TII_->get(llvm::RISCV::ADDI))
-      //       .addReg(P2S_.at(riscv_common::k0))
-      //       .addReg(riscv_common::k0)
-      //       .addImm(0);
-      // }
     } else {
       for (unsigned r = llvm::RISCV::X0; r <= llvm::RISCV::X31; ++r) {
         if (!riscv_common::setmapContains(P2S_, r)) {
@@ -3061,26 +3020,7 @@ void RISCVDmr::protectCalls() {
             .addImm(0);
       }
 
-      // TODO: enable this when above TODO regarding FP is fixed
-      // if (uses_FPregfile_) {
-      //   auto fpr_mv_opcode{llvm::RISCV::FSGNJ_S};
-      //   if (isa_config_.store_opcode == llvm::RISCV::SD) {
-      //     fpr_mv_opcode = llvm::RISCV::FSGNJ_D;
-      //   }
-      //
-      //   for (unsigned r = llvm::RISCV::F0_F; r <= llvm::RISCV::F31_F; ++r)
-      //   {
-      //     if (P2S_.find(r) == P2S_.end()) {
-      //       continue;
-      //     }
-      //
-      //     llvm::BuildMI(entry_BB, insert, insert->getDebugLoc(),
-      //                   TII_->get(fpr_mv_opcode))
-      //         .addReg(P2S_.at(r))
-      //         .addReg(r)
-      //         .addReg(r);
-      //   }
-      // }
+      // TODO: initialize the FP shadow bank when FP entry checks are added.
     }
   } else if (config_.psuc == ProtectStrategyUserCall::UC1) {
 

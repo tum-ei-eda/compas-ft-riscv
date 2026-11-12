@@ -158,6 +158,13 @@ independent EDDI memory provenance, incoming stack arguments and store loadbacks
 Real MIR operands, mask-consumer verifier probes and literal runtime oracles
 cover properties that fault-free execution alone cannot establish.
 
+The link:regression/clang_codegen/README.adoc[Clang object-generation suite]
+runs separately through `python3 tests/regression/clang_codegen/run.py`. It
+compiles ordinary C directly to objects without hardening and with nonmatching
+function selections, then checks EDDI through both Clang and `llc` using machine
+verification and independent runtime oracles. This exercises Clang's backend
+without relying on the standalone `llc` driver's initialization.
+
 Freestanding manifests can set `verify_machineinstrs: true` to compile each IR source a second time with `-verify-machineinstrs`. This extra compilation writes separate `.verify` logs and assembly; the normal build still runs so that a verifier defect does not hide functional evidence. A verifier failure makes the configuration an `ERROR` and the command exits nonzero, including when the runtime result matches a known failure. The JSON report retains `outcome`, `functional_status` and `verification` separately, and includes both overall `counts` and `functional_counts`.
 
 `--verify-machineinstrs` enables verification for a selected freestanding run; `--no-verify-machineinstrs` disables the extra compilation for a functional-only investigation. The independent oracle and reference comparisons still apply. Verifier failures and newly observed runtime failures belong in the TODO while compiler fixes are deferred.
