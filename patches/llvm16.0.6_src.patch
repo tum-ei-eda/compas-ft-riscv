@@ -323,26 +323,29 @@ diff --git a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp b/llvm/lib/Target/RISCV
    for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i) {
      CCValAssign &VA = ArgLocs[i];
      SDValue ArgValue;
-@@ -12850,13 +12906,46 @@
+@@ -12850,13 +12906,49 @@
                        CallConv == CallingConv::Fast ? CC_RISCV_FastCC
                                                      : CC_RISCV);
 
-+  // An ordinary caller needs a returning wrapper around an EDDI callee.
-+  // An EDDI caller may also need its frame's pointer deltas while checking
-+  // outgoing arguments. Keep that frame for every pointer-typed argument;
-+  // physical argument positions no longer retain the original IR types.
++  // Calls across the DMR calling convention need a live caller frame for
++  // context preservation. EDDI pointer arguments can additionally need
++  // frame-resident deltas even when both functions are protected.
 +  // Decide here so LLVM retains exact results, call masks and context slots.
 +  bool CompasPointerArgs = false;
 +  if (IsTailCall &&
 +      riscv_common::inCSString(cl::enable_eddi, MF.getName().str()))
 +    for (const auto &Arg : CLI.getArgs())
 +      CompasPointerArgs |= Arg.Ty->isPointerTy();
-+  const auto *CompasCallee = dyn_cast<GlobalAddressSDNode>(Callee);
++  const bool CompasCallerDmr =
++      riscv_common::isDmrFunction(MF.getName().str());
++  std::string CompasCalleeName;
++  if (const auto *Global = dyn_cast<GlobalAddressSDNode>(Callee))
++    CompasCalleeName = Global->getGlobal()->getName().str();
++  else if (const auto *External = dyn_cast<ExternalSymbolSDNode>(Callee))
++    CompasCalleeName = External->getSymbol();
 +  const bool CompasSelectiveBoundary =
-+      CompasCallee &&
-+      riscv_common::inCSString(cl::enable_eddi,
-+                              CompasCallee->getGlobal()->getName().str()) &&
-+      !riscv_common::isDmrFunction(MF.getName().str());
++      !CompasCalleeName.empty() &&
++      (CompasCallerDmr != riscv_common::isDmrFunction(CompasCalleeName));
 +  const bool CompasReturningCall =
 +      IsTailCall && (CompasPointerArgs || CompasSelectiveBoundary);
 +  if (CompasReturningCall) {
@@ -352,7 +355,7 @@ diff --git a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp b/llvm/lib/Target/RISCV
 +          CompasPointerArgs
 +              ? "COMPAS: musttail calls with EDDI pointer arguments require a "
 +                "returning call"
-+              : "COMPAS: musttail calls across selective EDDI boundaries are "
++              : "COMPAS: musttail calls across selective DMR boundaries are "
 +                "unsupported"});
 +    }
 +    // Continue lowering rejected musttail IR with valid frame semantics.

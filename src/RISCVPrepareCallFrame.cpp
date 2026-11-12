@@ -52,8 +52,8 @@ bool needs_dmr_frame(const llvm::MachineFunction &MF) {
   const auto *tii = MF.getSubtarget<llvm::RISCVSubtarget>().getInstrInfo();
   for (const auto &MBB : MF)
     for (const auto &MI : MBB) {
-      // Late tail conversion runs after the original epilogue has restored FP.
-      // Keep those wrappers on their existing path until conversion is moved.
+      // LowerCall retains returning calls at selective boundaries before this
+      // pass. Compatible tail calls do not need a selective caller snapshot.
       if (!MI.isCall() || MI.getFlag(llvm::MachineInstr::FrameSetup) ||
           tii->isTailCall(MI) || !MI.getNumOperands())
         continue;

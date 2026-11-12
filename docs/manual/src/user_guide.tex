@@ -131,10 +131,12 @@ the canonical shadow results, return address and frame state. Pairing changes
 at conditional branches execute only on their selected control-flow edge.
 REPAIR excludes registers owned by control-flow signatures from its allocation.
 
-REPAIR tail calls are rejected because their epilogue has already removed the
-frame needed for this preservation. Compile these callers with
+REPAIR tail calls between compatible protected functions, and indirect tail
+calls, are rejected because their epilogue has already removed the frame needed
+for this preservation.
+Compile these callers with
 \texttt{-fno-optimize-sibling-calls} to retain returning calls. This restriction
-is separate from EDDI's supported returning-call conversions below.
+is separate from the selective-boundary returning-call conversions below.
 
 \subsubsection{Inline assembly in EDDI functions}
 EDDI diagnoses nonempty or operand-bearing inline assembly in selected functions
@@ -190,16 +192,23 @@ point into separate caller frames whose size is unknown to the callee. The
 exception is identified from the saved-register spill metadata. Ordinary data
 stores, including values held in \texttt{s0}, retain their value checks.
 
-\subsubsection{EDDI tail-call boundaries}
-An ordinary caller invoking an EDDI callee must regain control to check the
-results and restore its saved context. Such direct calls are lowered as ordinary
-returning calls before frame layout, even when sibling-call optimization is
-enabled. LLVM supplies the call-preserved mask, actual ABI result registers and
-return operands, and the selective wrapper runs before the caller's epilogue.
-Balance checks retain the results and preserved state while excluding discarded
-caller-clobbered temporaries, which may hold distinct primary and shadow
-addresses. Calls marked \texttt{musttail} across this boundary are rejected
-because the required returning wrapper cannot preserve their tail-call contract.
+\subsubsection{Selective DMR tail-call boundaries}
+An ordinary caller invoking a DMR-protected callee must regain control to check
+the results and restore its saved context. A protected caller invoking ordinary
+code also needs its frame to preserve the shadow context and synchronize the
+actual ABI results. Such direct calls, including calls to known external
+symbols, are lowered as ordinary returning calls before frame layout in every
+DMR mode, even when sibling-call optimization is enabled. LLVM supplies the
+call-preserved mask, actual ABI result registers and return operands. The
+selective wrapper uses fixed frame slots before the caller's epilogue and does
+not move outgoing stack arguments. Calls marked \texttt{musttail} across these
+boundaries are rejected because the required returning wrapper cannot preserve
+their tail-call contract. Late machine IR which bypasses this lowering is
+diagnosed rather than converted after frame layout.
+
+For EDDI callees, balance checks retain the results and preserved state while
+excluding discarded caller-clobbered temporaries, which may hold distinct
+primary and shadow addresses.
 
 An EDDI caller passing pointer-typed arguments also retains a returning call,
 keeping its frame available for independently captured pointer expectations and

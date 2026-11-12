@@ -163,6 +163,16 @@ def discover(args):
                         sources = config["sources"]
                         if not isinstance(sources, list) or not sources or any(not isinstance(value, str) for value in sources):
                             raise ValueError("sources must be a nonempty list of paths")
+                        transfers = config.get("call_transfers", [])
+                        if (not isinstance(transfers, list)
+                                or any(not isinstance(transfer, dict)
+                                       or any(not isinstance(transfer.get(field), str)
+                                              or not transfer[field]
+                                              for field in ("caller", "callee"))
+                                       or any(transfer.get(field) not in ("call", "tail")
+                                              for field in ("reference", "hardened"))
+                                       for transfer in transfers)):
+                            raise ValueError("call_transfers requires caller/callee names and reference/hardened call or tail expectations")
                         diagnostic = config.get("expected_build_diagnostic")
                         if diagnostic is not None:
                             if (not isinstance(diagnostic, dict)
@@ -184,6 +194,8 @@ def discover(args):
                         raise ValueError("CMake suites require an executable path")
                     elif "expected_build_diagnostic" in config:
                         raise ValueError("expected_build_diagnostic is supported by the freestanding adapter")
+                    elif "call_transfers" in config:
+                        raise ValueError("call_transfers is supported by the freestanding adapter")
                     if not isinstance(config.get("verify_machineinstrs", False), bool):
                         raise ValueError("verify_machineinstrs must be a boolean")
                     for field in ("isa", "abi"):
@@ -324,6 +336,26 @@ def check_build_diagnostic(observed, diagnostic, directory, label):
                         f"status {observed['host_exit']}; see {directory / (label + '.stderr')}")
 
 
+def check_call_transfers(assembly, transfers, hardened, report):
+    """Check declared direct-call or tail-transfer behavior in emitted functions."""
+    bodies = "\n".join(path.read_text() for path in assembly)
+    evidence = []
+    for transfer in transfers:
+        caller, callee = transfer["caller"], transfer["callee"]
+        match = re.search(r"^" + re.escape(caller) + r":[^\n]*\n(.*?)^\s*\.size\s+"
+                          + re.escape(caller) + r"\s*,", bodies, re.MULTILINE | re.DOTALL)
+        if not match:
+            raise TestError(f"call transfer check cannot find caller {caller!r}")
+        observed = re.findall(r"^\s*(call|tail)\s+(?:\w+,\s*)?" + re.escape(callee)
+                              + r"(?:@plt)?(?:\s|$)", match[1], re.MULTILINE)
+        expected = transfer["hardened" if hardened else "reference"]
+        evidence.append(dict(caller=caller, callee=callee, expected=expected, observed=observed))
+        if not observed or any(kind != expected for kind in observed):
+            raise TestError(f"expected {expected} transfer from {caller!r} to {callee!r}; "
+                            f"observed {observed}")
+    report.write_text(json.dumps(evidence, indent=2) + "\n")
+
+
 def check_save_restore_helpers(assembly, functions, report, dmr_functions=()):
     """Check GNU helpers or explicit callee saves for each named function."""
     bodies = "\n".join(path.read_text() for path in assembly)
@@ -437,6 +469,17 @@ def build_and_run(args, tools, case, arch, mode, cfp, schedule, functions, cfp_f
                     verification["status"] = "ERROR"
                     verification["errors"].append(str(error))
             assembly.append(asm)
+        transfers = case.get("call_transfers", [])
+        if transfers:
+            hardened = mode != "none" or cfp != "none"
+            check_call_transfers(assembly, transfers, hardened, directory / "call-transfers.json")
+            if verify and verification["status"] == "PASS":
+                try:
+                    check_call_transfers(verified_assembly, transfers, hardened,
+                                         directory / "call-transfers.verify.json")
+                except TestError as error:
+                    verification["status"] = "ERROR"
+                    verification["errors"].append(str(error))
         required_helpers = case.get("save_restore_functions", [])
         if required_helpers:
             dmr_functions = functions if mode != "none" else []

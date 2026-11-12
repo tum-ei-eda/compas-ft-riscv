@@ -426,6 +426,29 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
           // and DMR calling non-DMRs alike)
 
   auto ignore = ignoreMF();
+  // Selective boundaries require a returning call while the caller's frame is
+  // live. LowerCall makes that decision before register allocation and PEI;
+  // reject late MIR which bypasses it rather than inventing a call/return ABI
+  // after the epilogue has already removed the frame.
+  for (const auto &MBB : *MF_)
+    for (const auto &MI : MBB) {
+      if (!MI.isCall() || !TII_->isTailCall(MI) ||
+          riscv_common::frameHelper(MI) != riscv_common::FrameHelper::None)
+        continue;
+      for (const auto &operand : MI.operands()) {
+        if (!operand.isGlobal() && !operand.isSymbol())
+          continue;
+        const std::string callee =
+            operand.isGlobal() ? operand.getGlobal()->getName().str()
+                               : std::string(operand.getSymbolName());
+        if (is_func_dmr(fname_) != is_func_dmr(callee)) {
+          MI.emitError("COMPAS: selective DMR tail calls require a returning "
+                       "call before frame layout");
+          return false;
+        }
+        break;
+      }
+    }
   if (!ignore) {
     // DMR selects explicit callee-saved spills before frame layout, even when
     // the subtarget requests save/restore helpers. A late MIR pipeline must not
@@ -2589,12 +2612,8 @@ void RISCVDmr::updateSelectiveCalls() {
                        << callee_func_name
                        << "] adhere to DMR-callee calling convention...\n";
 
-          // 0) get live shadow registers
-          // 1) if isTail() then add `ra` to lives/spills
-          // 2) if isTail() replace `tail` with `call` + `ret`
-          // 3) spill lives to stack
-          // 4) duplicate primaries to shadows before `call`
-          // 5) unspill lives from stack after `call`
+          // Preserve live shadow registers in the fixed caller snapshot,
+          // initialize the protected convention, then restore caller context.
 
           llvm::LivePhysRegs lregs(*TRI_);
           auto MBB{MI->getParent()};
@@ -2637,13 +2656,6 @@ void RISCVDmr::updateSelectiveCalls() {
 #endif // DBG
           }
 
-          if (spill_regs.find(llvm::RISCV::X1) == spill_regs.end() &&
-              TII_->isTailCall(*MI)) {
-            spill_regs.emplace(
-                llvm::RISCV::X1); // if the call is a `tail` we need to replace
-                                  // it with a `call+ret` to allow restoration
-                                  // of non-DMR context before return
-          }
           // The later CFP pass preserves the caller's actual state. Do not
           // overwrite it with an outer DMR snapshot after the CFP restore.
           // Callee-only state can still hold ordinary live caller context.
@@ -2654,18 +2666,13 @@ void RISCVDmr::updateSelectiveCalls() {
             llvm::outs() << "sr: x" << sr - llvm::RISCV::X0 << "\n";
           }
 #endif // DBG
-       // insert the spill segment
+          // insert the spill segment
           std::vector<llvm::Register> sregs(spill_regs.begin(),
                                             spill_regs.end());
           auto insert = call_iter;
           // Outgoing stack arguments already occupy their ABI offsets here.
-          // A returning call must preserve the caller without moving SP.
-          // Late tail conversion still needs its legacy post-epilogue path.
-          const bool fixed_call_frame = !TII_->isTailCall(*MI);
-          if (fixed_call_frame)
-            riscv_common::saveCallRegs(sregs, MBB, insert);
-          else
-            riscv_common::saveRegs(sregs, MBB, insert);
+          // Preserve the caller without moving SP.
+          riscv_common::saveCallRegs(sregs, MBB, insert);
           // insert the default duplication segment, i.e., move all primaries
           // into their shadows
           for (const auto &regpair : P2S_) {
@@ -2688,18 +2695,7 @@ void RISCVDmr::updateSelectiveCalls() {
 
           insert = MI->getIterator();
           ++insert;
-          if (TII_->isTailCall(*MI)) { // replace `tail`s with `call+ret`s
-            MI->setDesc(TII_->get(llvm::RISCV::PseudoCALL));
-
-            llvm::BuildMI(*MBB, insert, MI->getDebugLoc(),
-                          TII_->get(llvm::RISCV::PseudoRET));
-          }
-          insert = MI->getIterator();
-          ++insert;
-          if (fixed_call_frame)
-            riscv_common::loadCallRegs(sregs, MBB, insert);
-          else
-            riscv_common::loadRegs(sregs, MBB, insert);
+          riscv_common::loadCallRegs(sregs, MBB, insert);
 
           insert = MI->getIterator();
           ++insert;
@@ -2721,8 +2717,7 @@ void RISCVDmr::updateSelectiveCalls() {
                 if (operand.isRegMask() &&
                     operand.clobbersPhysReg(regpair.first))
                   clobbered = true;
-              if (fixed_call_frame &&
-                  (eddi_callee || llvm::cl::enable_repair) && clobbered &&
+              if ((eddi_callee || llvm::cl::enable_repair) && clobbered &&
                   regpair.first != riscv_common::k0 &&
                   regpair.first != riscv_common::kSP &&
                   regpair.first != riscv_common::kGP &&
@@ -2760,10 +2755,6 @@ void RISCVDmr::updateSelectiveCalls() {
           for (const auto &r : MBB->liveouts()) {
             llvm::outs() << "or: x" << r.PhysReg - llvm::RISCV::X0 << "\n";
           }
-          if (TII_->isTailCall(*MI)) { // replace `tail`s with `call+ret`
-            MI->addImplicitDefUseOperands(*MF_);
-          }
-
           auto ret_regs{getRetRegs(MI)};
           auto insert{MI->getIterator()};
           ++insert;
@@ -2788,26 +2779,13 @@ void RISCVDmr::updateSelectiveCalls() {
               }
           }
 
-          // ret-regs would be changed after func call hence dont need to stack
-          // them. FIXME: Also remove a0 and a1 always when indirect call is a
-          // tail
-          if (riscv_common::setmapContains(ret_regs, llvm::RISCV::X10) ||
-              (TII_->isTailCall(*MI))) {
+          // Preserve only non-result registers; LowerCall supplies the actual
+          // ABI result operands, including both halves of RV32 wide results.
+          if (riscv_common::setmapContains(ret_regs, llvm::RISCV::X10)) {
             spill_regs.erase(llvm::RISCV::X10);
           }
-          if (riscv_common::setmapContains(ret_regs, llvm::RISCV::X11) ||
-              (TII_->isTailCall(*MI))) {
+          if (riscv_common::setmapContains(ret_regs, llvm::RISCV::X11)) {
             spill_regs.erase(llvm::RISCV::X11);
-          }
-
-          if (spill_regs.find(llvm::RISCV::X1) == spill_regs.end() &&
-              TII_->isTailCall(*MI)) {
-            spill_regs.emplace(
-                llvm::RISCV::X1); // if the call is a `tail` we need to replace
-                                  // it with a `call+ret` to allow restoration
-                                  // of DMR context before return, because we
-                                  // could return back to a DMR-function instead
-                                  // of a non-DMR one
           }
 
           // The CFP pass preserves its actual runtime state immediately
@@ -2818,28 +2796,7 @@ void RISCVDmr::updateSelectiveCalls() {
           std::vector<llvm::Register> sregs(spill_regs.begin(),
                                             spill_regs.end());
 
-          const bool fixed_call_frame = !TII_->isTailCall(*MI);
-          if (fixed_call_frame) {
-            riscv_common::saveCallRegs(sregs, MBB, MI->getIterator());
-          } else if (use_shadow_for_stack_ops_) {
-            riscv_common::saveRegs(sregs, MBB, MI->getIterator(),
-                                   P2S_.at(riscv_common::kSP));
-
-          } else {
-            riscv_common::saveRegs(sregs, MBB, MI->getIterator());
-          }
-          insert = MI->getIterator();
-          ++insert;
-
-          if (TII_->isTailCall(*MI)) { // replace `tail`s with `call+ret`s
-            MI->setDesc(TII_->get(llvm::RISCV::PseudoCALL));
-            llvm::BuildMI(*MBB, insert, MI->getDebugLoc(),
-                          TII_->get(llvm::RISCV::PseudoRET));
-            ret_regs.insert(llvm::RISCV::X10);
-            ret_regs.insert(
-                llvm::RISCV::X11); // FIXME: We do not really know here, whether
-                                   // x10 and x11 are actually used for return
-          }
+          riscv_common::saveCallRegs(sregs, MBB, MI->getIterator());
           insert = MI->getIterator();
           ++insert;
           // copying the return value/s to shadow reg
@@ -2851,14 +2808,7 @@ void RISCVDmr::updateSelectiveCalls() {
           }
           insert = MI->getIterator();
           ++insert;
-          if (fixed_call_frame) {
-            riscv_common::loadCallRegs(sregs, MBB, insert);
-          } else if (use_shadow_for_stack_ops_) {
-            riscv_common::loadRegs(sregs, MBB, insert,
-                                   P2S_.at(riscv_common::kSP));
-          } else {
-            riscv_common::loadRegs(sregs, MBB, insert);
-          }
+          riscv_common::loadCallRegs(sregs, MBB, insert);
 
         } else { // the caller is a not DMRed function, so business as usual.
           llvm::outs()
@@ -2905,9 +2855,6 @@ void RISCVDmr::protectCalls() {
   // Both calls use the original outgoing ABI area. Keep the caller snapshot
   // separate from the first call's results; neither snapshot may move SP.
   for (auto *MI : lib_calls_) {
-    if (config_.pslc == ProtectStrategyLibCall::LC1 && TII_->isTailCall(*MI))
-      continue; // Late tail preservation remains a separate calling contract.
-
     const auto ret_regs = getRetRegs(MI);
     const auto arg_regs = getArgRegs(MI);
     auto *MBB = MI->getParent();

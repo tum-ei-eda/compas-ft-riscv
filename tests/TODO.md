@@ -24,9 +24,9 @@ python3 tests/regression/run.py --case 'stack_args/*' \
 
 ## Call-boundary instrumentation
 
-- [ ] Define preservation for remaining late tail-conversion paths and REPAIR tail calls.
+- [ ] Retain returning calls for the remaining REPAIR tail transfers.
 
-Remaining late tail-conversion paths use legacy `saveRegs`/`loadRegs` after the original epilogue has restored FP; they require a separate preservation contract. REPAIR rejects tail calls because its fixed caller snapshot requires a live frame; use `-fno-optimize-sibling-calls` for returning calls. Ordinary-to-EDDI direct calls use returning wrappers prepared before frame layout.
+Direct calls across either selective DMR boundary now use returning wrappers prepared before frame layout in every DMR mode. The wrappers preserve context in fixed caller-frame slots; late machine IR that bypasses this decision is diagnosed. Scalar calls between compatible protected functions can still be tails. REPAIR rejects those tails and indirect tails because its fixed caller snapshot requires a live frame; use `-fno-optimize-sibling-calls` for returning calls. Defining the corresponding early REPAIR decision and explicit `musttail` behavior remains separate work.
 
 ## Floating-point checks
 

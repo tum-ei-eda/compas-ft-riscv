@@ -15,7 +15,7 @@ The link:regression/control_flow/README.adoc[control-flow suite] checks branch o
 
 The link:regression/crc_control_flow/README.adoc[CRC control-flow suite] reuses the application CRC kernel in a freestanding wrapper. It checks negative, empty and positive lengths against fixed CRC literals on RV32 and RV64, including nested-loop exits, with the full hardening matrix and separate machine verifier.
 
-The link:regression/call_abi/README.adoc[call ABI suite] checks selective hardening across calls, nested and indirect calls, ten integer arguments, wide live values and stack alignment. It runs on RV32 and RV64 with coarse-grained scheduling, all six DMR selections and all four CFP selections. EDDI converted-tail cases also enable sibling calls and fine-grained scheduling. Its manifest also enables LLVM machine-instruction verification.
+The link:regression/call_abi/README.adoc[call ABI suite] checks selective hardening across calls, nested and indirect calls, stack arguments, wide live values and stack alignment. It runs on RV32 and RV64 with all six DMR selections and all four CFP selections. Selective-tail cases enable sibling calls and both schedules in every DMR mode, checking direct transfer instructions as well as functional results. Its manifest also enables LLVM machine-instruction verification.
 
 The link:regression/repair_call_abi/README.adoc[REPAIR call ABI suite] checks REPAIR with NZDC, NZDC+NEMESIS and NZDC+NEMESEC. It covers outgoing stack arguments, live values, indirect calls, dynamic and realigned dynamic frames, and duplicable or nonduplicable libcalls on RV32/RV64 with both schedules and the machine verifier. Three representative cases also run all CFP selections.
 
@@ -112,6 +112,14 @@ Freestanding cases can declare target settings at suite or case level:
 `--isa` and `--abi` override the manifest for a selected freestanding run. Repeating `--code-model` selects one or both models. The runner validates architecture/ISA/ABI compatibility and passes matching settings to the frontend, backend and GNU linker. Build directories and JSON results identify each ISA, ABI, code model, relaxation, frame-pointer, optimization, sibling-call, REPAIR and save/restore selection. Known-failure signatures also match those settings, so changing a profile cannot reuse an allowance for a different one.
 
 For example, the link:regression/hard_float/suite.json[hard-float manifest] restricts each case to its declared architecture and uses explicit FP ISA/ABI pairs. Listing cases shows these profiles without requiring any tools. CMake applications retain their project's toolchain configuration; these freestanding overrides do not apply to that adapter.
+
+Freestanding cases can also declare `call_transfers`, a list of objects with
+`caller`, `callee`, `reference` and `hardened` fields. The latter two select
+`call` or `tail`. Normal and machine-verifier assembly must contain the declared
+direct transfer in the named caller; observations are written to
+`call-transfers.json` and `call-transfers.verify.json`. These expectations describe
+the case's declared function selections. Overriding selections can invalidate
+an expectation, just as with explicit per-function save/restore checks.
 
 == Results and known failures
 

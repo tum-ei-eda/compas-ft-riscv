@@ -1,4 +1,4 @@
-; Explicit musttail cannot be changed into a returning selective EDDI call.
+; Explicit musttail cannot become a returning call at a selective DMR boundary.
 ; The unprotected reference still checks an independent result and exits 42.
 define i32 @abi_tail_musttail_leaf(i32 %value) noinline {
 entry:
