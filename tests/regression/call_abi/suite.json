@@ -250,14 +250,20 @@
     {
       "name": "realigned_dynamic_stack_arguments",
       "defines": ["TEST_CASE=19"],
-      "modes": ["EDDI"],
+      "schedules": ["cgs", "fgs"],
       "functions": ["abi_realigned_dynamic_frame", "abi_dynamic_pointer_middle", "abi_dynamic_pointer_leaf", "abi_ten_args"]
     },
     {
       "name": "realigned_dynamic_stack_arguments_caller_only",
       "defines": ["TEST_CASE=19"],
-      "modes": ["EDDI"],
+      "schedules": ["cgs", "fgs"],
       "functions": ["abi_realigned_dynamic_frame"]
+    },
+    {
+      "name": "realigned_dynamic_indirect_call",
+      "sources": ["realigned_indirect.c"],
+      "schedules": ["cgs", "fgs"],
+      "functions": ["indirect_bp_owner", "indirect_bp_leaf"]
     },
     {
       "name": "libcall_stack_arguments",
@@ -280,9 +286,27 @@
       }
     },
     {
+      "name": "libcall_realigned_dynamic_stack_arguments",
+      "defines": ["TEST_CASE=17", "ABI_REALIGNED_DYNAMIC=1"],
+      "modes": ["EDDI", "SWIFT"],
+      "schedules": ["cgs", "fgs"],
+      "functions": ["abi_libcall_dynamic_stack_arguments"],
+      "expected": {
+        "exit": 42,
+        "stdout": "BCDEFGHIJK\n[bdfhjlnprt]\nHIJKLMNOPQ\n[hjlnprtvxz]\nNOPQRSTUVW\n[nprtvxzbdf]\nBCDEFGHIJK\n[bdfhjlnprt]\nHIJKLMNOPQ\n[hjlnprtvxz]\nNOPQRSTUVW\n[nprtvxzbdf]\n"
+      }
+    },
+    {
       "name": "duplicated_libcall",
       "defines": ["TEST_CASE=18"],
       "modes": ["EDDI", "SWIFT"],
+      "functions": ["abi_duplicated_libcall"]
+    },
+    {
+      "name": "realigned_dynamic_duplicated_libcall",
+      "defines": ["TEST_CASE=18", "ABI_REALIGNED_DYNAMIC=1"],
+      "modes": ["EDDI", "SWIFT"],
+      "schedules": ["cgs", "fgs"],
       "functions": ["abi_duplicated_libcall"]
     },
     {

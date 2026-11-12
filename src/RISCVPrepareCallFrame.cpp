@@ -45,6 +45,10 @@ bool needs_signature_frame(const llvm::MachineFunction &MF) {
 bool needs_dmr_frame(const llvm::MachineFunction &MF) {
   const bool caller_dmr =
       riscv_common::isDmrFunction(std::string{MF.getName()});
+  const bool base_pointer =
+      riscv_common::usesDmrBasePointer(MF) &&
+      !riscv_common::inCSString(llvm::cl::enable_eddi,
+                                std::string{MF.getName()});
   const auto *tii = MF.getSubtarget<llvm::RISCVSubtarget>().getInstrInfo();
   for (const auto &MBB : MF)
     for (const auto &MI : MBB) {
@@ -53,6 +57,10 @@ bool needs_dmr_frame(const llvm::MachineFunction &MF) {
       if (!MI.isCall() || MI.getFlag(llvm::MachineInstr::FrameSetup) ||
           tii->isTailCall(MI) || !MI.getNumOperands())
         continue;
+      // The caller-owned BP pair must survive protected and ordinary calls,
+      // including indirect calls whose target convention is unknown here.
+      if (base_pointer)
+        return true;
       const auto &callee = MI.getOperand(0);
       if (!callee.isGlobal() && !callee.isSymbol())
         continue;
@@ -115,6 +123,11 @@ unsigned dmr_frame_size(const llvm::MachineFunction &MF) {
   return llvm::alignTo(size, 16) +
          (riscv_common::isDmrFunction(std::string{MF.getName()})
               ? riscv_common::kLibcallResultFrameSize
+              : 0) +
+         (riscv_common::usesDmrBasePointer(MF) &&
+                  !riscv_common::inCSString(llvm::cl::enable_eddi,
+                                            std::string{MF.getName()})
+              ? riscv_common::kBasePointerCallFrameSize
               : 0);
 }
 

@@ -56,7 +56,7 @@ diff --git a/llvm/lib/Target/RISCV/RISCV.h b/llvm/lib/Target/RISCV/RISCV.h
 index c42fb070aade..3774102b9d06 100644
 --- a/llvm/lib/Target/RISCV/RISCV.h
 +++ b/llvm/lib/Target/RISCV/RISCV.h
-@@ -15,8 +15,39 @@
+@@ -15,8 +15,40 @@
  #define LLVM_LIB_TARGET_RISCV_RISCV_H
 
  #include "MCTargetDesc/RISCVBaseInfo.h"
@@ -90,13 +90,14 @@ index c42fb070aade..3774102b9d06 100644
 +
 +namespace riscv_common {
 +bool inCSString(std::string, std::string);
++bool isDmrFunction(const std::string &);
 +}
 +
 +
  namespace llvm {
  class AsmPrinter;
  class FunctionPass;
-@@ -75,6 +106,15 @@ InstructionSelector *createRISCVInstructionSelector(const RISCVTargetMachine &,
+@@ -75,6 +107,15 @@ InstructionSelector *createRISCVInstructionSelector(const RISCVTargetMachine &,
                                                      RISCVSubtarget &,
                                                      RISCVRegisterBankInfo &);
  void initializeRISCVDAGToDAGISelPass(PassRegistry &);
@@ -128,9 +129,9 @@ diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp b/llvm/lib/Target/RISC
  }
 
 +Register RISCVFrameLowering::getBPReg(const MachineFunction &MF) const {
-+  // EDDI owns s1 as its shadow SP. Its aligned fixed frame uses the
++  // DMR owns s1 as its shadow SP. Its aligned fixed frame uses the
 +  // caller-owned t1/t5 pair, which COMPAS preserves across returning calls.
-+  if (riscv_common::inCSString(cl::enable_eddi, MF.getName().str()))
++  if (riscv_common::isDmrFunction(MF.getName().str()))
 +    return RISCV::X6;
 +  return RISCVABI::getBPReg();
 +}
@@ -170,7 +171,7 @@ diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp b/llvm/lib/Target/RISC
      SavedRegs.set(RISCV::X8);
    }
 -  // Mark BP as used if function has dedicated base pointer.
-+  // Mark BP as used if function has dedicated base pointer. EDDI's t1 is
++  // Mark BP as used if function has dedicated base pointer. DMR's t1 is
 +  // caller-owned and absent from the ordinary ABI save list; COMPAS preserves
 +  // it and its shadow at each returning call instead of adding an ABI promise.
    if (hasBP(MF))

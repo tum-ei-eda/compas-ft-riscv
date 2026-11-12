@@ -55,13 +55,13 @@ const unsigned kGP{llvm::RISCV::X3};
 const unsigned kTP{llvm::RISCV::X4};
 // frame pointer register
 const unsigned kFP{llvm::RISCV::X8};
-// Realigned variable-sized EDDI frames reserve t1/t5 as an independent BP
+// Realigned variable-sized DMR frames reserve t1/t5 as an independent BP
 // pair. Ordinary ABI calls can clobber both; COMPAS preserves them at calls.
-const unsigned kEddiBP{llvm::RISCV::X6};
+const unsigned kDmrBP{llvm::RISCV::X6};
 
 RegType getRegType(llvm::Register);
 bool isDmrFunction(const std::string &name);
-bool usesEddiBasePointer(const llvm::MachineFunction &MF);
+bool usesDmrBasePointer(const llvm::MachineFunction &MF);
 // Stable before/after RA: identify EDDI variable frames and pointer-typed IR
 // merges. Their bank appends GPR deltas and one delta per ordinary FI;
 // variable frames reserve three outgoing-call words, plus two BP words when
@@ -86,10 +86,13 @@ void preserveSignatureAcrossCall(llvm::MachineInstr *call,
 // leave both stack pointers unchanged at the call boundary.
 // A duplicated libcall keeps its post-call ABI values in a separate bank
 // while the caller's original monitor state remains saved in Caller.
-enum class CallFrameBank { Caller, Libcall };
+enum class CallFrameBank { Caller, Libcall, BasePointer };
 // Supported RISC-V ABIs return at most two registers, each at most 64 bits.
 // The result snapshot also retains the ABI's sixteen-byte stack alignment.
 constexpr unsigned kLibcallResultFrameSize = 16;
+// Non-EDDI realigned dynamic frames retain both actual BP banks across calls.
+// Two XLEN words fit in one ABI-aligned area on RV32 and RV64.
+constexpr unsigned kBasePointerCallFrameSize = 16;
 void saveCallRegs(const std::vector<llvm::Register> &, llvm::MachineBasicBlock *,
                   llvm::MachineBasicBlock::iterator,
                   CallFrameBank = CallFrameBank::Caller);

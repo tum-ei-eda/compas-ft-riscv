@@ -341,6 +341,7 @@ protected:
   void emitPointerDeltaUpdates();
   void expandDynamicStack();
   void preserveDynamicStackAcrossCalls();
+  void preserveBasePointerAcrossCalls();
   unsigned pointerContextSlot(unsigned) const;
   void loadPointerDelta(llvm::MachineBasicBlock *,
                         llvm::MachineBasicBlock::iterator, PointerOrigin);

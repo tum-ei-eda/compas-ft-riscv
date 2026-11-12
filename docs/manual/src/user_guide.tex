@@ -115,14 +115,20 @@ being checked. Indirect or by-value pointer parameters,
 pointer returns, arbitrary memory reloads, and pointer bits transported
 through floating-point registers remain outside this tracking contract.
 
-Realigned variable-sized EDDI frames use \texttt{x6}/\texttt{x30}
+Realigned variable-sized DMR frames use \texttt{x6}/\texttt{x30}
 (\texttt{t1}/\texttt{t5}) as the primary/shadow base-pointer pair for aligned
 fixed locals. The stack pointers remain \texttt{x2}/\texttt{x9}, and the frame
-pointers remain \texttt{x8}/\texttt{x31}. EDDI reserves the base-pointer pair
+pointers remain \texttt{x8}/\texttt{x31}. COMPAS reserves the base-pointer pair
 before register allocation and preserves both actual values in separate
 FP-relative slots around every returning call, including duplicated libcalls.
 These registers remain caller-clobbered under the ordinary ABI; the caller's
 instrumentation restores them before further fixed-frame accesses.
+EDDI retains its separate memory banks and runtime pointer-delta context.
+SWIFT, NZDC, NZDC+NEMESIS and NZDC+NEMESEC share memory, so their corresponding
+base-pointer addresses remain equal. They save both actual values in a dedicated
+16-byte subbank of the fixed call-preservation frame, independent of selective
+call and duplicated-libcall snapshots. Saving this state leaves SP and outgoing
+stack arguments unchanged.
 
 Before a callee establishes its own frame pointer, the incoming \texttt{s0}
 and its shadow belong to the caller. EDDI preserves both independently in the

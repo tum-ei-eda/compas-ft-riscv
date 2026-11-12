@@ -620,12 +620,17 @@ NOINLINE int abi_test_printf(const char *format, ...)
 
 NOINLINE word ABI_LIBCALL_CALLER(word value, word count)
 {
+#if defined(ABI_REALIGNED_DYNAMIC)
+    volatile word fixed[7] __attribute__((aligned(64)));
+    volatile word scratch[count] __attribute__((aligned(64)));
+#else
     volatile word fixed[7];
 #if TEST_CASE == 16
     volatile word scratch[9];
     count = 9;
 #else
     volatile word scratch[count];
+#endif
 #endif
     word index;
     for (index = 0; index != 7; ++index)
@@ -676,6 +681,10 @@ int main(void)
 
 #elif TEST_CASE == 18
 volatile word abi_inputs[] = {1, 7, 13};
+#if defined(ABI_REALIGNED_DYNAMIC)
+/* A volatile size keeps this a real VLA while preserving the literal oracle. */
+volatile word abi_memcmp_count = 13;
+#endif
 const unsigned char abi_memcmp_reference[13] =
     {5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35, 38, 41};
 
@@ -699,8 +708,13 @@ __attribute__((no_builtin("memcmp")))
 #endif
 NOINLINE word abi_duplicated_libcall(word value)
 {
+#if defined(ABI_REALIGNED_DYNAMIC)
+    unsigned char first[13] __attribute__((aligned(64)));
+    unsigned char second[abi_memcmp_count] __attribute__((aligned(64)));
+#else
     unsigned char first[13];
     unsigned char second[13];
+#endif
     word index;
     for (index = 0; index != 13; ++index) {
         first[index] = (unsigned char)(3*index + 5);

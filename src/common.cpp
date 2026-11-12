@@ -313,8 +313,8 @@ bool riscv_common::isDmrFunction(const std::string &name) {
          inCSString(llvm::cl::enable_nzdc_nemesec, name);
 }
 
-bool riscv_common::usesEddiBasePointer(const llvm::MachineFunction &MF) {
-  return inCSString(llvm::cl::enable_eddi, std::string{MF.getName()}) &&
+bool riscv_common::usesDmrBasePointer(const llvm::MachineFunction &MF) {
+  return isDmrFunction(std::string{MF.getName()}) &&
          MF.getFrameInfo().hasVarSizedObjects() &&
          MF.getSubtarget<llvm::RISCVSubtarget>()
              .getRegisterInfo()
@@ -364,7 +364,7 @@ riscv_common::pointerProvenanceSlots(const llvm::MachineFunction &MF) {
   // negative indices and the immutable incoming-pointer prefix is separate.
   return 32 + std::max(0, MF.getFrameInfo().getObjectIndexEnd()) +
          (MF.getFrameInfo().hasVarSizedObjects() ? 3 : 0) +
-         (usesEddiBasePointer(MF) ? 2 : 0);
+         (usesDmrBasePointer(MF) ? 2 : 0);
 }
 
 bool riscv_common::inCSString(std::string cs_string, std::string x) {
@@ -539,17 +539,35 @@ void access_call_regs(const std::vector<llvm::Register> &regs,
       riscv_common::isDmrFunction(std::string{MF.getName()})
           ? riscv_common::kLibcallResultFrameSize
           : 0;
+  const unsigned base_pointer_size =
+      riscv_common::usesDmrBasePointer(MF) &&
+              !riscv_common::inCSString(llvm::cl::enable_eddi,
+                                        std::string{MF.getName()})
+          ? riscv_common::kBasePointerCallFrameSize
+          : 0;
   const int64_t reserved = MF.getFrameInfo().getObjectSize(frame_index);
-  if (reserved < result_size)
+  if (reserved < result_size + base_pointer_size)
     llvm::report_fatal_error("COMPAS: DMR call frame is too small");
-  const uint64_t caller_size = reserved - result_size;
-  const uint64_t bank_size =
-      bank == riscv_common::CallFrameBank::Caller ? caller_size : result_size;
-  if ((bank != riscv_common::CallFrameBank::Caller &&
-       bank != riscv_common::CallFrameBank::Libcall) || frame.size > bank_size)
+  const uint64_t caller_size = reserved - result_size - base_pointer_size;
+  uint64_t bank_size, bank_offset;
+  switch (bank) {
+  case riscv_common::CallFrameBank::Caller:
+    bank_size = caller_size;
+    bank_offset = 0;
+    break;
+  case riscv_common::CallFrameBank::Libcall:
+    bank_size = result_size;
+    bank_offset = caller_size;
+    break;
+  case riscv_common::CallFrameBank::BasePointer:
+    bank_size = base_pointer_size;
+    bank_offset = caller_size + result_size;
+    break;
+  default:
+    llvm::report_fatal_error("COMPAS: unknown DMR call frame bank");
+  }
+  if (frame.size > bank_size)
     llvm::report_fatal_error("COMPAS: DMR call frame is too small");
-  const uint64_t bank_offset =
-      bank == riscv_common::CallFrameBank::Caller ? 0 : caller_size;
 
   const auto &subtarget = MF.getSubtarget<llvm::RISCVSubtarget>();
   const auto *tii = subtarget.getInstrInfo();

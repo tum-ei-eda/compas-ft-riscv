@@ -22,12 +22,6 @@ python3 tests/regression/run.py --case 'stack_args/*' \
   --verify-machineinstrs --build-dir build/tests-todo-stack
 ```
 
-## Other DMR modes: realigned dynamic frames
-
-- [ ] Support realigned variable-sized frames in SWIFT and NZDC modes.
-
-SWIFT, NZDC, NZDC+NEMESIS and NZDC+NEMESEC still abort with `reg not found in P2S_` for a runtime-sized `__attribute__((aligned(64)))` local array on RV32/RV64 with both backends. These modes retain LLVM's `x9`/`s1` base pointer, conflicting with the monitor's shadow SP and lacking a primary-to-shadow register mapping. Extending support requires distinct base-pointer ownership and corresponding address tracking and call preservation. The realigned dynamic regression cases explicitly select EDDI only.
-
 ## Call-boundary instrumentation
 
 - [ ] Audit repair-mode preservation that moves SP around calls.

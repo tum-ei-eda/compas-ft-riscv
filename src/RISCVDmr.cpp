@@ -476,6 +476,8 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
   if (!ignore && MF_->getFrameInfo().hasVarSizedObjects() &&
       riscv_common::inCSString(llvm::cl::enable_eddi, fname_))
     preserveDynamicStackAcrossCalls();
+  else if (!ignore && riscv_common::usesDmrBasePointer(*MF_))
+    preserveBasePointerAcrossCalls();
 
   return !ignore;
 }
@@ -922,7 +924,7 @@ void RISCVDmr::analyzeStackArguments() {
   const Value unknown{Relation::Unsupported, {}, all_bits};
   const bool runtime_origins = riscv_common::usesPointerProvenance(*MF_);
   const bool dynamic_frame = MF_->getFrameInfo().hasVarSizedObjects();
-  const bool base_pointer = riscv_common::usesEddiBasePointer(*MF_);
+  const bool base_pointer = riscv_common::usesDmrBasePointer(*MF_);
   auto runtimeOrigin = [&](unsigned key) {
     const unsigned slot = key < register_count ? key - llvm::RISCV::X0
                                                : 32 + key - register_count;
@@ -1139,7 +1141,7 @@ void RISCVDmr::analyzeStackArguments() {
       if (item.first < register_count && MI.modifiesRegister(item.first, TRI_) &&
           !(MI.isCall() &&
             ((dynamic_frame && item.first == riscv_common::kSP) ||
-             (base_pointer && item.first == riscv_common::kEddiBP))))
+             (base_pointer && item.first == riscv_common::kDmrBP))))
         assign(item.first, result);
     if (MI.mayStore() && spill != spills.end())
       assign(spill->second.key, stored);
@@ -1735,7 +1737,7 @@ void RISCVDmr::duplicateInstructions() {
 unsigned RISCVDmr::pointerContextSlot(unsigned index) const {
   const auto *info = MF_->getInfo<llvm::RISCVMachineFunctionInfo>();
   const int bank = info->getCompasPointerDeltaFrameIndex();
-  const unsigned words = riscv_common::usesEddiBasePointer(*MF_) ? 5 : 3;
+  const unsigned words = riscv_common::usesDmrBasePointer(*MF_) ? 5 : 3;
   if (index >= words || bank >= 0 || !MF_->getFrameInfo().hasVarSizedObjects())
     llvm::report_fatal_error("COMPAS: dynamic stack context was not prepared");
   return MF_->getFrameInfo().getObjectSize(bank) / isa_config_.word_length -
@@ -1835,7 +1837,7 @@ void RISCVDmr::preserveDynamicStackAcrossCalls() {
   // Preserve the actual caller state, independently of the checked delta.
   const auto scratch = P2S_.at(riscv_common::k0);
   const auto shadow_sp = P2S_.at(riscv_common::kSP);
-  const bool base_pointer = riscv_common::usesEddiBasePointer(*MF_);
+  const bool base_pointer = riscv_common::usesDmrBasePointer(*MF_);
   for (auto &MBB : *MF_) {
     if (&MBB == err_bb_)
       continue;
@@ -1849,10 +1851,10 @@ void RISCVDmr::preserveDynamicStackAcrossCalls() {
         // BP records the aligned fixed-frame base while SP moves for VLAs.
         // Preserve each actual bank independently of its expected separation.
         addOffset(MBB, MI.getIterator(), *TII_, scratch,
-                  riscv_common::kEddiBP, 0, MI.getDebugLoc());
+                  riscv_common::kDmrBP, 0, MI.getDebugLoc());
         storePointerDelta(&MBB, MI.getIterator(), pointerContextSlot(3));
         addOffset(MBB, MI.getIterator(), *TII_, scratch,
-                  P2S_.at(riscv_common::kEddiBP), 0, MI.getDebugLoc());
+                  P2S_.at(riscv_common::kDmrBP), 0, MI.getDebugLoc());
         storePointerDelta(&MBB, MI.getIterator(), pointerContextSlot(4));
       }
       addOffset(MBB, MI.getIterator(), *TII_, scratch, riscv_common::k0, 0);
@@ -1861,13 +1863,36 @@ void RISCVDmr::preserveDynamicStackAcrossCalls() {
       addOffset(MBB, after, *TII_, shadow_sp, scratch, 0, MI.getDebugLoc());
       if (base_pointer) {
         loadPointerDelta(&MBB, after, {PointerOrigin::Kind::Context, 3});
-        addOffset(MBB, after, *TII_, riscv_common::kEddiBP, scratch, 0,
+        addOffset(MBB, after, *TII_, riscv_common::kDmrBP, scratch, 0,
                   MI.getDebugLoc());
         loadPointerDelta(&MBB, after, {PointerOrigin::Kind::Context, 4});
-        addOffset(MBB, after, *TII_, P2S_.at(riscv_common::kEddiBP), scratch, 0,
+        addOffset(MBB, after, *TII_, P2S_.at(riscv_common::kDmrBP), scratch, 0,
                   MI.getDebugLoc());
       }
       addOffset(MBB, after, *TII_, scratch, riscv_common::k0, 0);
+    }
+  }
+}
+
+void RISCVDmr::preserveBasePointerAcrossCalls() {
+  // The shared-memory modes keep equal BP addresses, but each bank remains
+  // independently monitored state. Neither t1 nor t5 is ABI callee-saved.
+  // Use a separate fixed bank so selective-call/libcall snapshots cannot
+  // overwrite these values, and leave the outgoing argument area untouched.
+  const std::vector<llvm::Register> regs{riscv_common::kDmrBP,
+                                         P2S_.at(riscv_common::kDmrBP)};
+  for (auto &MBB : *MF_) {
+    if (&MBB == err_bb_)
+      continue;
+    for (auto &MI : MBB) {
+      if (!MI.isCall() || TII_->isTailCall(MI) ||
+          MI.getFlag(llvm::MachineInstr::FrameSetup) ||
+          MI.getFlag(llvm::MachineInstr::FrameDestroy))
+        continue;
+      riscv_common::saveCallRegs(regs, &MBB, MI.getIterator(),
+                                 riscv_common::CallFrameBank::BasePointer);
+      riscv_common::loadCallRegs(regs, &MBB, std::next(MI.getIterator()),
+                                 riscv_common::CallFrameBank::BasePointer);
     }
   }
 }
