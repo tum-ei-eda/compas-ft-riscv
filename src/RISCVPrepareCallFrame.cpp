@@ -57,6 +57,11 @@ bool needs_dmr_frame(const llvm::MachineFunction &MF) {
       if (!MI.isCall() || MI.getFlag(llvm::MachineInstr::FrameSetup) ||
           tii->isTailCall(MI) || !MI.getNumOperands())
         continue;
+      // REPAIR's live shadow locations differ from the canonical ABI bank.
+      // Every returning call can overwrite them, including protected callees
+      // and indirect targets which do not cross a selective boundary.
+      if (caller_dmr && llvm::cl::enable_repair)
+        return true;
       // The caller-owned BP pair must survive protected and ordinary calls,
       // including indirect calls whose target convention is unknown here.
       if (base_pointer)
@@ -120,6 +125,7 @@ unsigned dmr_frame_size(const llvm::MachineFunction &MF) {
     size += 16 * std::max(word_size, subtarget.hasStdExtD() ? 8u : 4u);
   // A protected caller can duplicate a libcall. Its outer monitor snapshot
   // and the first call's ABI arguments/results must remain independent.
+  const unsigned repair_size = riscv_common::repairCallFrameSize(MF);
   return llvm::alignTo(size, 16) +
          (riscv_common::isDmrFunction(std::string{MF.getName()})
               ? riscv_common::kLibcallResultFrameSize
@@ -128,7 +134,9 @@ unsigned dmr_frame_size(const llvm::MachineFunction &MF) {
                   !riscv_common::inCSString(llvm::cl::enable_eddi,
                                             std::string{MF.getName()})
               ? riscv_common::kBasePointerCallFrameSize
-              : 0);
+              : 0) +
+         repair_size +
+         (repair_size ? 2 * riscv_common::kRepairResultFrameSize : 0);
 }
 
 class RISCVPrepareCallFrame : public llvm::MachineFunctionPass {

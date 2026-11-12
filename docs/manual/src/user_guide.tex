@@ -83,6 +83,29 @@ whether its caller uses this pair for a signature. These caller-clobbered
 registers carry no formal ABI argument. Argument and result checks remain,
 as do ordinary DMR instruction and data checks within functions without CFP.
 
+\subsubsection{REPAIR call boundaries}
+\texttt{-REPAIR} changes the live shadow-register pairing in NZDC,
+NZDC+NEMESIS and NZDC+NEMESEC functions. Before a returning call, COMPAS checks
+the current argument pairs and saves both actual register banks in a fixed
+FP-relative snapshot. Canonical shadow arguments are loaded from that snapshot,
+so overlapping register assignments cannot destroy another argument. SP and
+outgoing stack arguments retain their ABI locations, including in variable-sized
+and realigned frames. Indirect targets must implement the protected calling
+convention.
+
+Primary and shadow results occupy separate slots while the caller's original
+pairing is restored. A duplicable libcall runs twice with independently restored
+register arguments; a nonduplicable ordinary call supplies one shared result.
+On return from a protected function, simultaneous register transfers restore
+the canonical shadow results, return address and frame state. Pairing changes
+at conditional branches execute only on their selected control-flow edge.
+REPAIR excludes registers owned by control-flow signatures from its allocation.
+
+REPAIR tail calls are rejected because their epilogue has already removed the
+frame needed for this preservation. Compile these callers with
+\texttt{-fno-optimize-sibling-calls} to retain returning calls. This restriction
+is separate from EDDI's supported returning-call conversions below.
+
 \subsubsection{Inline assembly in EDDI functions}
 EDDI diagnoses nonempty or operand-bearing inline assembly in selected functions
 because its assembly text has no defined primary/shadow register or stack

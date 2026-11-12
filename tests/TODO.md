@@ -24,10 +24,10 @@ python3 tests/regression/run.py --case 'stack_args/*' \
 
 ## Call-boundary instrumentation
 
-- [ ] Audit repair-mode preservation that moves SP around calls.
+- [ ] Define preservation for remaining late tail-conversion paths and REPAIR tail calls.
 - [ ] Make signature instrumentation aware of `+save-restore` prologue/epilogue helpers.
 
-Moving SP in repair-mode call preservation still needs review, including its effect on outgoing stack arguments. Remaining late tail-conversion paths use legacy `saveRegs`/`loadRegs` after the original epilogue has restored FP; they require a separate preservation contract. Ordinary-to-EDDI direct calls now use returning wrappers prepared before frame layout.
+Remaining late tail-conversion paths use legacy `saveRegs`/`loadRegs` after the original epilogue has restored FP; they require a separate preservation contract. REPAIR rejects tail calls because its fixed caller snapshot requires a live frame; use `-fno-optimize-sibling-calls` for returning calls. Ordinary-to-EDDI direct calls use returning wrappers prepared before frame layout.
 
 Compiler-generated `__riscv_save_*` calls execute before FP setup and can clobber G/RTS in `t0`. Signature initialization and preservation must account for their prologue placement.
 
@@ -35,8 +35,11 @@ Compiler-generated `__riscv_save_*` calls execute before FP setup and can clobbe
 
 - [ ] Correct FP equality checks for NaNs and signed zero.
 - [ ] Define protection of architectural FP control/status state.
+- [ ] Resolve LLVM16 REPAIR FP shadow-register lookup failures.
 
 The current `FEQ_S`/`FEQ_D` checks reject matching NaNs and accept oppositely signed zeroes. The rounding-mode input (`FRM`) is shared by primary and shadow computations; FP control/status state has no shadow. The [hard-float suite](regression/hard_float/README.adoc) checks finite values against exact-bit oracles, including nonzero lower binary64 bits on RV32.
+
+With `-REPAIR` enabled, the `eight_float_rv64` and `eight_double_rv32` fixtures abort in `getPrimaryFromShadow()` on LLVM16 for all three NZDC modes. The assertion also occurs in the compiler before the call-preservation changes. LLVM13 passes both finite-value call probes with both schedules. The [REPAIR call suite](regression/repair_call_abi/README.adoc) currently covers integer-register ABIs.
 
 ```sh
 python3 tests/regression/run.py --case 'hard_float/*' \

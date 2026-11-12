@@ -19,6 +19,7 @@ import sys
 
 TESTS = Path(__file__).resolve().parent
 MODES = ("none", "EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC")
+REPAIR_MODES = ("NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC")
 CFPS = ("none", "CFCSS", "RASM", "RACFED")
 
 
@@ -78,8 +79,8 @@ def target_profiles(args, case, arch):
         if (args.isa is not None or args.abi is not None or args.code_model
                 or "abi" in case or "code_models" in case or "relax" in case
                 or "frame_pointer" in case or "optimization" in case
-                or "sibling_calls" in case):
-            raise ValueError("ISA/ABI overrides, code_models, relax, frame_pointer, optimization and sibling_calls are supported by the freestanding adapter")
+                or "sibling_calls" in case or "repair" in case):
+            raise ValueError("ISA/ABI overrides, code_models, relax, frame_pointer, optimization, sibling_calls and repair are supported by the freestanding adapter")
         return [None]
     isa = (args.isa if args.isa is not None else case.get("isa", "rv{bits}im")).format(bits=arch[2:])
     match = re.fullmatch(r"rv(32|64)(i[mafdc]*|gc?)", isa)
@@ -100,7 +101,7 @@ def target_profiles(args, case, arch):
         features.append("-relax")
     frame_pointer = {"frame_pointer": True} if case.get("frame_pointer", False) else {}
     codegen = {field: case[field] for field, default in
-               (("optimization", 1), ("sibling_calls", False))
+               (("optimization", 1), ("sibling_calls", False), ("repair", False))
                if case.get(field, default) != default}
     return [dict(isa=isa, abi=abi, code_model=model, relax=relax, features=features,
                  **frame_pointer, **codegen)
@@ -110,6 +111,7 @@ def target_profiles(args, case, arch):
 def discover(args):
     selected = []
     seen = set()
+    skipped_repair_modes = False
     groups = ("regression", "apps") if args.suite == "all" else (args.suite,)
     for group in groups:
         for manifest in sorted((TESTS / group).rglob("suite.json")):
@@ -194,8 +196,20 @@ def discover(args):
                         raise ValueError("optimization must be the integer 1 or 2")
                     if not isinstance(config.get("sibling_calls", False), bool):
                         raise ValueError("sibling_calls must be a boolean")
+                    if not isinstance(config.get("repair", False), bool):
+                        raise ValueError("repair must be a boolean")
                     if args.case and not any(fnmatch.fnmatchcase(name, pattern) for pattern in args.case):
                         continue
+                    if config.get("repair", False):
+                        if any(mode not in REPAIR_MODES
+                               for mode in config.get("modes", ["EDDI", "SWIFT"])):
+                            raise ValueError("repair requires NZDC, NZDC+NEMESIS or NZDC+NEMESEC modes")
+                        if args.mode:
+                            config["selected_modes"] = [mode for mode in args.mode
+                                                        if mode in REPAIR_MODES]
+                            if not config["selected_modes"]:
+                                skipped_repair_modes = True
+                                continue
                     config["selected_arches"] = [a for a in (args.arch or arches) if a in arches]
                     if config["selected_arches"]:
                         config["targets"] = {arch: target_profiles(args, config, arch)
@@ -204,7 +218,9 @@ def discover(args):
             except (OSError, ValueError, KeyError, TypeError) as error:
                 raise TestError(f"{manifest}: {error}") from error
     if not selected:
-        raise TestError("no cases match the requested suite, case and architecture selection")
+        suffix = ("; REPAIR cases require NZDC, NZDC+NEMESIS or NZDC+NEMESEC modes"
+                  if skipped_repair_modes else "")
+        raise TestError("no cases match the requested suite, case and architecture selection" + suffix)
     return selected
 
 
@@ -301,6 +317,8 @@ def build_and_run(args, tools, case, arch, mode, cfp, schedule, functions, cfp_f
             flags.append(f"-{cfp}={','.join(cfp_functions)}")
         if schedule == "fgs" and mode != "none":
             flags.append(f"-FGS={','.join(functions)}")
+        if target.get("repair", False) and mode != "none":
+            flags.append("-REPAIR")
         frame_flags = (["-fno-omit-frame-pointer", "-mno-omit-leaf-frame-pointer"]
                        if target.get("frame_pointer", False) else [])
         optimization = "-O" + str(target.get("optimization", 1))
@@ -417,7 +435,7 @@ def known_failure(case, arch, mode, cfp, schedule, functions, cfp_functions, tar
             if target and any(target.get(field, default) != failure.get(field, default) for field, default in (
                     ("isa", arch + "im"), ("abi", "ilp32" if arch == "rv32" else "lp64"),
                     ("code_model", "medlow"), ("relax", True), ("frame_pointer", False),
-                    ("optimization", 1), ("sibling_calls", False))):
+                    ("optimization", 1), ("sibling_calls", False), ("repair", False))):
                 continue
             if not failure.get("issue") or not failure.get("reason") or "target_exit" not in failure:
                 raise TestError("known failures require issue, reason and target_exit")
@@ -441,6 +459,8 @@ def emit(results, result):
             config += "/O" + str(result["optimization"])
         if result.get("sibling_calls", False):
             config += "/sibling-calls"
+        if result.get("repair", False):
+            config += "/repair"
     print(f"{result['status']:6} {result['name']} {result['arch']} {config}: {result['detail']}", flush=True)
 
 
@@ -448,7 +468,7 @@ def execute(args, tools, cases, results):
     for case in cases:
         functions, cfp_functions = function_selections(args, case)
         configurations = list(dict.fromkeys(itertools.product(
-            args.mode or case.get("modes", ["EDDI", "SWIFT"]),
+            case.get("selected_modes", args.mode or case.get("modes", ["EDDI", "SWIFT"])),
             args.cfp or case.get("cfp_modes", ["none"]),
             args.schedule or case.get("schedules", ["cgs"]))))
         for mode, cfp, schedule in configurations:
@@ -471,10 +491,14 @@ def execute(args, tools, cases, results):
                     profile += "-O" + str(target["optimization"])
                 if target.get("sibling_calls", False):
                     profile += "-sibling-calls"
+                if target.get("repair", False):
+                    profile += "-repair"
                 root /= profile
-                base.update({field: target[field] for field in ("isa", "abi", "code_model", "relax", "frame_pointer", "optimization", "sibling_calls")
+                base.update({field: target[field] for field in ("isa", "abi", "code_model", "relax", "frame_pointer", "optimization", "sibling_calls", "repair")
                              if field in target})
             reference = dict(base, mode="reference", cfp="none", schedule="cgs", logdir=str(root / "reference"))
+            if "repair" in reference:
+                reference["repair"] = False
             try:
                 outcome, verification = build_and_run(args, tools, case, arch, "none", "none", "cgs", [], [], root / "reference", target)
                 reference["outcome"] = outcome
@@ -541,9 +565,10 @@ def main(default_suite="all"):
                             + ("/frame-pointer" if target.get("frame_pointer", False) else "")
                             + ("/O" + str(target["optimization"]) if target.get("optimization", 1) != 1 else "")
                             + ("/sibling-calls" if target.get("sibling_calls", False) else "")
+                            + ("/repair" if target.get("repair", False) else "")
                             for targets in case["targets"].values() for target in targets if target]
                 print(f"{case['name']} [{case['adapter']}] arch={','.join(case['selected_arches'])} "
-                      f"modes={','.join(args.mode or case.get('modes', []))} "
+                      f"modes={','.join(case.get('selected_modes', args.mode or case.get('modes', [])))} "
                       f"cfp={','.join(args.cfp or case.get('cfp_modes', ['none']))} "
                       f"functions={','.join(functions)} cfp-functions={','.join(cfp_functions)} "
                       f"schedules={','.join(args.schedule or case.get('schedules', ['cgs']))} "

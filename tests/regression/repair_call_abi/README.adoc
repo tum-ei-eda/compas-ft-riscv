@@ -1,0 +1,38 @@
+= REPAIR call preservation
+
+These cases exercise call preservation with `-REPAIR` in NZDC,
+NZDC+NEMESIS and NZDC+NEMESEC on RV32/RV64 with both instruction schedules.
+They reuse the link:../call_abi/README.adoc[call ABI fixtures] and their literal
+result and output oracles through the shared manifest runner.
+
+Ten-argument callers place arguments nine and ten on the outgoing stack.
+The dedicated twelve-argument fixture adds two more stack arguments so that
+preservation spills cannot accidentally reconstruct the entire argument area.
+It checks three inputs twice against literal results, retaining a local value
+across each call.
+Caller-only selection crosses into ordinary helpers; protecting both sides
+also checks the DMR calling convention. Nested and indirect calls retain live
+values. Dynamic and realigned dynamic frames keep local arrays live across
+calls, including an indirect call in a realigned frame.
+
+The `printf` fixture is a nonduplicable library call with eleven arguments and
+observable output. The `memcmp` fixture is a duplicable library call with
+equal, positive and negative results. Fixed, dynamic and realigned dynamic
+variants exercise the distinct caller/result snapshots used for libcalls.
+The fixtures supply their own library shims, avoiding a target libc dependency.
+
+The protected ten-argument, realigned dynamic-frame and duplicated-libcall cases
+also run with CFCSS, RASM and RACFED. These combinations check signature-register
+ownership and REPAIR branch continuations. Other cases select no CFP by default.
+
+Run the suite with:
+
+[,bash]
+----
+python3 tests/regression/run.py --case 'repair_call_abi/*'
+----
+
+The manifest sets `repair: true`, which applies `-REPAIR` to its selected DMR
+builds. Each case also runs an unprotected reference without REPAIR and enables
+a separate LLVM machine-verifier compilation. These are functional regression
+checks; they do not establish REPAIR fault-recovery coverage.

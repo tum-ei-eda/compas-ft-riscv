@@ -354,6 +354,8 @@ protected:
   void protectBranches();
   void protectGP();
   void repair();
+  void emitRepairCopies(llvm::MachineBasicBlock *,
+                         llvm::MachineBasicBlock::iterator, RegMapType);
   bool ignoreMF();
   bool is_func_dmr(const std::string &func_name);
   // TODO: hide some of the following??

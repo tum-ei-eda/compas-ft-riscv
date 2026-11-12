@@ -313,6 +313,17 @@ bool riscv_common::isDmrFunction(const std::string &name) {
          inCSString(llvm::cl::enable_nzdc_nemesec, name);
 }
 
+unsigned riscv_common::repairCallFrameSize(const llvm::MachineFunction &MF) {
+  if (!llvm::cl::enable_repair || !isDmrFunction(std::string{MF.getName()}))
+    return 0;
+  const auto &subtarget = MF.getSubtarget<llvm::RISCVSubtarget>();
+  const unsigned word_size = subtarget.is64Bit() ? 8 : 4;
+  unsigned size = 32 * word_size;
+  if (subtarget.hasStdExtF())
+    size += 32 * std::max(word_size, subtarget.hasStdExtD() ? 8u : 4u);
+  return llvm::alignTo(size, 16);
+}
+
 bool riscv_common::usesDmrBasePointer(const llvm::MachineFunction &MF) {
   return isDmrFunction(std::string{MF.getName()}) &&
          MF.getFrameInfo().hasVarSizedObjects() &&
@@ -522,11 +533,12 @@ void riscv_common::preserveSignatureAcrossCall(
 
 namespace {
 
-void access_call_regs(const std::vector<llvm::Register> &regs,
-                      llvm::MachineBasicBlock *MBB,
-                      llvm::MachineBasicBlock::iterator insert, bool restore,
-                      riscv_common::CallFrameBank bank) {
-  if (regs.empty())
+void access_call_regs(
+    const std::vector<llvm::Register> &regs, llvm::MachineBasicBlock *MBB,
+    llvm::MachineBasicBlock::iterator insert, bool restore,
+    riscv_common::CallFrameBank bank,
+    const std::map<llvm::Register, llvm::Register> *copies = nullptr) {
+  if ((copies && copies->empty()) || (!copies && regs.empty()))
     return;
 
   auto &MF = *MBB->getParent();
@@ -535,6 +547,46 @@ void access_call_regs(const std::vector<llvm::Register> &regs,
   if (frame_index >= 0)
     llvm::report_fatal_error("COMPAS: DMR call frame was not prepared");
   const auto frame = spill_frame(regs, MF);
+  const auto &subtarget = MF.getSubtarget<llvm::RISCVSubtarget>();
+  const riscv_common::ISAConfig isa_config{MF};
+  std::map<llvm::Register, llvm::Register> destinations;
+  if (copies) {
+    assert(restore && "Register copies require a reload");
+    std::set<llvm::Register> written;
+    for (const auto &copy : *copies) {
+      const auto source = spill_slot(copy.first, isa_config, subtarget);
+      const auto destination = spill_slot(copy.second, isa_config, subtarget);
+      const bool source_integer =
+          riscv_common::getRegType(source.reg) == riscv_common::RegType::I;
+      const bool destination_integer =
+          riscv_common::getRegType(destination.reg) == riscv_common::RegType::I;
+      if (source_integer != destination_integer ||
+          source.load_opcode != destination.load_opcode ||
+          source.width != destination.width)
+        llvm::report_fatal_error(
+            "COMPAS: incompatible call-frame register copy");
+      if (destination.reg == riscv_common::kFP &&
+          source.reg != riscv_common::kFP)
+        llvm::report_fatal_error("COMPAS: call-frame copy replaces stable FP");
+      const auto saved = std::find_if(
+          frame.slots.begin(), frame.slots.end(),
+          [&](const SpillSlot &slot) { return slot.reg == source.reg; });
+      if (saved == frame.slots.end())
+        llvm::report_fatal_error(
+            "COMPAS: call-frame copy source was not saved");
+      const auto inserted = destinations.emplace(source.reg, destination.reg);
+      if (!inserted.second) {
+        if (inserted.first->second != destination.reg)
+          llvm::report_fatal_error("COMPAS: conflicting call-frame FP aliases");
+        continue;
+      }
+      if (!written.insert(destination.reg).second)
+        llvm::report_fatal_error("COMPAS: conflicting call-frame destinations");
+    }
+  } else {
+    for (const auto &slot : frame.slots)
+      destinations.emplace(slot.reg, slot.reg);
+  }
   const unsigned result_size =
       riscv_common::isDmrFunction(std::string{MF.getName()})
           ? riscv_common::kLibcallResultFrameSize
@@ -545,10 +597,15 @@ void access_call_regs(const std::vector<llvm::Register> &regs,
                                         std::string{MF.getName()})
           ? riscv_common::kBasePointerCallFrameSize
           : 0;
+  const unsigned repair_size = riscv_common::repairCallFrameSize(MF);
+  const unsigned repair_result_size =
+      repair_size ? riscv_common::kRepairResultFrameSize : 0;
   const int64_t reserved = MF.getFrameInfo().getObjectSize(frame_index);
-  if (reserved < result_size + base_pointer_size)
+  const unsigned appended_size =
+      result_size + base_pointer_size + repair_size + 2 * repair_result_size;
+  if (reserved < appended_size)
     llvm::report_fatal_error("COMPAS: DMR call frame is too small");
-  const uint64_t caller_size = reserved - result_size - base_pointer_size;
+  const uint64_t caller_size = reserved - appended_size;
   uint64_t bank_size, bank_offset;
   switch (bank) {
   case riscv_common::CallFrameBank::Caller:
@@ -563,16 +620,27 @@ void access_call_regs(const std::vector<llvm::Register> &regs,
     bank_size = base_pointer_size;
     bank_offset = caller_size + result_size;
     break;
+  case riscv_common::CallFrameBank::Repair:
+    bank_size = repair_size;
+    bank_offset = caller_size + result_size + base_pointer_size;
+    break;
+  case riscv_common::CallFrameBank::RepairPrimaryResult:
+    bank_size = repair_result_size;
+    bank_offset = caller_size + result_size + base_pointer_size + repair_size;
+    break;
+  case riscv_common::CallFrameBank::RepairShadowResult:
+    bank_size = repair_result_size;
+    bank_offset = caller_size + result_size + base_pointer_size + repair_size +
+                  repair_result_size;
+    break;
   default:
     llvm::report_fatal_error("COMPAS: unknown DMR call frame bank");
   }
   if (frame.size > bank_size)
     llvm::report_fatal_error("COMPAS: DMR call frame is too small");
 
-  const auto &subtarget = MF.getSubtarget<llvm::RISCVSubtarget>();
   const auto *tii = subtarget.getInstrInfo();
   const auto DL = MBB->front().getDebugLoc();
-  const riscv_common::ISAConfig isa_config{MF};
   llvm::Register frame_reg;
   const auto offset = subtarget.getFrameLowering()->getFrameIndexReference(
       MF, frame_index, frame_reg);
@@ -604,8 +672,17 @@ void access_call_regs(const std::vector<llvm::Register> &regs,
         .addMemOperand(memory);
   };
   if (!large_offset) {
+    const SpillSlot *saved_fp = nullptr;
     for (const auto &slot : frame.slots)
-      access(slot, slot.reg, frame_reg, displacement);
+      if (destinations.count(slot.reg)) {
+        if (restore && destinations.at(slot.reg) == frame_reg) {
+          saved_fp = &slot;
+          continue; // Keep the stable address base until the final access.
+        }
+        access(slot, destinations.at(slot.reg), frame_reg, displacement);
+      }
+    if (saved_fp)
+      access(*saved_fp, frame_reg, frame_reg, displacement);
     return;
   }
 
@@ -634,6 +711,13 @@ void access_call_regs(const std::vector<llvm::Register> &regs,
       if (value == address || value == buffer) {
         reload_temporary(buffer, value == address ? 0 : 1);
         value = buffer;
+      } else if (value == riscv_common::kSP) {
+        // The snapshot records the caller's SP before borrowing scratch
+        // space, rather than the temporary stack address used below.
+        llvm::BuildMI(*MBB, insert, DL, tii->get(llvm::RISCV::ADDI), buffer)
+            .addReg(riscv_common::kSP)
+            .addImm(temporary_frame.size);
+        value = buffer;
       }
       access(slot, value, address, 0);
     }
@@ -641,22 +725,27 @@ void access_call_regs(const std::vector<llvm::Register> &regs,
     return;
   }
 
-  bool restore_address = false, restore_buffer = false;
+  const SpillSlot *saved_address = nullptr, *saved_sp = nullptr;
+  bool restore_buffer = false;
   for (const auto &slot : frame.slots) {
-    if (slot.reg == address) {
-      restore_address = true;
+    const auto destination = destinations.find(slot.reg);
+    if (destination == destinations.end())
+      continue;
+    if (destination->second == address) {
+      saved_address = &slot;
       continue; // Reload the address register after its final use.
     }
-    restore_buffer |= slot.reg == buffer;
-    access(slot, slot.reg, address, 0);
+    if (destination->second == riscv_common::kSP) {
+      saved_sp = &slot;
+      continue; // The borrowed scratch space still uses the temporary SP.
+    }
+    restore_buffer |= destination->second == buffer;
+    access(slot, destination->second, address, 0);
   }
   if (!restore_buffer)
     reload_temporary(buffer, 1);
-  if (restore_address) {
-    const auto slot = std::find_if(
-        frame.slots.begin(), frame.slots.end(),
-        [&](const SpillSlot &saved) { return saved.reg == address; });
-    access(*slot, address, address, 0);
+  if (saved_address) {
+    access(*saved_address, address, address, 0);
   } else {
     reload_temporary(address, 0);
   }
@@ -664,6 +753,18 @@ void access_call_regs(const std::vector<llvm::Register> &regs,
                 riscv_common::kSP)
       .addReg(riscv_common::kSP)
       .addImm(temporary_frame.size);
+  if (saved_sp) {
+    // Restore SP after its scratch area is gone. Materialize the final
+    // address in the destination itself, leaving every borrowed value intact.
+    materialize_frame_offset(*MBB, insert, DL, riscv_common::kSP,
+                             displacement + saved_sp->offset);
+    llvm::BuildMI(*MBB, insert, DL, tii->get(llvm::RISCV::ADD),
+                  riscv_common::kSP)
+        .addReg(frame_reg)
+        .addReg(riscv_common::kSP);
+    access(*saved_sp, riscv_common::kSP, riscv_common::kSP,
+           -static_cast<int64_t>(saved_sp->offset));
+  }
 }
 
 } // namespace
@@ -680,6 +781,14 @@ void riscv_common::loadCallRegs(const std::vector<llvm::Register> &regs,
                                 llvm::MachineBasicBlock::iterator insert,
                                 CallFrameBank bank) {
   access_call_regs(regs, MBB, insert, true, bank);
+}
+
+void riscv_common::loadCallRegsAs(
+    const std::vector<llvm::Register> &snapshot_regs,
+    const std::map<llvm::Register, llvm::Register> &copies,
+    llvm::MachineBasicBlock *MBB, llvm::MachineBasicBlock::iterator insert,
+    CallFrameBank bank) {
+  access_call_regs(snapshot_regs, MBB, insert, true, bank, &copies);
 }
 
 void riscv_common::saveRegs(std::vector<llvm::Register> regs,
