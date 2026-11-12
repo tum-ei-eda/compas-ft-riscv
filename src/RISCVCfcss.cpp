@@ -105,7 +105,7 @@ void RISCVCfcss::init() {
     mbb_info_[&MBB].d = mbb_info_[PBB].s ^ mbb_info_[&MBB].s;
   }
 
-  auto insert = MF_->front().begin();
+  auto insert = riscv_common::signatureEntryInsertion(*MF_);
   const auto DL = blockDebugLoc(MF_->front());
   // G starts at the entry signature.
   llvm::BuildMI(MF_->front(), insert, DL, TII_->get(llvm::RISCV::ADDI))
@@ -165,7 +165,9 @@ void RISCVCfcss::harden() {
 
       // updating D accordingly on this faninBB's predecessors
       for (auto PBB : mbb_info_[&MBB].predecessors) {
-        auto insert{std::begin(*PBB)};
+        auto insert = PBB == &MF_->front()
+                          ? riscv_common::signatureEntryInsertion(*MF_)
+                          : PBB->begin();
 
         // in case the PBB is not entry BB then we want to move insert to
         // the instruction point after CFCSS BNE check
@@ -219,7 +221,7 @@ void RISCVCfcss::harden() {
   // D is initially dead, but a call can precede its first adjustment. Insert
   // this definition after constructing fan-in updates so it executes before
   // any entry-block adjustment rather than overwriting one.
-  llvm::BuildMI(MF_->front(), MF_->front().begin(),
+  llvm::BuildMI(MF_->front(), riscv_common::signatureEntryInsertion(*MF_),
                 blockDebugLoc(MF_->front()),
                 TII_->get(llvm::RISCV::ADDI))
       .addReg(kD, llvm::RegState::Define)
@@ -230,7 +232,8 @@ void RISCVCfcss::harden() {
   // values: reconstructing constants here would erase an existing mismatch.
   for (auto &MBB : *MF_) {
     for (auto &MI : MBB) {
-      if (!MI.isCall() || TII_->isTailCall(MI))
+      if (!MI.isCall() || TII_->isTailCall(MI) ||
+          riscv_common::frameHelper(MI) != riscv_common::FrameHelper::None)
         continue;
       // LLVM also describes no-link jumps as calls.
       if (MI.getNumOperands() && MI.getOperand(0).isReg() &&

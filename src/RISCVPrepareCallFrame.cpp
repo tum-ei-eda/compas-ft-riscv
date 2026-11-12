@@ -45,14 +45,27 @@ bool needs_signature_frame(const llvm::MachineFunction &MF) {
 bool needs_dmr_frame(const llvm::MachineFunction &MF) {
   const bool caller_dmr =
       riscv_common::isDmrFunction(std::string{MF.getName()});
+  const bool base_pointer =
+      riscv_common::usesDmrBasePointer(MF) &&
+      !riscv_common::inCSString(llvm::cl::enable_eddi,
+                                std::string{MF.getName()});
   const auto *tii = MF.getSubtarget<llvm::RISCVSubtarget>().getInstrInfo();
   for (const auto &MBB : MF)
     for (const auto &MI : MBB) {
-      // Late tail conversion runs after the original epilogue has restored FP.
-      // Keep those wrappers on their existing path until conversion is moved.
+      // LowerCall retains returning calls at selective boundaries before this
+      // pass. Compatible tail calls do not need a selective caller snapshot.
       if (!MI.isCall() || MI.getFlag(llvm::MachineInstr::FrameSetup) ||
           tii->isTailCall(MI) || !MI.getNumOperands())
         continue;
+      // REPAIR's live shadow locations differ from the canonical ABI bank.
+      // Every returning call can overwrite them, including protected callees
+      // and indirect targets which do not cross a selective boundary.
+      if (caller_dmr && llvm::cl::enable_repair)
+        return true;
+      // The caller-owned BP pair must survive protected and ordinary calls,
+      // including indirect calls whose target convention is unknown here.
+      if (base_pointer)
+        return true;
       const auto &callee = MI.getOperand(0);
       if (!callee.isGlobal() && !callee.isSymbol())
         continue;
@@ -112,10 +125,18 @@ unsigned dmr_frame_size(const llvm::MachineFunction &MF) {
     size += 16 * std::max(word_size, subtarget.hasStdExtD() ? 8u : 4u);
   // A protected caller can duplicate a libcall. Its outer monitor snapshot
   // and the first call's ABI arguments/results must remain independent.
+  const unsigned repair_size = riscv_common::repairCallFrameSize(MF);
   return llvm::alignTo(size, 16) +
          (riscv_common::isDmrFunction(std::string{MF.getName()})
               ? riscv_common::kLibcallResultFrameSize
-              : 0);
+              : 0) +
+         (riscv_common::usesDmrBasePointer(MF) &&
+                  !riscv_common::inCSString(llvm::cl::enable_eddi,
+                                            std::string{MF.getName()})
+              ? riscv_common::kBasePointerCallFrameSize
+              : 0) +
+         repair_size +
+         (repair_size ? 2 * riscv_common::kRepairResultFrameSize : 0);
 }
 
 class RISCVPrepareCallFrame : public llvm::MachineFunctionPass {

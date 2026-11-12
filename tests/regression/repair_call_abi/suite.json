@@ -1,0 +1,228 @@
+{
+  "name": "repair_call_abi",
+  "adapter": "freestanding",
+  "architectures": [
+    "rv32",
+    "rv64"
+  ],
+  "modes": [
+    "NZDC",
+    "NZDC+NEMESIS",
+    "NZDC+NEMESEC"
+  ],
+  "cfp_modes": [
+    "none"
+  ],
+  "schedules": [
+    "cgs",
+    "fgs"
+  ],
+  "repair": true,
+  "verify_machineinstrs": true,
+  "sources": [
+    "../call_abi/call_abi.c"
+  ],
+  "expected": {
+    "exit": 42,
+    "stdout": ""
+  },
+  "cases": [
+    {
+      "name": "twelve_integer_arguments_caller_only",
+      "sources": [
+        "twelve_arguments.c"
+      ],
+      "functions": [
+        "repair_twelve_caller"
+      ]
+    },
+    {
+      "name": "twelve_integer_arguments",
+      "sources": [
+        "twelve_arguments.c"
+      ],
+      "functions": [
+        "repair_twelve_caller",
+        "repair_twelve_leaf"
+      ]
+    },
+    {
+      "name": "ten_integer_arguments_caller_only",
+      "defines": [
+        "TEST_CASE=4"
+      ],
+      "functions": [
+        "abi_stack_arguments"
+      ]
+    },
+    {
+      "name": "ten_integer_arguments",
+      "defines": [
+        "TEST_CASE=4"
+      ],
+      "functions": [
+        "abi_stack_arguments",
+        "abi_ten_args"
+      ],
+      "cfp_modes": [
+        "none",
+        "CFCSS",
+        "RASM",
+        "RACFED"
+      ]
+    },
+    {
+      "name": "nested_live_values",
+      "defines": [
+        "TEST_CASE=2"
+      ],
+      "functions": [
+        "abi_nested_top",
+        "abi_nested_middle",
+        "abi_leaf"
+      ]
+    },
+    {
+      "name": "indirect_stack_arguments",
+      "defines": [
+        "TEST_CASE=7"
+      ],
+      "functions": [
+        "abi_indirect_stack_arguments",
+        "abi_ten_args"
+      ]
+    },
+    {
+      "name": "nested_stack_arguments",
+      "defines": [
+        "TEST_CASE=8"
+      ],
+      "functions": [
+        "abi_nested_stack_arguments",
+        "abi_ten_arg_middle",
+        "abi_ten_args"
+      ]
+    },
+    {
+      "name": "dynamic_stack_arguments_caller_only",
+      "defines": [
+        "TEST_CASE=9"
+      ],
+      "functions": [
+        "abi_dynamic_stack_arguments"
+      ]
+    },
+    {
+      "name": "dynamic_stack_arguments",
+      "defines": [
+        "TEST_CASE=9"
+      ],
+      "functions": [
+        "abi_dynamic_stack_arguments",
+        "abi_ten_args"
+      ]
+    },
+    {
+      "name": "realigned_dynamic_stack_arguments_caller_only",
+      "defines": [
+        "TEST_CASE=19"
+      ],
+      "functions": [
+        "abi_realigned_dynamic_frame"
+      ]
+    },
+    {
+      "name": "realigned_dynamic_stack_arguments",
+      "defines": [
+        "TEST_CASE=19"
+      ],
+      "functions": [
+        "abi_realigned_dynamic_frame",
+        "abi_dynamic_pointer_middle",
+        "abi_dynamic_pointer_leaf",
+        "abi_ten_args"
+      ],
+      "cfp_modes": [
+        "none",
+        "CFCSS",
+        "RASM",
+        "RACFED"
+      ]
+    },
+    {
+      "name": "realigned_dynamic_indirect_call",
+      "sources": [
+        "../call_abi/realigned_indirect.c"
+      ],
+      "functions": [
+        "indirect_bp_owner",
+        "indirect_bp_leaf"
+      ]
+    },
+    {
+      "name": "libcall_stack_arguments",
+      "defines": [
+        "TEST_CASE=16"
+      ],
+      "functions": [
+        "abi_libcall_stack_arguments"
+      ],
+      "expected": {
+        "exit": 42,
+        "stdout": "BCDEFGHIJK\n[bdfhjlnprt]\nHIJKLMNOPQ\n[hjlnprtvxz]\nNOPQRSTUVW\n[nprtvxzbdf]\nBCDEFGHIJK\n[bdfhjlnprt]\nHIJKLMNOPQ\n[hjlnprtvxz]\nNOPQRSTUVW\n[nprtvxzbdf]\n"
+      }
+    },
+    {
+      "name": "libcall_dynamic_stack_arguments",
+      "defines": [
+        "TEST_CASE=17"
+      ],
+      "functions": [
+        "abi_libcall_dynamic_stack_arguments"
+      ],
+      "expected": {
+        "exit": 42,
+        "stdout": "BCDEFGHIJK\n[bdfhjlnprt]\nHIJKLMNOPQ\n[hjlnprtvxz]\nNOPQRSTUVW\n[nprtvxzbdf]\nBCDEFGHIJK\n[bdfhjlnprt]\nHIJKLMNOPQ\n[hjlnprtvxz]\nNOPQRSTUVW\n[nprtvxzbdf]\n"
+      }
+    },
+    {
+      "name": "libcall_realigned_dynamic_stack_arguments",
+      "defines": [
+        "TEST_CASE=17",
+        "ABI_REALIGNED_DYNAMIC=1"
+      ],
+      "functions": [
+        "abi_libcall_dynamic_stack_arguments"
+      ],
+      "expected": {
+        "exit": 42,
+        "stdout": "BCDEFGHIJK\n[bdfhjlnprt]\nHIJKLMNOPQ\n[hjlnprtvxz]\nNOPQRSTUVW\n[nprtvxzbdf]\nBCDEFGHIJK\n[bdfhjlnprt]\nHIJKLMNOPQ\n[hjlnprtvxz]\nNOPQRSTUVW\n[nprtvxzbdf]\n"
+      }
+    },
+    {
+      "name": "duplicated_libcall",
+      "defines": [
+        "TEST_CASE=18"
+      ],
+      "functions": [
+        "abi_duplicated_libcall"
+      ],
+      "cfp_modes": [
+        "none",
+        "CFCSS",
+        "RASM",
+        "RACFED"
+      ]
+    },
+    {
+      "name": "realigned_dynamic_duplicated_libcall",
+      "defines": [
+        "TEST_CASE=18",
+        "ABI_REALIGNED_DYNAMIC=1"
+      ],
+      "functions": [
+        "abi_duplicated_libcall"
+      ]
+    }
+  ]
+}

@@ -19,6 +19,7 @@ import sys
 
 TESTS = Path(__file__).resolve().parent
 MODES = ("none", "EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC")
+REPAIR_MODES = ("NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC")
 CFPS = ("none", "CFCSS", "RASM", "RACFED")
 
 
@@ -78,8 +79,9 @@ def target_profiles(args, case, arch):
         if (args.isa is not None or args.abi is not None or args.code_model
                 or "abi" in case or "code_models" in case or "relax" in case
                 or "frame_pointer" in case or "optimization" in case
-                or "sibling_calls" in case):
-            raise ValueError("ISA/ABI overrides, code_models, relax, frame_pointer, optimization and sibling_calls are supported by the freestanding adapter")
+                or "sibling_calls" in case or "repair" in case
+                or "save_restore" in case or "save_restore_functions" in case):
+            raise ValueError("ISA/ABI overrides, code_models, relax, frame_pointer, optimization, sibling_calls, repair and save_restore are supported by the freestanding adapter")
         return [None]
     isa = (args.isa if args.isa is not None else case.get("isa", "rv{bits}im")).format(bits=arch[2:])
     match = re.fullmatch(r"rv(32|64)(i[mafdc]*|gc?)", isa)
@@ -98,9 +100,12 @@ def target_profiles(args, case, arch):
     features = ["+" + extension for extension in extensions if extension != "i"]
     if not relax:
         features.append("-relax")
+    if case.get("save_restore", False):
+        features.append("+save-restore")
     frame_pointer = {"frame_pointer": True} if case.get("frame_pointer", False) else {}
     codegen = {field: case[field] for field, default in
-               (("optimization", 1), ("sibling_calls", False))
+               (("optimization", 1), ("sibling_calls", False), ("repair", False),
+                ("save_restore", False))
                if case.get(field, default) != default}
     return [dict(isa=isa, abi=abi, code_model=model, relax=relax, features=features,
                  **frame_pointer, **codegen)
@@ -110,6 +115,8 @@ def target_profiles(args, case, arch):
 def discover(args):
     selected = []
     seen = set()
+    skipped_repair_modes = False
+    skipped_save_restore_modes = False
     groups = ("regression", "apps") if args.suite == "all" else (args.suite,)
     for group in groups:
         for manifest in sorted((TESTS / group).rglob("suite.json")):
@@ -156,6 +163,16 @@ def discover(args):
                         sources = config["sources"]
                         if not isinstance(sources, list) or not sources or any(not isinstance(value, str) for value in sources):
                             raise ValueError("sources must be a nonempty list of paths")
+                        transfers = config.get("call_transfers", [])
+                        if (not isinstance(transfers, list)
+                                or any(not isinstance(transfer, dict)
+                                       or any(not isinstance(transfer.get(field), str)
+                                              or not transfer[field]
+                                              for field in ("caller", "callee"))
+                                       or any(transfer.get(field) not in ("call", "tail")
+                                              for field in ("reference", "hardened"))
+                                       for transfer in transfers)):
+                            raise ValueError("call_transfers requires caller/callee names and reference/hardened call or tail expectations")
                         diagnostic = config.get("expected_build_diagnostic")
                         if diagnostic is not None:
                             if (not isinstance(diagnostic, dict)
@@ -177,6 +194,8 @@ def discover(args):
                         raise ValueError("CMake suites require an executable path")
                     elif "expected_build_diagnostic" in config:
                         raise ValueError("expected_build_diagnostic is supported by the freestanding adapter")
+                    elif "call_transfers" in config:
+                        raise ValueError("call_transfers is supported by the freestanding adapter")
                     if not isinstance(config.get("verify_machineinstrs", False), bool):
                         raise ValueError("verify_machineinstrs must be a boolean")
                     for field in ("isa", "abi"):
@@ -194,8 +213,36 @@ def discover(args):
                         raise ValueError("optimization must be the integer 1 or 2")
                     if not isinstance(config.get("sibling_calls", False), bool):
                         raise ValueError("sibling_calls must be a boolean")
+                    if not isinstance(config.get("repair", False), bool):
+                        raise ValueError("repair must be a boolean")
+                    if not isinstance(config.get("save_restore", False), bool):
+                        raise ValueError("save_restore must be a boolean")
+                    required_helpers = config.get("save_restore_functions", [])
+                    if (not isinstance(required_helpers, list)
+                            or any(not isinstance(value, str) or not value
+                                   for value in required_helpers)):
+                        raise ValueError("save_restore_functions must be a list of nonempty function names")
+                    if required_helpers and not config.get("save_restore", False):
+                        raise ValueError("save_restore_functions requires save_restore: true")
                     if args.case and not any(fnmatch.fnmatchcase(name, pattern) for pattern in args.case):
                         continue
+                    if config.get("repair", False):
+                        if any(mode not in REPAIR_MODES
+                               for mode in config.get("modes", ["EDDI", "SWIFT"])):
+                            raise ValueError("repair requires NZDC, NZDC+NEMESIS or NZDC+NEMESEC modes")
+                        if args.mode:
+                            config["selected_modes"] = [mode for mode in args.mode
+                                                        if mode in REPAIR_MODES]
+                            if not config["selected_modes"]:
+                                skipped_repair_modes = True
+                                continue
+                    if config.get("save_restore", False):
+                        if args.mode:
+                            allowed = config.get("modes", ["EDDI", "SWIFT"])
+                            config["selected_modes"] = [mode for mode in args.mode if mode in allowed]
+                            if not config["selected_modes"]:
+                                skipped_save_restore_modes = True
+                                continue
                     config["selected_arches"] = [a for a in (args.arch or arches) if a in arches]
                     if config["selected_arches"]:
                         config["targets"] = {arch: target_profiles(args, config, arch)
@@ -204,7 +251,11 @@ def discover(args):
             except (OSError, ValueError, KeyError, TypeError) as error:
                 raise TestError(f"{manifest}: {error}") from error
     if not selected:
-        raise TestError("no cases match the requested suite, case and architecture selection")
+        suffix = ("; REPAIR cases require NZDC, NZDC+NEMESIS or NZDC+NEMESEC modes"
+                  if skipped_repair_modes else "")
+        if skipped_save_restore_modes:
+            suffix += "; save_restore cases require a mode declared by their manifest"
+        raise TestError("no cases match the requested suite, case and architecture selection" + suffix)
     return selected
 
 
@@ -285,6 +336,62 @@ def check_build_diagnostic(observed, diagnostic, directory, label):
                         f"status {observed['host_exit']}; see {directory / (label + '.stderr')}")
 
 
+def check_call_transfers(assembly, transfers, hardened, report):
+    """Check declared direct-call or tail-transfer behavior in emitted functions."""
+    bodies = "\n".join(path.read_text() for path in assembly)
+    evidence = []
+    for transfer in transfers:
+        caller, callee = transfer["caller"], transfer["callee"]
+        match = re.search(r"^" + re.escape(caller) + r":[^\n]*\n(.*?)^\s*\.size\s+"
+                          + re.escape(caller) + r"\s*,", bodies, re.MULTILINE | re.DOTALL)
+        if not match:
+            raise TestError(f"call transfer check cannot find caller {caller!r}")
+        observed = re.findall(r"^\s*(call|tail)\s+(?:\w+,\s*)?" + re.escape(callee)
+                              + r"(?:@plt)?(?:\s|$)", match[1], re.MULTILINE)
+        expected = transfer["hardened" if hardened else "reference"]
+        evidence.append(dict(caller=caller, callee=callee, expected=expected, observed=observed))
+        if not observed or any(kind != expected for kind in observed):
+            raise TestError(f"expected {expected} transfer from {caller!r} to {callee!r}; "
+                            f"observed {observed}")
+    report.write_text(json.dumps(evidence, indent=2) + "\n")
+
+
+def check_save_restore_helpers(assembly, functions, report, dmr_functions=()):
+    """Check GNU helpers or explicit callee saves for each named function."""
+    bodies = "\n".join(path.read_text() for path in assembly)
+    evidence = {}
+    for function in functions:
+        match = re.search(r"^" + re.escape(function) + r":[^\n]*\n(.*?)^\s*\.size\s+"
+                          + re.escape(function) + r"\s*,", bodies, re.MULTILINE | re.DOTALL)
+        if not match:
+            raise TestError(f"save/restore helper check cannot find function {function!r}")
+        helpers = re.findall(r"^\s*(?:call|tail|jal)\s+(?:\w+,\s*)?"
+                             r"(__riscv_(?:save|restore)_\d+)\b", match[1], re.MULTILINE)
+        evidence[function] = dict(save=sorted({value for value in helpers if "_save_" in value}),
+                                  restore=sorted({value for value in helpers if "_restore_" in value}))
+        protected = function in dmr_functions or tuple(dmr_functions) == ("-1",)
+        evidence[function]["policy"] = "explicit_spills" if protected else "gnu_helpers"
+        if protected:
+            if helpers:
+                raise TestError(f"expected explicit DMR spills in {function!r}; observed {helpers}")
+            registers = ["s0"]
+            if re.search(r"^\s*(?:call|jal|jalr)\s", match[1], re.MULTILINE):
+                registers.append("ra")
+            spills = {}
+            for register in registers:
+                save = re.findall(r"^\s*s[wd]\s+" + register + r",[^\n]*", match[1], re.MULTILINE)
+                restore = re.findall(r"^\s*l[wd]\s+" + register + r",[^\n]*", match[1], re.MULTILINE)
+                if not save or not restore:
+                    raise TestError(f"expected explicit {register} save and restore in {function!r}")
+                spills[register] = dict(save=[line.strip() for line in save],
+                                        restore=[line.strip() for line in restore])
+            evidence[function]["spills"] = spills
+        elif not evidence[function]["save"] or not evidence[function]["restore"]:
+            raise TestError(f"expected GNU save and restore helper transfers in {function!r}; "
+                            f"observed {helpers}")
+    report.write_text(json.dumps(evidence, indent=2) + "\n")
+
+
 def build_and_run(args, tools, case, arch, mode, cfp, schedule, functions, cfp_functions, directory, target):
     directory.mkdir(parents=True, exist_ok=True)
     build = lambda argv, label: command(argv, directory, label, args.build_timeout)
@@ -295,12 +402,17 @@ def build_and_run(args, tools, case, arch, mode, cfp, schedule, functions, cfp_f
         isa_flags = [f"-march={isa}", f"-mabi={abi}", f"-mcmodel={model}"]
         if not target["relax"]:
             isa_flags.append("-mno-relax")
+        if target.get("save_restore", False):
+            isa_flags.append("-msave-restore")
         assembly = []
+        verified_assembly = []
         flags = [] if mode == "none" else [f"-{mode}={','.join(functions)}"]
         if cfp != "none":
             flags.append(f"-{cfp}={','.join(cfp_functions)}")
         if schedule == "fgs" and mode != "none":
             flags.append(f"-FGS={','.join(functions)}")
+        if target.get("repair", False) and mode != "none":
+            flags.append("-REPAIR")
         frame_flags = (["-fno-omit-frame-pointer", "-mno-omit-leaf-frame-pointer"]
                        if target.get("frame_pointer", False) else [])
         optimization = "-O" + str(target.get("optimization", 1))
@@ -352,15 +464,40 @@ def build_and_run(args, tools, case, arch, mode, cfp, schedule, functions, cfp_f
                     if checked["host_exit"]:
                         raise TestError(f"machine verifier failed with status {checked['host_exit']}; "
                                         f"see {directory / (label + '.stderr')}")
+                    verified_assembly.append(directory / (stem + ".verify.s"))
                 except TestError as error:
                     verification["status"] = "ERROR"
                     verification["errors"].append(str(error))
             assembly.append(asm)
+        transfers = case.get("call_transfers", [])
+        if transfers:
+            hardened = mode != "none" or cfp != "none"
+            check_call_transfers(assembly, transfers, hardened, directory / "call-transfers.json")
+            if verify and verification["status"] == "PASS":
+                try:
+                    check_call_transfers(verified_assembly, transfers, hardened,
+                                         directory / "call-transfers.verify.json")
+                except TestError as error:
+                    verification["status"] = "ERROR"
+                    verification["errors"].append(str(error))
+        required_helpers = case.get("save_restore_functions", [])
+        if required_helpers:
+            dmr_functions = functions if mode != "none" else []
+            check_save_restore_helpers(assembly, required_helpers, directory / "save-restore.json",
+                                       dmr_functions)
+            if verify and verification["status"] == "PASS":
+                try:
+                    check_save_restore_helpers(verified_assembly, required_helpers,
+                                               directory / "save-restore.verify.json", dmr_functions)
+                except TestError as error:
+                    verification["status"] = "ERROR"
+                    verification["errors"].append(str(error))
         elf = directory / "test.elf"
         build([tools["cc"], *isa_flags, "-nostdlib", "-static", "-no-pie",
                "-Wl,--build-id=none", "-Wl,-Ttext=0x10000", TESTS / "support/start.S",
                *([] if target["relax"] else ["-Wl,--no-relax"]),
-               *assembly, "-o", elf], "link")
+               *assembly, *(["-lgcc"] if target.get("save_restore", False) else []),
+               "-o", elf], "link")
         outcome = command([tools["qemu"][arch], "-strace", elf], directory, "run", args.timeout, check=False)
         exits = re.findall(r"\bexit(?:_group)?\((-?\d+)\)", outcome["stderr"])
         if len(exits) != 1:
@@ -417,7 +554,8 @@ def known_failure(case, arch, mode, cfp, schedule, functions, cfp_functions, tar
             if target and any(target.get(field, default) != failure.get(field, default) for field, default in (
                     ("isa", arch + "im"), ("abi", "ilp32" if arch == "rv32" else "lp64"),
                     ("code_model", "medlow"), ("relax", True), ("frame_pointer", False),
-                    ("optimization", 1), ("sibling_calls", False))):
+                    ("optimization", 1), ("sibling_calls", False), ("repair", False),
+                    ("save_restore", False))):
                 continue
             if not failure.get("issue") or not failure.get("reason") or "target_exit" not in failure:
                 raise TestError("known failures require issue, reason and target_exit")
@@ -441,6 +579,10 @@ def emit(results, result):
             config += "/O" + str(result["optimization"])
         if result.get("sibling_calls", False):
             config += "/sibling-calls"
+        if result.get("repair", False):
+            config += "/repair"
+        if result.get("save_restore", False):
+            config += "/save-restore"
     print(f"{result['status']:6} {result['name']} {result['arch']} {config}: {result['detail']}", flush=True)
 
 
@@ -448,7 +590,7 @@ def execute(args, tools, cases, results):
     for case in cases:
         functions, cfp_functions = function_selections(args, case)
         configurations = list(dict.fromkeys(itertools.product(
-            args.mode or case.get("modes", ["EDDI", "SWIFT"]),
+            case.get("selected_modes", args.mode or case.get("modes", ["EDDI", "SWIFT"])),
             args.cfp or case.get("cfp_modes", ["none"]),
             args.schedule or case.get("schedules", ["cgs"]))))
         for mode, cfp, schedule in configurations:
@@ -471,10 +613,16 @@ def execute(args, tools, cases, results):
                     profile += "-O" + str(target["optimization"])
                 if target.get("sibling_calls", False):
                     profile += "-sibling-calls"
+                if target.get("repair", False):
+                    profile += "-repair"
+                if target.get("save_restore", False):
+                    profile += "-save-restore"
                 root /= profile
-                base.update({field: target[field] for field in ("isa", "abi", "code_model", "relax", "frame_pointer", "optimization", "sibling_calls")
+                base.update({field: target[field] for field in ("isa", "abi", "code_model", "relax", "frame_pointer", "optimization", "sibling_calls", "repair", "save_restore")
                              if field in target})
             reference = dict(base, mode="reference", cfp="none", schedule="cgs", logdir=str(root / "reference"))
+            if "repair" in reference:
+                reference["repair"] = False
             try:
                 outcome, verification = build_and_run(args, tools, case, arch, "none", "none", "cgs", [], [], root / "reference", target)
                 reference["outcome"] = outcome
@@ -541,9 +689,11 @@ def main(default_suite="all"):
                             + ("/frame-pointer" if target.get("frame_pointer", False) else "")
                             + ("/O" + str(target["optimization"]) if target.get("optimization", 1) != 1 else "")
                             + ("/sibling-calls" if target.get("sibling_calls", False) else "")
+                            + ("/repair" if target.get("repair", False) else "")
+                            + ("/save-restore" if target.get("save_restore", False) else "")
                             for targets in case["targets"].values() for target in targets if target]
                 print(f"{case['name']} [{case['adapter']}] arch={','.join(case['selected_arches'])} "
-                      f"modes={','.join(args.mode or case.get('modes', []))} "
+                      f"modes={','.join(case.get('selected_modes', args.mode or case.get('modes', [])))} "
                       f"cfp={','.join(args.cfp or case.get('cfp_modes', ['none']))} "
                       f"functions={','.join(functions)} cfp-functions={','.join(cfp_functions)} "
                       f"schedules={','.join(args.schedule or case.get('schedules', ['cgs']))} "

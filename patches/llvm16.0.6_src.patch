@@ -56,7 +56,7 @@ diff --git a/llvm/lib/Target/RISCV/RISCV.h b/llvm/lib/Target/RISCV/RISCV.h
 index c42fb070aade..3774102b9d06 100644
 --- a/llvm/lib/Target/RISCV/RISCV.h
 +++ b/llvm/lib/Target/RISCV/RISCV.h
-@@ -15,8 +15,39 @@
+@@ -15,8 +15,40 @@
  #define LLVM_LIB_TARGET_RISCV_RISCV_H
 
  #include "MCTargetDesc/RISCVBaseInfo.h"
@@ -90,13 +90,14 @@ index c42fb070aade..3774102b9d06 100644
 +
 +namespace riscv_common {
 +bool inCSString(std::string, std::string);
++bool isDmrFunction(const std::string &);
 +}
 +
 +
  namespace llvm {
  class AsmPrinter;
  class FunctionPass;
-@@ -75,6 +106,15 @@ InstructionSelector *createRISCVInstructionSelector(const RISCVTargetMachine &,
+@@ -75,6 +107,15 @@ InstructionSelector *createRISCVInstructionSelector(const RISCVTargetMachine &,
                                                      RISCVSubtarget &,
                                                      RISCVRegisterBankInfo &);
  void initializeRISCVDAGToDAGISelPass(PassRegistry &);
@@ -128,9 +129,9 @@ diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp b/llvm/lib/Target/RISC
  }
 
 +Register RISCVFrameLowering::getBPReg(const MachineFunction &MF) const {
-+  // EDDI owns s1 as its shadow SP. Its aligned fixed frame uses the
++  // DMR owns s1 as its shadow SP. Its aligned fixed frame uses the
 +  // caller-owned t1/t5 pair, which COMPAS preserves across returning calls.
-+  if (riscv_common::inCSString(cl::enable_eddi, MF.getName().str()))
++  if (riscv_common::isDmrFunction(MF.getName().str()))
 +    return RISCV::X6;
 +  return RISCVABI::getBPReg();
 +}
@@ -170,7 +171,7 @@ diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp b/llvm/lib/Target/RISC
      SavedRegs.set(RISCV::X8);
    }
 -  // Mark BP as used if function has dedicated base pointer.
-+  // Mark BP as used if function has dedicated base pointer. EDDI's t1 is
++  // Mark BP as used if function has dedicated base pointer. DMR's t1 is
 +  // caller-owned and absent from the ordinary ABI save list; COMPAS preserves
 +  // it and its shadow at each returning call instead of adding an ABI promise.
    if (hasBP(MF))
@@ -205,13 +206,22 @@ diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp b/llvm/lib/Target/RISC
        if (MI->getOpcode() == RISCV::ADJCALLSTACKDOWN)
          Amount = -Amount;
 
-@@ -1298,6 +1321,11 @@
+@@ -1298,6 +1321,20 @@
  }
 
  bool RISCVFrameLowering::enableShrinkWrapping(const MachineFunction &MF) const {
 +  // EDDI reserves its paired frame at function entry and releases it at every
 +  // return. Keep that allocation on all paths, including register-only leaves.
 +  if (riscv_common::inCSString(cl::enable_eddi, MF.getName().str()))
++    return false;
++
++  // A save helper links through t0 before FP setup. Signature initialization
++  // follows this entry helper; moving it into the body would erase incoming
++  // signature history or require preservation before a frame exists.
++  if (MF.getSubtarget<RISCVSubtarget>().enableSaveRestore() &&
++      (riscv_common::inCSString(cl::enable_cfcss, MF.getName().str()) ||
++       riscv_common::inCSString(cl::enable_rasm, MF.getName().str()) ||
++       riscv_common::inCSString(cl::enable_racfed, MF.getName().str())))
 +    return false;
 +
    // Keep the conventional code flow when not optimizing.
@@ -313,26 +323,29 @@ diff --git a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp b/llvm/lib/Target/RISCV
    for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i) {
      CCValAssign &VA = ArgLocs[i];
      SDValue ArgValue;
-@@ -12850,13 +12906,46 @@
+@@ -12850,13 +12906,49 @@
                        CallConv == CallingConv::Fast ? CC_RISCV_FastCC
                                                      : CC_RISCV);
 
-+  // An ordinary caller needs a returning wrapper around an EDDI callee.
-+  // An EDDI caller may also need its frame's pointer deltas while checking
-+  // outgoing arguments. Keep that frame for every pointer-typed argument;
-+  // physical argument positions no longer retain the original IR types.
++  // Calls across the DMR calling convention need a live caller frame for
++  // context preservation. EDDI pointer arguments can additionally need
++  // frame-resident deltas even when both functions are protected.
 +  // Decide here so LLVM retains exact results, call masks and context slots.
 +  bool CompasPointerArgs = false;
 +  if (IsTailCall &&
 +      riscv_common::inCSString(cl::enable_eddi, MF.getName().str()))
 +    for (const auto &Arg : CLI.getArgs())
 +      CompasPointerArgs |= Arg.Ty->isPointerTy();
-+  const auto *CompasCallee = dyn_cast<GlobalAddressSDNode>(Callee);
++  const bool CompasCallerDmr =
++      riscv_common::isDmrFunction(MF.getName().str());
++  std::string CompasCalleeName;
++  if (const auto *Global = dyn_cast<GlobalAddressSDNode>(Callee))
++    CompasCalleeName = Global->getGlobal()->getName().str();
++  else if (const auto *External = dyn_cast<ExternalSymbolSDNode>(Callee))
++    CompasCalleeName = External->getSymbol();
 +  const bool CompasSelectiveBoundary =
-+      CompasCallee &&
-+      riscv_common::inCSString(cl::enable_eddi,
-+                              CompasCallee->getGlobal()->getName().str()) &&
-+      !riscv_common::isDmrFunction(MF.getName().str());
++      !CompasCalleeName.empty() &&
++      (CompasCallerDmr != riscv_common::isDmrFunction(CompasCalleeName));
 +  const bool CompasReturningCall =
 +      IsTailCall && (CompasPointerArgs || CompasSelectiveBoundary);
 +  if (CompasReturningCall) {
@@ -342,7 +355,7 @@ diff --git a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp b/llvm/lib/Target/RISCV
 +          CompasPointerArgs
 +              ? "COMPAS: musttail calls with EDDI pointer arguments require a "
 +                "returning call"
-+              : "COMPAS: musttail calls across selective EDDI boundaries are "
++              : "COMPAS: musttail calls across selective DMR boundaries are "
 +                "unsupported"});
 +    }
 +    // Continue lowering rejected musttail IR with valid frame semantics.
@@ -364,9 +377,11 @@ diff --git a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp b/llvm/lib/Target/RISCV
 diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
 --- a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
 +++ b/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
-@@ -14,9 +14,13 @@
+@@ -13,10 +13,15 @@
+ #ifndef LLVM_LIB_TARGET_RISCV_RISCVMACHINEFUNCTIONINFO_H
  #define LLVM_LIB_TARGET_RISCV_RISCVMACHINEFUNCTIONINFO_H
 
++#include "RISCV.h"
  #include "RISCVSubtarget.h"
 +#include "llvm/ADT/ArrayRef.h"
 +#include "llvm/ADT/SmallVector.h"
@@ -378,7 +393,7 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/
 
  namespace llvm {
 
-@@ -48,6 +52,19 @@
+@@ -48,6 +53,19 @@
  private:
    /// FrameIndex for start of varargs area
    int VarArgsFrameIndex = 0;
@@ -398,11 +413,10 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/
    /// Size of the save area used for varargs
    int VarArgsSaveSize = 0;
    /// FrameIndex used for transferring values between 64-bit FPRs and a pair
-@@ -81,6 +98,47 @@
-
+@@ -82,6 +100,47 @@
    int getVarArgsFrameIndex() const { return VarArgsFrameIndex; }
    void setVarArgsFrameIndex(int Index) { VarArgsFrameIndex = Index; }
-+
+
 +  int getCompasSignatureFrameIndex() const { return CompasSignatureFrameIndex; }
 +  void setCompasSignatureFrameIndex(int Index) { CompasSignatureFrameIndex = Index; }
 +  int getCompasDmrCallFrameIndex() const { return CompasDmrCallFrameIndex; }
@@ -443,9 +457,25 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/
 +  void setCompasUnsupportedPointerArgs(bool Unsupported = true) {
 +    CompasUnsupportedPointerArgs = Unsupported;
 +  }
-
++
    unsigned getVarArgsSaveSize() const { return VarArgsSaveSize; }
    void setVarArgsSaveSize(int Size) { VarArgsSaveSize = Size; }
+
+@@ -103,9 +162,13 @@
+   void setLibCallStackSize(unsigned Size) { LibCallStackSize = Size; }
+
+   bool useSaveRestoreLibCalls(const MachineFunction &MF) const {
++    // DMR must monitor explicit spills and reloads instead of opaque helpers
++    // which also save and restore registers owned by the shadow bank. Decide
++    // before assigning CSI slots, so frame layout and CFI remain consistent.
+     // We cannot use fixed locations for the callee saved spill slots if the
+     // function uses a varargs save area, or is an interrupt handler.
+     return MF.getSubtarget<RISCVSubtarget>().enableSaveRestore() &&
++           !riscv_common::isDmrFunction(MF.getName().str()) &&
+            VarArgsSaveSize == 0 && !MF.getFrameInfo().hasTailCall() &&
+            !MF.getFunction().hasFnAttribute("interrupt");
+   }
+
 diff --git a/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp b/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
 --- a/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
 +++ b/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp

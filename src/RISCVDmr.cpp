@@ -425,7 +425,40 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
           // and DMR calling non-DMRs alike)
 
   auto ignore = ignoreMF();
+  // Selective boundaries require a returning call while the caller's frame is
+  // live. LowerCall makes that decision before register allocation and PEI;
+  // reject late MIR which bypasses it rather than inventing a call/return ABI
+  // after the epilogue has already removed the frame.
+  for (const auto &MBB : *MF_)
+    for (const auto &MI : MBB) {
+      if (!MI.isCall() || !TII_->isTailCall(MI) ||
+          riscv_common::frameHelper(MI) != riscv_common::FrameHelper::None)
+        continue;
+      for (const auto &operand : MI.operands()) {
+        if (!operand.isGlobal() && !operand.isSymbol())
+          continue;
+        const std::string callee =
+            operand.isGlobal() ? operand.getGlobal()->getName().str()
+                               : std::string(operand.getSymbolName());
+        if (is_func_dmr(fname_) != is_func_dmr(callee)) {
+          MI.emitError("COMPAS: selective DMR tail calls require a returning "
+                       "call before frame layout");
+          return false;
+        }
+        break;
+      }
+    }
   if (!ignore) {
+    // DMR selects explicit callee-saved spills before frame layout, even when
+    // the subtarget requests save/restore helpers. A late MIR pipeline must not
+    // bypass that choice and leave an opaque helper modifying monitor state.
+    for (const auto &MBB : *MF_)
+      for (const auto &MI : MBB)
+        if (riscv_common::frameHelper(MI) != riscv_common::FrameHelper::None) {
+          MI.emitError("COMPAS: DMR requires explicit save/restore spills; "
+                       "regenerate the frame with DMR enabled");
+          return false;
+        }
     if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_))
       for (const auto &MBB : *MF_)
         for (const auto &MI : MBB)
@@ -464,7 +497,8 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
     calc_framesize();
   }
 
-  if (config_.sh != SelectiveHardening::SH0 && !user_calls_.empty()) {
+  if (config_.sh != SelectiveHardening::SH0 && !user_calls_.empty() &&
+      (ignore || !llvm::cl::enable_repair)) {
     llvm::outs() << "d0: Updating function call according to selective "
                     "hardening technique\n";
     // only if we are in a non-DMRed function we now need to force an ErrorBlock
@@ -475,6 +509,9 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
   if (!ignore && MF_->getFrameInfo().hasVarSizedObjects() &&
       riscv_common::inCSString(llvm::cl::enable_eddi, fname_))
     preserveDynamicStackAcrossCalls();
+  else if (!ignore && !llvm::cl::enable_repair &&
+           riscv_common::usesDmrBasePointer(*MF_))
+    preserveBasePointerAcrossCalls();
 
   return !ignore;
 }
@@ -483,6 +520,7 @@ void RISCVDmr::finalizeCallingConvention() {
   const bool caller_dmr = is_func_dmr(fname_);
   const bool caller_eddi =
       riscv_common::inCSString(llvm::cl::enable_eddi, fname_);
+  const bool caller_repair = caller_dmr && llvm::cl::enable_repair;
   const auto caller_state = riscv_common::signatureRegisters(*MF_);
   const auto &subtarget = MF_->getSubtarget<llvm::RISCVSubtarget>();
   auto callName = [](const llvm::MachineInstr &MI) {
@@ -525,7 +563,8 @@ void RISCVDmr::finalizeCallingConvention() {
   // include otherwise unspecified architectural results of ordinary calls.
   // Declare those observations at the calls, rather than treating a value
   // clobbered earlier in the function as an additional entry live-in.
-  const bool observes_bank = selective_wrapper || (caller_dmr && !caller_eddi);
+  const bool observes_bank = selective_wrapper ||
+                              (caller_dmr && !caller_eddi && !caller_repair);
   for (auto &MBB : *MF_) {
     for (auto &MI : MBB) {
       if (MI.isReturn() && !MI.isCall()) {
@@ -545,7 +584,8 @@ void RISCVDmr::finalizeCallingConvention() {
                 llvm::is_contained(caller_state, pair.second))
               continue;
             if (invariant(pair.first) || pair.first == riscv_common::kFP ||
-                pair.first == riscv_common::kRA || !caller_eddi) {
+                pair.first == riscv_common::kRA ||
+                (!caller_eddi && !caller_repair)) {
               addRegister(MI, pair.first, false);
               addRegister(MI, pair.second, false);
               if (!caller_eddi)
@@ -579,7 +619,8 @@ void RISCVDmr::finalizeCallingConvention() {
           (unknown_target
                ? caller_eddi
                : riscv_common::inCSString(llvm::cl::enable_eddi, callee));
-      const bool bank_boundary = callee_dmr && !callee_eddi;
+      const bool bank_boundary = callee_dmr && !callee_eddi &&
+                                  !llvm::cl::enable_repair;
       const auto arguments = getArgRegs(&MI);
       const auto results = getRetRegs(&MI);
       RegSetType uses, definitions;
@@ -787,7 +828,8 @@ void RISCVDmr::analyze_function() {
     }
 
     for (auto &MI : MBB) {
-      if (isCompilerBarrier(MI))
+      if (isCompilerBarrier(MI) ||
+          riscv_common::frameHelper(MI) != riscv_common::FrameHelper::None)
         continue;
       if (MI.mayStore()) {
         stores_.emplace(&MI);
@@ -868,10 +910,6 @@ void RISCVDmr::calc_framesize() {
     // also be divisible by A to preserve the separation after both ANDIs.
     const uint64_t separation = llvm::alignTo(
         static_cast<uint64_t>(frame_size_) + alignment - 1, alignment);
-    if (MF_->getInfo<llvm::RISCVMachineFunctionInfo>()->useSaveRestoreLibCalls(
-            *MF_))
-      llvm::report_fatal_error(
-          "COMPAS: realigned EDDI save/restore libcalls are unsupported");
     shadow_frame_offset_ = separation;
   }
 
@@ -914,7 +952,7 @@ void RISCVDmr::analyzeStackArguments() {
   const Value unknown{Relation::Unsupported, {}, all_bits};
   const bool runtime_origins = riscv_common::usesPointerProvenance(*MF_);
   const bool dynamic_frame = MF_->getFrameInfo().hasVarSizedObjects();
-  const bool base_pointer = riscv_common::usesEddiBasePointer(*MF_);
+  const bool base_pointer = riscv_common::usesDmrBasePointer(*MF_);
   auto runtimeOrigin = [&](unsigned key) {
     const unsigned slot = key < register_count ? key - llvm::RISCV::X0
                                                : 32 + key - register_count;
@@ -1131,7 +1169,7 @@ void RISCVDmr::analyzeStackArguments() {
       if (item.first < register_count && MI.modifiesRegister(item.first, TRI_) &&
           !(MI.isCall() &&
             ((dynamic_frame && item.first == riscv_common::kSP) ||
-             (base_pointer && item.first == riscv_common::kEddiBP))))
+             (base_pointer && item.first == riscv_common::kDmrBP))))
         assign(item.first, result);
     if (MI.mayStore() && spill != spills.end())
       assign(spill->second.key, stored);
@@ -1453,16 +1491,12 @@ void RISCVDmr::duplicateInstructions() {
   preparePCRelativeAddresses();
   std::map<llvm::MachineInstr *, llvm::MachineInstr *> incoming_stack_loads;
   if (riscv_common::inCSString(llvm::cl::enable_eddi, fname_)) {
-    const auto *info = MF_->getInfo<llvm::RISCVMachineFunctionInfo>();
     for (auto &MBB : *MF_)
       for (auto &MI : MBB) {
         int64_t offset = 0;
         if (incomingStackArgumentOffset(MI, offset))
           incoming_stack_loads.emplace(&MI, nullptr);
       }
-    if (info->useSaveRestoreLibCalls(*MF_))
-      llvm::report_fatal_error(
-          "COMPAS: EDDI save/restore libcalls are unsupported");
   }
   std::map<llvm::MachineInstr *, llvm::MachineInstr *> shadows;
   auto shadow_instruction = [&](llvm::MachineInstr &MI) {
@@ -1727,7 +1761,7 @@ void RISCVDmr::duplicateInstructions() {
 unsigned RISCVDmr::pointerContextSlot(unsigned index) const {
   const auto *info = MF_->getInfo<llvm::RISCVMachineFunctionInfo>();
   const int bank = info->getCompasPointerDeltaFrameIndex();
-  const unsigned words = riscv_common::usesEddiBasePointer(*MF_) ? 5 : 3;
+  const unsigned words = riscv_common::usesDmrBasePointer(*MF_) ? 5 : 3;
   if (index >= words || bank >= 0 || !MF_->getFrameInfo().hasVarSizedObjects())
     llvm::report_fatal_error("COMPAS: dynamic stack context was not prepared");
   return MF_->getFrameInfo().getObjectSize(bank) / isa_config_.word_length -
@@ -1827,7 +1861,7 @@ void RISCVDmr::preserveDynamicStackAcrossCalls() {
   // Preserve the actual caller state, independently of the checked delta.
   const auto scratch = P2S_.at(riscv_common::k0);
   const auto shadow_sp = P2S_.at(riscv_common::kSP);
-  const bool base_pointer = riscv_common::usesEddiBasePointer(*MF_);
+  const bool base_pointer = riscv_common::usesDmrBasePointer(*MF_);
   for (auto &MBB : *MF_) {
     if (&MBB == err_bb_)
       continue;
@@ -1841,10 +1875,10 @@ void RISCVDmr::preserveDynamicStackAcrossCalls() {
         // BP records the aligned fixed-frame base while SP moves for VLAs.
         // Preserve each actual bank independently of its expected separation.
         addOffset(MBB, MI.getIterator(), *TII_, scratch,
-                  riscv_common::kEddiBP, 0, MI.getDebugLoc());
+                  riscv_common::kDmrBP, 0, MI.getDebugLoc());
         storePointerDelta(&MBB, MI.getIterator(), pointerContextSlot(3));
         addOffset(MBB, MI.getIterator(), *TII_, scratch,
-                  P2S_.at(riscv_common::kEddiBP), 0, MI.getDebugLoc());
+                  P2S_.at(riscv_common::kDmrBP), 0, MI.getDebugLoc());
         storePointerDelta(&MBB, MI.getIterator(), pointerContextSlot(4));
       }
       addOffset(MBB, MI.getIterator(), *TII_, scratch, riscv_common::k0, 0);
@@ -1853,13 +1887,36 @@ void RISCVDmr::preserveDynamicStackAcrossCalls() {
       addOffset(MBB, after, *TII_, shadow_sp, scratch, 0, MI.getDebugLoc());
       if (base_pointer) {
         loadPointerDelta(&MBB, after, {PointerOrigin::Kind::Context, 3});
-        addOffset(MBB, after, *TII_, riscv_common::kEddiBP, scratch, 0,
+        addOffset(MBB, after, *TII_, riscv_common::kDmrBP, scratch, 0,
                   MI.getDebugLoc());
         loadPointerDelta(&MBB, after, {PointerOrigin::Kind::Context, 4});
-        addOffset(MBB, after, *TII_, P2S_.at(riscv_common::kEddiBP), scratch, 0,
+        addOffset(MBB, after, *TII_, P2S_.at(riscv_common::kDmrBP), scratch, 0,
                   MI.getDebugLoc());
       }
       addOffset(MBB, after, *TII_, scratch, riscv_common::k0, 0);
+    }
+  }
+}
+
+void RISCVDmr::preserveBasePointerAcrossCalls() {
+  // The shared-memory modes keep equal BP addresses, but each bank remains
+  // independently monitored state. Neither t1 nor t5 is ABI callee-saved.
+  // Use a separate fixed bank so selective-call/libcall snapshots cannot
+  // overwrite these values, and leave the outgoing argument area untouched.
+  const std::vector<llvm::Register> regs{riscv_common::kDmrBP,
+                                         P2S_.at(riscv_common::kDmrBP)};
+  for (auto &MBB : *MF_) {
+    if (&MBB == err_bb_)
+      continue;
+    for (auto &MI : MBB) {
+      if (!MI.isCall() || TII_->isTailCall(MI) ||
+          MI.getFlag(llvm::MachineInstr::FrameSetup) ||
+          MI.getFlag(llvm::MachineInstr::FrameDestroy))
+        continue;
+      riscv_common::saveCallRegs(regs, &MBB, MI.getIterator(),
+                                 riscv_common::CallFrameBank::BasePointer);
+      riscv_common::loadCallRegs(regs, &MBB, std::next(MI.getIterator()),
+                                 riscv_common::CallFrameBank::BasePointer);
     }
   }
 }
@@ -2485,7 +2542,7 @@ std::string RISCVDmr::getCalledFuncName(const llvm::MachineInstr *MI) const {
 void RISCVDmr::moveIntoShadow(llvm::MachineBasicBlock *MBB,
                               llvm::MachineBasicBlock::iterator insert,
                               llvm::Register rp, llvm::Register rs) {
-  auto DLL{MBB->begin()->getDebugLoc()};
+  const auto DLL = MBB->empty() ? llvm::DebugLoc() : MBB->front().getDebugLoc();
 
   if (riscv_common::getRegType(rp) == riscv_common::RegType::I) {
     llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::ADDI), rs)
@@ -2547,12 +2604,8 @@ void RISCVDmr::updateSelectiveCalls() {
                        << callee_func_name
                        << "] adhere to DMR-callee calling convention...\n";
 
-          // 0) get live shadow registers
-          // 1) if isTail() then add `ra` to lives/spills
-          // 2) if isTail() replace `tail` with `call` + `ret`
-          // 3) spill lives to stack
-          // 4) duplicate primaries to shadows before `call`
-          // 5) unspill lives from stack after `call`
+          // Preserve live shadow registers in the fixed caller snapshot,
+          // initialize the protected convention, then restore caller context.
 
           llvm::LivePhysRegs lregs(*TRI_);
           auto MBB{MI->getParent()};
@@ -2595,13 +2648,6 @@ void RISCVDmr::updateSelectiveCalls() {
 #endif // DBG
           }
 
-          if (spill_regs.find(llvm::RISCV::X1) == spill_regs.end() &&
-              TII_->isTailCall(*MI)) {
-            spill_regs.emplace(
-                llvm::RISCV::X1); // if the call is a `tail` we need to replace
-                                  // it with a `call+ret` to allow restoration
-                                  // of non-DMR context before return
-          }
           // The later CFP pass preserves the caller's actual state. Do not
           // overwrite it with an outer DMR snapshot after the CFP restore.
           // Callee-only state can still hold ordinary live caller context.
@@ -2612,18 +2658,13 @@ void RISCVDmr::updateSelectiveCalls() {
             llvm::outs() << "sr: x" << sr - llvm::RISCV::X0 << "\n";
           }
 #endif // DBG
-       // insert the spill segment
+          // insert the spill segment
           std::vector<llvm::Register> sregs(spill_regs.begin(),
                                             spill_regs.end());
           auto insert = call_iter;
           // Outgoing stack arguments already occupy their ABI offsets here.
-          // A returning call must preserve the caller without moving SP.
-          // Late tail conversion still needs its legacy post-epilogue path.
-          const bool fixed_call_frame = !TII_->isTailCall(*MI);
-          if (fixed_call_frame)
-            riscv_common::saveCallRegs(sregs, MBB, insert);
-          else
-            riscv_common::saveRegs(sregs, MBB, insert);
+          // Preserve the caller without moving SP.
+          riscv_common::saveCallRegs(sregs, MBB, insert);
           // insert the default duplication segment, i.e., move all primaries
           // into their shadows
           for (const auto &regpair : P2S_) {
@@ -2646,18 +2687,7 @@ void RISCVDmr::updateSelectiveCalls() {
 
           insert = MI->getIterator();
           ++insert;
-          if (TII_->isTailCall(*MI)) { // replace `tail`s with `call+ret`s
-            MI->setDesc(TII_->get(llvm::RISCV::PseudoCALL));
-
-            llvm::BuildMI(*MBB, insert, MI->getDebugLoc(),
-                          TII_->get(llvm::RISCV::PseudoRET));
-          }
-          insert = MI->getIterator();
-          ++insert;
-          if (fixed_call_frame)
-            riscv_common::loadCallRegs(sregs, MBB, insert);
-          else
-            riscv_common::loadRegs(sregs, MBB, insert);
+          riscv_common::loadCallRegs(sregs, MBB, insert);
 
           insert = MI->getIterator();
           ++insert;
@@ -2679,7 +2709,7 @@ void RISCVDmr::updateSelectiveCalls() {
                 if (operand.isRegMask() &&
                     operand.clobbersPhysReg(regpair.first))
                   clobbered = true;
-              if (fixed_call_frame && eddi_callee && clobbered &&
+              if ((eddi_callee || llvm::cl::enable_repair) && clobbered &&
                   regpair.first != riscv_common::k0 &&
                   regpair.first != riscv_common::kSP &&
                   regpair.first != riscv_common::kGP &&
@@ -2717,10 +2747,6 @@ void RISCVDmr::updateSelectiveCalls() {
           for (const auto &r : MBB->liveouts()) {
             llvm::outs() << "or: x" << r.PhysReg - llvm::RISCV::X0 << "\n";
           }
-          if (TII_->isTailCall(*MI)) { // replace `tail`s with `call+ret`
-            MI->addImplicitDefUseOperands(*MF_);
-          }
-
           auto ret_regs{getRetRegs(MI)};
           auto insert{MI->getIterator()};
           ++insert;
@@ -2745,26 +2771,13 @@ void RISCVDmr::updateSelectiveCalls() {
               }
           }
 
-          // ret-regs would be changed after func call hence dont need to stack
-          // them. FIXME: Also remove a0 and a1 always when indirect call is a
-          // tail
-          if (riscv_common::setmapContains(ret_regs, llvm::RISCV::X10) ||
-              (TII_->isTailCall(*MI))) {
+          // Preserve only non-result registers; LowerCall supplies the actual
+          // ABI result operands, including both halves of RV32 wide results.
+          if (riscv_common::setmapContains(ret_regs, llvm::RISCV::X10)) {
             spill_regs.erase(llvm::RISCV::X10);
           }
-          if (riscv_common::setmapContains(ret_regs, llvm::RISCV::X11) ||
-              (TII_->isTailCall(*MI))) {
+          if (riscv_common::setmapContains(ret_regs, llvm::RISCV::X11)) {
             spill_regs.erase(llvm::RISCV::X11);
-          }
-
-          if (spill_regs.find(llvm::RISCV::X1) == spill_regs.end() &&
-              TII_->isTailCall(*MI)) {
-            spill_regs.emplace(
-                llvm::RISCV::X1); // if the call is a `tail` we need to replace
-                                  // it with a `call+ret` to allow restoration
-                                  // of DMR context before return, because we
-                                  // could return back to a DMR-function instead
-                                  // of a non-DMR one
           }
 
           // The CFP pass preserves its actual runtime state immediately
@@ -2775,28 +2788,7 @@ void RISCVDmr::updateSelectiveCalls() {
           std::vector<llvm::Register> sregs(spill_regs.begin(),
                                             spill_regs.end());
 
-          const bool fixed_call_frame = !TII_->isTailCall(*MI);
-          if (fixed_call_frame) {
-            riscv_common::saveCallRegs(sregs, MBB, MI->getIterator());
-          } else if (use_shadow_for_stack_ops_) {
-            riscv_common::saveRegs(sregs, MBB, MI->getIterator(),
-                                   P2S_.at(riscv_common::kSP));
-
-          } else {
-            riscv_common::saveRegs(sregs, MBB, MI->getIterator());
-          }
-          insert = MI->getIterator();
-          ++insert;
-
-          if (TII_->isTailCall(*MI)) { // replace `tail`s with `call+ret`s
-            MI->setDesc(TII_->get(llvm::RISCV::PseudoCALL));
-            llvm::BuildMI(*MBB, insert, MI->getDebugLoc(),
-                          TII_->get(llvm::RISCV::PseudoRET));
-            ret_regs.insert(llvm::RISCV::X10);
-            ret_regs.insert(
-                llvm::RISCV::X11); // FIXME: We do not really know here, whether
-                                   // x10 and x11 are actually used for return
-          }
+          riscv_common::saveCallRegs(sregs, MBB, MI->getIterator());
           insert = MI->getIterator();
           ++insert;
           // copying the return value/s to shadow reg
@@ -2808,14 +2800,7 @@ void RISCVDmr::updateSelectiveCalls() {
           }
           insert = MI->getIterator();
           ++insert;
-          if (fixed_call_frame) {
-            riscv_common::loadCallRegs(sregs, MBB, insert);
-          } else if (use_shadow_for_stack_ops_) {
-            riscv_common::loadRegs(sregs, MBB, insert,
-                                   P2S_.at(riscv_common::kSP));
-          } else {
-            riscv_common::loadRegs(sregs, MBB, insert);
-          }
+          riscv_common::loadCallRegs(sregs, MBB, insert);
 
         } else { // the caller is a not DMRed function, so business as usual.
           llvm::outs()
@@ -2831,6 +2816,10 @@ void RISCVDmr::updateSelectiveCalls() {
 }
 
 void RISCVDmr::protectCalls() {
+  // REPAIR owns its call bundles: its current shadow mapping must be captured
+  // before canonical ABI setup, and before any ordinary-call adaptation.
+  if (llvm::cl::enable_repair)
+    return;
   // first handling lib-calls:
 
   // handy lambda for reusability
@@ -2841,8 +2830,7 @@ void RISCVDmr::protectCalls() {
         llvm::outs() << "\tNOTE: " + getCalledFuncName(MI)
                      << " is outside SoR and hence is vulnerable\n";
 
-        if (!llvm::cl::enable_repair &&
-            config_.psuc == ProtectStrategyUserCall::UC3) {
+        if (config_.psuc == ProtectStrategyUserCall::UC3) {
           // even if they are dead they have to be kept alive as
           // user func call needs perfect matching b/w the 2 regfiles all the
           // time
@@ -2859,9 +2847,6 @@ void RISCVDmr::protectCalls() {
   // Both calls use the original outgoing ABI area. Keep the caller snapshot
   // separate from the first call's results; neither snapshot may move SP.
   for (auto *MI : lib_calls_) {
-    if (config_.pslc == ProtectStrategyLibCall::LC1 && TII_->isTailCall(*MI))
-      continue; // Late tail preservation remains a separate calling contract.
-
     const auto ret_regs = getRetRegs(MI);
     const auto arg_regs = getArgRegs(MI);
     auto *MBB = MI->getParent();
@@ -2898,8 +2883,6 @@ void RISCVDmr::protectCalls() {
       else
         ++iterator;
     }
-    if (llvm::cl::enable_repair)
-      preserved.clear();
     for (const auto reg : riscv_common::signatureRegisters(*MF_))
       preserved.erase(reg);
     const std::vector<llvm::Register> caller_regs(preserved.begin(),
@@ -2953,25 +2936,6 @@ void RISCVDmr::protectCalls() {
   if (config_.psuc == ProtectStrategyUserCall::UC0) {
     return;
   } else if (config_.psuc == ProtectStrategyUserCall::UC3) {
-    if (llvm::cl::enable_repair) {
-      for (auto MI : user_calls_) {
-        auto arg_regs{getArgRegs(MI)};
-        for (const auto &r : arg_regs) {
-          if (riscv_common::getRegType(r) == riscv_common::RegType::I) {
-            llvm::BuildMI(*MI->getParent(), MI->getIterator(),
-                          MI->getDebugLoc(), TII_->get(llvm::RISCV::BNE))
-                .addReg(r)
-                .addReg(P2S_.at(r))
-                .addMBB(err_bb_);
-          } else {
-            syncFPRegs(MI->getParent(), MI->getIterator(), r, P2S_.at(r));
-          }
-        }
-      }
-
-      return;
-    }
-
     auto &entry_BB{MF_->front()};
     llvm::MachineBasicBlock::iterator insert{entry_BB.front().getIterator()};
     insert++;
@@ -3395,6 +3359,59 @@ llvm::Register RISCVDmr::getPrimaryFromShadow(llvm::Register rs) const {
   return 0;
 }
 
+void RISCVDmr::emitRepairCopies(llvm::MachineBasicBlock *MBB,
+                                llvm::MachineBasicBlock::iterator insert,
+                                RegMapType copies) {
+  // Copies describe one simultaneous transfer, never a sequence of dependent
+  // program instructions. Preserve a cycle's old source before replacing it.
+  const auto DL = MBB->empty() ? llvm::DebugLoc() : MBB->front().getDebugLoc();
+  const auto &subtarget = MF_->getSubtarget<llvm::RISCVSubtarget>();
+  auto full = [&](llvm::Register reg) -> llvm::Register {
+    const auto kind = riscv_common::getRegType(reg);
+    if (kind == riscv_common::RegType::I)
+      return reg;
+    const unsigned index =
+        reg - (kind == riscv_common::RegType::FD   ? llvm::RISCV::F0_D
+               : kind == riscv_common::RegType::FS ? llvm::RISCV::F0_F
+                                                   : llvm::RISCV::F0_H);
+    return (subtarget.hasStdExtD() ? llvm::RISCV::F0_D : llvm::RISCV::F0_F) +
+           index;
+  };
+  RegMapType pending;
+  for (const auto &copy : copies)
+    if (full(copy.first) != full(copy.second))
+      pending[full(copy.first)] = full(copy.second);
+  while (!pending.empty()) {
+    auto ready =
+        std::find_if(pending.begin(), pending.end(), [&](const auto &copy) {
+          return std::none_of(
+              pending.begin(), pending.end(),
+              [&](const auto &other) { return other.second == copy.first; });
+        });
+    if (ready != pending.end()) {
+      moveIntoShadow(MBB, insert, ready->second, ready->first);
+      pending.erase(ready);
+      continue;
+    }
+    const auto source = pending.begin()->second;
+    const bool integer =
+        riscv_common::getRegType(source) == riscv_common::RegType::I;
+    const llvm::Register scratch = integer ? P2S_.at(riscv_common::k0)
+                                   : subtarget.hasStdExtD() ? llvm::RISCV::F8_D
+                                                            : llvm::RISCV::F8_F;
+    assert(!pending.count(scratch) && "Parallel-copy scratch is live state");
+    moveIntoShadow(MBB, insert, source, scratch);
+    for (auto &copy : pending)
+      if (copy.second == source)
+        copy.second = scratch;
+  }
+  // The integer scratch is the monitor's zero, not an additional live value.
+  llvm::BuildMI(*MBB, insert, DL,
+                TII_->get(llvm::RISCV::ADDI), P2S_.at(riscv_common::k0))
+      .addReg(riscv_common::k0)
+      .addImm(0);
+}
+
 void RISCVDmr::repair() {
   llvm::outs() << "COMPAS: Running REPAIR transformation on DMR code\n";
 
@@ -3402,6 +3419,17 @@ void RISCVDmr::repair() {
   std::map<llvm::MachineBasicBlock *, bool> MBB2Visited{};
   std::map<llvm::MachineBasicBlock *, llvm::MachineBasicBlock *>
       MBB2Liveinsmodifier{};
+  RegSetType signature_regs;
+  for (const auto reg : riscv_common::signatureRegisters(*MF_)) {
+    signature_regs.insert(reg);
+    // RASM/RACFED keep only RTS in their snapshot, but also own its canonical
+    // shadow as scratch for checks and address formation.
+    if (P2S_.count(reg))
+      signature_regs.insert(P2S_.at(reg));
+  }
+  auto signature_reg = [&](llvm::Register reg) {
+    return llvm::is_contained(signature_regs, reg);
+  };
 
   auto printRegMap{[this](RegMapType reg_map) {
     llvm::outs() << "live-regs = {";
@@ -3418,6 +3446,9 @@ void RISCVDmr::repair() {
     MBB2Visited[&MBB] = false;
 
     for (auto &li : MBB.liveins()) {
+      if (!P2S_.count(li.PhysReg) || signature_reg(li.PhysReg) ||
+          signature_reg(P2S_.at(li.PhysReg)))
+        continue;
       MBB2Liveins[&MBB][li.PhysReg] = P2S_.at(li.PhysReg);
 
       if (riscv_common::getRegType(li.PhysReg) == riscv_common::RegType::I) {
@@ -3439,6 +3470,9 @@ void RISCVDmr::repair() {
     MBB2Liveins[&MBB][riscv_common::kRA] = P2S_.at(riscv_common::kRA);
     MBB2Liveins[&MBB][riscv_common::kFP] = P2S_.at(riscv_common::kFP);
     MBB2Liveins[&MBB][riscv_common::kGP] = P2S_.at(riscv_common::kGP);
+    MBB2Liveins[&MBB][riscv_common::kTP] = P2S_.at(riscv_common::kTP);
+    if (riscv_common::usesDmrBasePointer(*MF_))
+      MBB2Liveins[&MBB][riscv_common::kDmrBP] = P2S_.at(riscv_common::kDmrBP);
 
     if (MBB.succ_empty()) {
       MBB2Liveins[&MBB][llvm::RISCV::X10] = P2S_.at(llvm::RISCV::X10);
@@ -3462,10 +3496,10 @@ void RISCVDmr::repair() {
 
       RegMapType LiveP2S{MBB2Liveins[&MBB]};
 
-      auto getFreeShadowReg{[this,
-                             &LiveP2S](llvm::Register start_reg,
-                                       llvm::Register end_reg,
-                                       bool for_SP = false) -> llvm::Register {
+      auto getFreeShadowReg{[this, &LiveP2S, &signature_regs](
+                                llvm::Register start_reg,
+                                llvm::Register end_reg, bool for_SP = false,
+                                llvm::Register fallback = 0) -> llvm::Register {
         std::default_random_engine gen{};
         std::uniform_int_distribution<unsigned> unif_dist{start_reg, end_reg};
 
@@ -3476,7 +3510,8 @@ void RISCVDmr::repair() {
           auto r{unif_dist(gen)};
           // filtering primary regs
           if (riscv_common::setmapContains(P2S_, r) ||
-              riscv_common::setmapContains(reserved_fp_primary_, r)) {
+              riscv_common::setmapContains(reserved_fp_primary_, r) ||
+              signature_regs.count(r)) {
             continue;
           }
           if (for_SP && !riscv_common::setmapContains(callee_saved_regs_, r)) {
@@ -3488,8 +3523,12 @@ void RISCVDmr::repair() {
           }
         }
 
-        assert(for_SP);
-        return LiveP2S[riscv_common::kSP];
+        if (fallback)
+          return fallback;
+        if (for_SP)
+          return LiveP2S.at(riscv_common::kSP);
+        llvm::report_fatal_error(
+            "COMPAS: REPAIR shadow register bank exhausted");
       }};
 
       // printRegMap(LiveP2S);
@@ -3537,8 +3576,10 @@ void RISCVDmr::repair() {
 
           // first finding a new free shadow reg for replacing prev def
           if (riscv_common::getRegType(prev_def) == riscv_common::RegType::I) {
-            new_def = getFreeShadowReg(llvm::RISCV::X0, llvm::RISCV::X31,
-                                       pri_def == riscv_common::kSP);
+            new_def = getFreeShadowReg(
+                llvm::RISCV::X0, llvm::RISCV::X31, pri_def == riscv_common::kSP,
+                LiveP2S.count(pri_def) ? LiveP2S.at(pri_def)
+                                       : llvm::Register{});
             LiveP2S[pri_def] = new_def;
           } else if (riscv_common::getRegType(prev_def) ==
                      riscv_common::RegType::FS) {
@@ -3575,419 +3616,168 @@ void RISCVDmr::repair() {
                     std::next(MI.getIterator())->getOperand(2).getReg())]);
             ignore_these.emplace(&*std::next(MI.getIterator()));
           }
-        } else if (riscv_common::setmapContains(user_calls_, &MI) ||
-                   riscv_common::setmapContains(indirect_calls_, &MI)) {
-          // how to handle user func calls
-
-          llvm::MachineBasicBlock::iterator prev_it{MI.getIterator()},
-              next_it{MI.getIterator()};
-          prev_it--;
-          next_it++;
-
-          // establishing FCS:
-          // the user callee expects args and SP to be in default P2S_[r]
-          // shadows
-          auto arg_regs{getArgRegs(&MI)};
-          arg_regs.emplace(riscv_common::kSP);
-          arg_regs.emplace(riscv_common::kFP);
-          for (auto &r : arg_regs) {
-            if (P2S_.at(r) == LiveP2S[r]) {
+        } else if (user_calls_.count(&MI) || indirect_calls_.count(&MI) ||
+                   lib_calls_.count(&MI)) {
+          if (TII_->isTailCall(MI))
+            llvm::report_fatal_error(
+                "COMPAS: REPAIR tail calls require a returning call");
+          const auto next = std::next(MI.getIterator());
+          const auto args = getArgRegs(&MI);
+          RegSetType results;
+          for (const auto reg : getRetRegs(&MI))
+            if (P2S_.count(reg) && reg != riscv_common::kRA)
+              results.insert(reg);
+          const bool libcall = lib_calls_.count(&MI);
+          const bool protected_target =
+              indirect_calls_.count(&MI) ||
+              (!libcall && is_func_dmr(getCalledFuncName(&MI)));
+          const bool duplicate =
+              libcall && config_.pslc == ProtectStrategyLibCall::LC1 &&
+              knownLibcalls2Duplicable_.at(getCalledFuncName(&MI));
+          auto shadow = [&](llvm::Register reg) {
+            const auto found = LiveP2S.find(reg);
+            if (found == LiveP2S.end() || !found->second)
+              llvm::report_fatal_error("COMPAS: missing REPAIR shadow at call");
+            return found->second;
+          };
+          // Check the current independent values before canonical destinations
+          // can overwrite any of the changing shadow names.
+          for (const auto reg : args) {
+            if (!P2S_.count(reg) || signature_reg(reg) ||
+                signature_reg(P2S_.at(reg)))
               continue;
-            }
-            moveIntoShadow(&MBB, MI.getIterator(), LiveP2S[r], P2S_.at(r));
+            if (riscv_common::getRegType(reg) == riscv_common::RegType::I)
+              llvm::BuildMI(MBB, MI.getIterator(), MI.getDebugLoc(),
+                            TII_->get(llvm::RISCV::BNE))
+                  .addReg(reg)
+                  .addReg(shadow(reg))
+                  .addMBB(err_bb_);
+            else
+              syncFPRegs(&MBB, MI.getIterator(), reg, shadow(reg));
           }
-
-          auto ret_regs{getRetRegs(&MI)};
-          for (const auto &r : ret_regs) {
-            if (!riscv_common::setmapContains(LiveP2S, r)) {
-              llvm::Register new_def{0};
-              if (riscv_common::getRegType(r) == riscv_common::RegType::I) {
-                new_def = getFreeShadowReg(llvm::RISCV::X0, llvm::RISCV::X31);
-                LiveP2S[r] = new_def;
-              } else if (riscv_common::getRegType(r) ==
-                         riscv_common::RegType::FS) {
-                new_def =
-                    getFreeShadowReg(llvm::RISCV::F0_F, llvm::RISCV::F31_F);
-                LiveP2S[r] = new_def;
-                LiveP2S[r - 32] = new_def - 32;
-              } else if (riscv_common::getRegType(r) ==
-                         riscv_common::RegType::FD) {
-                new_def =
-                    getFreeShadowReg(llvm::RISCV::F0_D, llvm::RISCV::F31_D);
-                LiveP2S[r] = new_def;
-                LiveP2S[r + 32] = new_def + 32;
-              } else {
-                // TODO
-                assert(0);
-              }
-            }
-
-            if (P2S_.at(r) == LiveP2S[r]) {
+          const RegMapType before = LiveP2S;
+          RegSetType saved_set;
+          for (const auto &pair : before) {
+            if (!pair.second || signature_reg(pair.first) ||
+                signature_reg(P2S_.at(pair.first)))
               continue;
-            }
-
-            // TODO: FP regs??
-            llvm::BuildMI(MBB, std::next(MI.getIterator()), MI.getDebugLoc(),
-                          TII_->get(llvm::RISCV::ADDI), LiveP2S[r])
-                .addReg(P2S_.at(r))
-                .addImm(0);
-            ignore_these.emplace(&*std::next(MI.getIterator()));
+            if (pair.first != riscv_common::k0 &&
+                pair.first != riscv_common::kSP &&
+                pair.first != riscv_common::kGP &&
+                pair.first != riscv_common::kTP)
+              saved_set.insert(pair.first);
+            saved_set.insert(pair.second);
           }
-
-          // stacking live shadow and primary around this user-call
-          if (!TII_->isTailCall(MI)) {
-            llvm::Register prev_shadow_sp{LiveP2S[riscv_common::kSP]};
-            std::set<llvm::Register> regs_to_spill{};
-            for (const auto &p : LiveP2S) {
-              if (p.first == riscv_common::k0 || p.first == riscv_common::kRA ||
-                  p.first == riscv_common::kSP ||
-                  p.first == riscv_common::kGP) {
-                continue;
-              }
-
-              if (!riscv_common::setmapContains(ret_regs, p.first)) {
-                if (riscv_common::getRegType(p.first) !=
-                        riscv_common::RegType::FS ||
-                    isa_config_.store_opcode == llvm::RISCV::SW) {
-                  regs_to_spill.emplace(p.first);
-                  regs_to_spill.emplace(p.second);
-                }
-              }
-            }
-
-            if (regs_to_spill.size()) {
-              LiveP2S[riscv_common::kSP] =
-                  getFreeShadowReg(llvm::RISCV::X0, llvm::RISCV::X31, true);
-              riscv_common::saveRegs(
-                  std::vector<llvm::Register>{regs_to_spill.begin(),
-                                              regs_to_spill.end()},
-                  &MBB, std::next(prev_it), prev_shadow_sp);
-              std::next(prev_it)->getOperand(0).setReg(
-                  LiveP2S[riscv_common::kSP]);
-
-              // scanning for 'mv default_shadow_SP = live_shadow_sp'
-              // instruction and updating it in case it is not found then
-              // inserting one
-              llvm::MachineBasicBlock::iterator it{prev_it};
-              while (1) {
-                it++;
-
-                if (it->getOpcode() == llvm::RISCV::ADDI &&
-                    it->getNumOperands() == 3 && it->getOperand(0).isReg() &&
-                    it->getOperand(1).isReg() && it->getOperand(2).isImm() &&
-                    it->getOperand(2).getImm() == 0 &&
-                    it->getOperand(0).getReg() == P2S_.at(riscv_common::kSP)) {
-                  it->getOperand(1).setReg(LiveP2S[riscv_common::kSP]);
-                  break;
-                }
-
-                if (it == MI.getIterator()) {
-                  llvm::BuildMI(MBB, MI.getIterator(), MI.getDebugLoc(),
-                                TII_->get(llvm::RISCV::ADDI),
-                                P2S_.at(riscv_common::kSP))
-                      .addReg(LiveP2S[riscv_common::kSP])
-                      .addImm(0);
-                  break;
-                }
-              }
-
-              LiveP2S[riscv_common::kSP] =
-                  getFreeShadowReg(llvm::RISCV::X0, llvm::RISCV::X31, true);
-              riscv_common::loadRegs(
-                  std::vector<llvm::Register>{regs_to_spill.begin(),
-                                              regs_to_spill.end()},
-                  &MBB, next_it, LiveP2S[riscv_common::kSP]);
-              llvm::BuildMI(MBB, std::next(MI.getIterator()), MI.getDebugLoc(),
-                            TII_->get(llvm::RISCV::ADDI),
-                            LiveP2S[riscv_common::kSP])
-                  .addReg(P2S_.at(riscv_common::kSP))
-                  .addImm(0);
-
-              for (it = std::next(MI.getIterator()); it != next_it; ++it) {
-                for (auto &op : it->operands()) {
-                  if (op.isReg() && op.getReg() == LiveP2S[riscv_common::kSP]) {
-                    ignore_these.emplace(&*it);
-                    break;
-                  }
-                }
-              }
-
-              LiveP2S[riscv_common::kSP] =
-                  getFreeShadowReg(llvm::RISCV::X0, llvm::RISCV::X31, true);
-              std::prev(std::prev(next_it))
-                  ->getOperand(0)
-                  .setReg(LiveP2S[riscv_common::kSP]);
-            }
-          }
-        } else if (riscv_common::setmapContains(lib_calls_, &MI)) {
-          // how to handle lib calls
-
-          auto isStackAllocatedInstr{[](llvm::MachineInstr *MI) -> int {
-            int status{-1};
-
-            if (MI->getOpcode() == llvm::RISCV::ADDI &&
-                MI->getNumOperands() == 3 && MI->getOperand(0).isReg() &&
-                MI->getOperand(1).isReg() && MI->getOperand(2).isImm() &&
-                MI->getOperand(0).getReg() == MI->getOperand(1).getReg()) {
-              if (MI->getOperand(2).getImm() > 0) {
-                status = 1;
-              } else if (MI->getOperand(2).getImm() < 0) {
-                status = 0;
-              }
-            }
-
-            return status;
-          }};
-
-          // stacking live regs around this lib call
-          auto ret_regs{getRetRegs(&MI)};
-          for (const auto &r : ret_regs) {
-            if (!riscv_common::setmapContains(LiveP2S, r)) {
-              llvm::Register new_def{0};
-              if (riscv_common::getRegType(r) == riscv_common::RegType::I) {
-                new_def = getFreeShadowReg(llvm::RISCV::X0, llvm::RISCV::X31);
-                LiveP2S[r] = new_def;
-              } else if (riscv_common::getRegType(r) ==
-                         riscv_common::RegType::FS) {
-                new_def =
-                    getFreeShadowReg(llvm::RISCV::F0_F, llvm::RISCV::F31_F);
-                LiveP2S[r] = new_def;
-                LiveP2S[r - 32] = new_def - 32;
-              } else if (riscv_common::getRegType(r) ==
-                         riscv_common::RegType::FD) {
-                new_def =
+          const std::vector<llvm::Register> saved(saved_set.begin(),
+                                                  saved_set.end());
+          riscv_common::saveCallRegs(saved, &MBB, MI.getIterator(),
+                                     riscv_common::CallFrameBank::Repair);
+          RegSetType canonical = args;
+          for (const auto reg : {riscv_common::kSP, riscv_common::kFP,
+                                 riscv_common::kGP, riscv_common::kTP})
+            canonical.insert(reg);
+          if (riscv_common::usesDmrBasePointer(*MF_))
+            canonical.insert(riscv_common::kDmrBP);
+          RegMapType setup;
+          for (const auto reg : canonical)
+            if (P2S_.count(reg) && !signature_reg(reg) &&
+                !signature_reg(P2S_.at(reg)))
+              setup[shadow(reg)] = P2S_.at(reg);
+          riscv_common::loadCallRegsAs(saved, setup, &MBB, MI.getIterator(),
+                                       riscv_common::CallFrameBank::Repair);
+          for (const auto reg : results) {
+            if (!LiveP2S.count(reg)) {
+              llvm::Register mapped;
+              if (riscv_common::getRegType(reg) == riscv_common::RegType::I)
+                mapped = getFreeShadowReg(llvm::RISCV::X0, llvm::RISCV::X31);
+              else if (riscv_common::getRegType(reg) ==
+                       riscv_common::RegType::FD)
+                mapped =
                     getFreeShadowReg(llvm::RISCV::F0_D, llvm::RISCV::F31_D);
-                LiveP2S[r] = new_def;
-                LiveP2S[r + 32] = new_def + 32;
-              } else {
-                // TODO
-                assert(0);
-              }
+              else
+                mapped =
+                    getFreeShadowReg(llvm::RISCV::F0_F, llvm::RISCV::F31_F);
+              LiveP2S[reg] = mapped;
+              if (riscv_common::getRegType(reg) == riscv_common::RegType::FD)
+                LiveP2S[reg + 32] = mapped + 32;
+              else if (riscv_common::getRegType(reg) ==
+                       riscv_common::RegType::FS)
+                LiveP2S[reg - 32] = mapped - 32;
             }
           }
-
-          std::set<llvm::Register> regs_to_spill{}, regs_to_spill_2ndcall{};
-
-          if (!TII_->isTailCall(MI)) {
-            for (const auto &p : LiveP2S) {
-              if (p.first == riscv_common::k0 || p.first == riscv_common::kRA ||
-                  p.first == riscv_common::kSP ||
-                  p.first == riscv_common::kGP) {
-                continue;
-              }
-
-              if (!riscv_common::setmapContains(callee_saved_regs_, p.second)) {
-                if (riscv_common::getRegType(p.first) !=
-                        riscv_common::RegType::FS ||
-                    isa_config_.store_opcode == llvm::RISCV::SW) {
-                  regs_to_spill.emplace(p.second);
-                }
-              }
-              if (!riscv_common::setmapContains(ret_regs, p.first)) {
-                if (!riscv_common::setmapContains(callee_saved_regs_,
-                                                  p.second)) {
-                  if (riscv_common::getRegType(p.first) !=
-                          riscv_common::RegType::FS ||
-                      isa_config_.store_opcode == llvm::RISCV::SW) {
-                    regs_to_spill_2ndcall.emplace(p.second);
-                  }
-                }
-              }
+          const std::vector<llvm::Register> primary_results(results.begin(),
+                                                            results.end());
+          std::vector<llvm::Register> shadow_results;
+          for (const auto reg : results)
+            shadow_results.push_back(protected_target ? P2S_.at(reg) : reg);
+          riscv_common::saveCallRegs(
+              primary_results, &MBB, next,
+              riscv_common::CallFrameBank::RepairPrimaryResult);
+          if (duplicate) {
+            // Recover all original inputs before selecting the independent
+            // shadow arguments. Outgoing stack storage stays at its ABI SP.
+            riscv_common::loadCallRegs(saved, &MBB, next,
+                                       riscv_common::CallFrameBank::Repair);
+            RegMapType shadow_args;
+            for (const auto reg : args)
+              if (P2S_.count(reg) && !signature_reg(reg) &&
+                  !signature_reg(P2S_.at(reg)))
+                shadow_args[before.at(reg)] = reg;
+            riscv_common::loadCallRegsAs(saved, shadow_args, &MBB, next,
+                                         riscv_common::CallFrameBank::Repair);
+            MBB.insert(next, MF_->CloneMachineInstr(&MI));
+            shadow_results = primary_results;
+          }
+          riscv_common::saveCallRegs(
+              shadow_results, &MBB, next,
+              riscv_common::CallFrameBank::RepairShadowResult);
+          RegMapType restore;
+          for (const auto reg : saved)
+            restore[reg] = reg;
+          for (const auto reg : results) {
+            restore.erase(reg);
+            if (before.count(reg))
+              restore.erase(before.at(reg));
+            // Remove both views of a live physical FP result.
+            if (riscv_common::getRegType(reg) == riscv_common::RegType::FS) {
+              restore.erase(reg - 32);
+              if (before.count(reg - 32))
+                restore.erase(before.at(reg - 32));
+            } else if (riscv_common::getRegType(reg) ==
+                       riscv_common::RegType::FD) {
+              restore.erase(reg + 32);
+              if (before.count(reg + 32))
+                restore.erase(before.at(reg + 32));
             }
           }
-
-          if (regs_to_spill.size()) {
-            riscv_common::saveRegs(
-                std::vector<llvm::Register>{regs_to_spill.begin(),
-                                            regs_to_spill.end()},
-                &MBB, MI.getIterator(), LiveP2S[riscv_common::kSP]);
-            LiveP2S[riscv_common::kSP] =
-                getFreeShadowReg(llvm::RISCV::X0, llvm::RISCV::X31, true);
-            llvm::MachineBasicBlock::iterator it{MI.getIterator()};
-            while (1) {
-              it--;
-              if (isStackAllocatedInstr(&*it) >= 0 &&
-                  !riscv_common::setmapContains(P2S_,
-                                                it->getOperand(0).getReg())) {
-                it->getOperand(0).setReg(LiveP2S[riscv_common::kSP]);
-                break;
-              }
-            }
-          }
-
-          // first focusing on lib calls that are duplicated
-          if (knownLibcalls2Duplicable_.at(getCalledFuncName(&MI))) {
-            llvm::MachineBasicBlock::iterator it{MI.getIterator()};
-
-            if (regs_to_spill.size()) {
-              riscv_common::loadRegs(
-                  std::vector<llvm::Register>{regs_to_spill.begin(),
-                                              regs_to_spill.end()},
-                  &MBB, std::next(MI.getIterator()),
-                  LiveP2S[riscv_common::kSP]);
-              LiveP2S[riscv_common::kSP] =
-                  getFreeShadowReg(llvm::RISCV::X0, llvm::RISCV::X31, true);
-              while (1) {
-                if (isStackAllocatedInstr(&*it) >= 0 &&
-                    !riscv_common::setmapContains(P2S_,
-                                                  it->getOperand(0).getReg())) {
-                  it->getOperand(0).setReg(LiveP2S[riscv_common::kSP]);
-                  it++; // to bypass current
-                  it++; // to bypass primary stack alloc
-                  break;
-                }
-
-                it++;
-              }
-            }
-
-            bool secondcall_passed{false};
-            unsigned stack_allocated{0};
-            while (1) {
-              if (it->isCall() && it != MI.getIterator()) {
-                secondcall_passed = true;
-
-                if (regs_to_spill_2ndcall.size()) {
-                  riscv_common::saveRegs(
-                      std::vector<llvm::Register>{regs_to_spill_2ndcall.begin(),
-                                                  regs_to_spill_2ndcall.end()},
-                      &MBB, it, LiveP2S[riscv_common::kSP]);
-                  LiveP2S[riscv_common::kSP] =
-                      getFreeShadowReg(llvm::RISCV::X0, llvm::RISCV::X31, true);
-                  llvm::MachineBasicBlock::iterator it2{it};
-                  while (1) {
-                    it2--;
-                    if (isStackAllocatedInstr(&*it2) >= 0 &&
-                        !riscv_common::setmapContains(
-                            P2S_, it2->getOperand(0).getReg())) {
-                      it2->getOperand(0).setReg(LiveP2S[riscv_common::kSP]);
-                      break;
-                    }
-                  }
-
-                  riscv_common::loadRegs(
-                      std::vector<llvm::Register>{regs_to_spill_2ndcall.begin(),
-                                                  regs_to_spill_2ndcall.end()},
-                      &MBB, std::next(it), LiveP2S[riscv_common::kSP]);
-                  LiveP2S[riscv_common::kSP] =
-                      getFreeShadowReg(llvm::RISCV::X0, llvm::RISCV::X31, true);
-                  while (1) {
-                    if (isStackAllocatedInstr(&*it) >= 0 &&
-                        !riscv_common::setmapContains(
-                            P2S_, it->getOperand(0).getReg())) {
-                      it->getOperand(0).setReg(LiveP2S[riscv_common::kSP]);
-                      it++;
-                      break;
-                    }
-
-                    it++;
-                  }
-                }
-              } else {
-                // updating shadow regs as per LiveP2S
-                for (auto &op : it->operands()) {
-                  if (op.isReg() &&
-                      riscv_common::mapValContains(P2S_, op.getReg())) {
-                    op.setReg(LiveP2S[getPrimaryFromShadow(op.getReg())]);
-                  }
-                }
-
-                auto stack_alloc_status{isStackAllocatedInstr(&*it)};
-                if (stack_alloc_status >= 0) {
-                  if (stack_alloc_status == 0) {
-                    stack_allocated++;
-                  } else {
-                    stack_allocated--;
-                  }
-
-                  if (it->getOperand(0).getReg() ==
-                      LiveP2S[riscv_common::kSP]) {
-                    LiveP2S[riscv_common::kSP] = getFreeShadowReg(
-                        llvm::RISCV::X0, llvm::RISCV::X31, true);
-                    it->getOperand(0).setReg(LiveP2S[riscv_common::kSP]);
-                  }
-                }
-              }
-
-              if (secondcall_passed && !stack_allocated) {
-                break;
-              }
-
-              it++;
-            }
-
-            // the already transformed instructions are to be ignored for
-            // outer MIs scan
-            for (auto it2{MI.getIterator()}; it2 != it; ++it2) {
-              ignore_these.emplace(&*it2);
-            }
-          } // and now for lib calls that are not duplicated
-          else {
-            for (llvm::MachineBasicBlock::iterator it{MI.getIterator()};
-                 it != MBB.end(); ++it) {
-              if (it->isCall() && &*it != &MI) {
-                break;
-              }
-
-              if (it->getOpcode() == llvm::RISCV::ADDI &&
-                  it->getNumOperands() == 3 && it->getOperand(0).isReg() &&
-                  it->getOperand(1).isReg() && it->getOperand(2).isImm()) {
-                auto src_reg{it->getOperand(1).getReg()};
-                auto dst_reg{it->getOperand(0).getReg()};
-                if (it->getOperand(2).getImm() == 0 &&
-                    riscv_common::setmapContains(P2S_, src_reg) &&
-                    riscv_common::mapValContains(P2S_, dst_reg)) {
-                  assert(riscv_common::setmapContains(LiveP2S, src_reg));
-
-                  it->getOperand(0).setReg(LiveP2S[src_reg]);
-                }
-              }
-            }
-
-            if (regs_to_spill.size()) {
-              llvm::MachineBasicBlock::iterator it{MI.getIterator()};
-              riscv_common::loadRegs(
-                  std::vector<llvm::Register>{regs_to_spill.begin(),
-                                              regs_to_spill.end()},
-                  &MBB, std::next(it), LiveP2S[riscv_common::kSP]);
-              LiveP2S[riscv_common::kSP] =
-                  getFreeShadowReg(llvm::RISCV::X0, llvm::RISCV::X31, true);
-              while (1) {
-                it++;
-
-                if (isStackAllocatedInstr(&*it) >= 0 &&
-                    !riscv_common::setmapContains(P2S_,
-                                                  it->getOperand(0).getReg())) {
-                  it->getOperand(0).setReg(LiveP2S[riscv_common::kSP]);
-                  it++;
-                  it++;
-                  break;
-                }
-              }
-
-              // the already transformed instructions are to be ignored for
-              // outer MIs scan
-              for (auto it2{MI.getIterator()}; it2 != it; ++it2) {
-                ignore_these.emplace(&*it2);
-              }
-            }
-          }
+          riscv_common::loadCallRegsAs(saved, restore, &MBB, next,
+                                       riscv_common::CallFrameBank::Repair);
+          riscv_common::loadCallRegs(
+              primary_results, &MBB, next,
+              riscv_common::CallFrameBank::RepairPrimaryResult);
+          RegMapType restore_results;
+          unsigned index = 0;
+          for (const auto reg : results)
+            restore_results[shadow_results[index++]] = shadow(reg);
+          riscv_common::loadCallRegsAs(
+              shadow_results, restore_results, &MBB, next,
+              riscv_common::CallFrameBank::RepairShadowResult);
+          for (auto it = std::next(MI.getIterator()); it != next; ++it)
+            ignore_these.insert(&*it);
         } else if (MI.isReturn() && fname_ != "main") {
-          // returning in user-func calls
-
-          // TODO: for FP returns??
-
-          for (auto &r : std::vector<llvm::Register>{
-                   llvm::RISCV::X10, llvm::RISCV::X11, riscv_common::kSP}) {
-            if (P2S_.at(r) == LiveP2S[r]) {
-              continue;
-            }
-
-            llvm::BuildMI(MBB, MI.getIterator(), MI.getDebugLoc(),
-                          TII_->get(llvm::RISCV::ADDI), P2S_.at(r))
-                .addReg(LiveP2S[r])
-                .addImm(0);
-          }
+          RegSetType outputs{riscv_common::kRA, riscv_common::kSP,
+                             riscv_common::kFP, riscv_common::kGP,
+                             riscv_common::kTP};
+          for (const auto &operand : MI.operands())
+            if (operand.isReg() && operand.isUse() &&
+                P2S_.count(operand.getReg()))
+              outputs.insert(operand.getReg());
+          RegMapType copies;
+          for (const auto reg : outputs)
+            if (LiveP2S.count(reg) && !signature_reg(reg) &&
+                !signature_reg(P2S_.at(reg)))
+              copies[P2S_.at(reg)] = LiveP2S.at(reg);
+          emitRepairCopies(&MBB, MI.getIterator(), copies);
         } else {
           // sync checks
           if (MI.isConditionalBranch() && MI.getNumOperands() == 3 &&
@@ -4022,104 +3812,109 @@ void RISCVDmr::repair() {
         }
       } // end of MI scan
 
-      if (!riscv_common::setmapContains(nemesis_bbs_, &MBB)) {
-        // updating liveins of successors
-        for (auto SBB : MBB.successors()) {
-          for (const auto &p : LiveP2S) {
-            if (p.first == riscv_common::k0 || p.second == riscv_common::kRA) {
+      if (!nemesis_bbs_.count(&MBB)) {
+        // Reconciliation belongs to an edge: a taken branch's copies must not
+        // replace values still needed by its fallthrough path.
+        const std::vector<llvm::MachineBasicBlock *> successors(
+            MBB.succ_begin(), MBB.succ_end());
+        for (auto *SBB : successors) {
+          if (SBB == err_bb_)
+            continue;
+          RegMapType copies;
+          for (const auto &pair : LiveP2S) {
+            if (pair.first == riscv_common::k0 || signature_reg(pair.first) ||
+                signature_reg(P2S_.at(pair.first)))
+              continue;
+            if (MBB2Liveins[SBB].count(pair.first)) {
+              if (!MBB2Liveinsmodifier[SBB])
+                MBB2Liveinsmodifier[SBB] = &MBB;
+              if (MBB2Liveinsmodifier[SBB] == &MBB)
+                MBB2Liveins[SBB][pair.first] = pair.second;
+              else if (MBB2Liveins[SBB][pair.first] != pair.second)
+                copies[MBB2Liveins[SBB][pair.first]] = pair.second;
+            } else if (nemesis_bbs_.count(SBB)) {
+              MBB2Liveinsmodifier[SBB] = &MBB;
+              MBB2Liveins[SBB][pair.first] = pair.second;
+            }
+          }
+          if (!copies.empty()) {
+            if (successors.size() > 1) {
+              auto *edge = MF_->CreateMachineBasicBlock(MBB.getBasicBlock());
+              // The existing final error block traps or loops, so appended
+              // edge blocks cannot intercept another block's fallthrough.
+              MF_->push_back(edge);
+              bool redirected = false;
+              for (auto &instruction : MBB)
+                for (auto &operand : instruction.operands())
+                  if (operand.isMBB() && operand.getMBB() == SBB) {
+                    operand.setMBB(edge);
+                    redirected = true;
+                  }
+              if (!redirected)
+                llvm::BuildMI(MBB, MBB.end(), MBB.front().getDebugLoc(),
+                              TII_->get(llvm::RISCV::PseudoBR))
+                    .addMBB(edge);
+              emitRepairCopies(edge, edge->end(), copies);
+              llvm::BuildMI(*edge, edge->end(), MBB.front().getDebugLoc(),
+                            TII_->get(llvm::RISCV::PseudoBR))
+                  .addMBB(SBB);
+              MBB.replaceSuccessor(SBB, edge);
+              edge->addSuccessor(SBB);
+              // These physical copies already implement the target mapping.
+              MBB2Visited[edge] = true;
               continue;
             }
-
-            if (riscv_common::setmapContains(MBB2Liveins[SBB], p.first)) {
-              if (!MBB2Liveinsmodifier[SBB]) {
-                MBB2Liveinsmodifier[SBB] = &MBB;
-              }
-
-              if (MBB2Liveinsmodifier[SBB] == &MBB) {
-                MBB2Liveins[SBB][p.first] = p.second;
-              } else {
-                // need to do register rotation before jumping to this SBB
-                if (MBB2Liveins[SBB][p.first] != p.second) {
-                  llvm::MachineBasicBlock::iterator insert{MBB.end()};
-                  for (auto rit{MBB.rbegin()}; rit != MBB.rend(); ++rit) {
-                    if (rit->isBranch() || rit->isCall()) {
-                      for (auto &op : rit->operands()) {
-                        if (op.isMBB() && op.getMBB() == SBB) {
-                          insert = rit->getIterator();
-                          break;
-                        }
-                      }
-
-                      if (insert != MBB.end()) {
-                        break;
-                      }
-                    }
-                  }
-
-                  moveIntoShadow(&MBB, insert, p.second,
-                                 MBB2Liveins[SBB][p.first]);
-                  // if (riscv_common::getRegType(p.second) ==
-                  //     riscv_common::RegType::I) {
-                  //   llvm::BuildMI(MBB, insert, MBB.front().getDebugLoc(),
-                  //                 TII_->get(llvm::RISCV::ADDI))
-                  //       .addReg(MBB2Liveins[SBB][p.first])
-                  //       .addReg(p.second)
-                  //       .addImm(0);
-                  // } else if (riscv_common::getRegType(p.second) ==
-                  //                riscv_common::RegType::FS &&
-                  //            isa_config_.store_opcode == llvm::RISCV::SW) {
-                  //   llvm::BuildMI(MBB, insert, MBB.front().getDebugLoc(),
-                  //                 TII_->get(llvm::RISCV::FSGNJ_S))
-                  //       .addReg(MBB2Liveins[SBB][p.first])
-                  //       .addReg(p.second)
-                  //       .addReg(p.second);
-                  // } else if (riscv_common::getRegType(p.second) ==
-                  //                riscv_common::RegType::FD &&
-                  //            isa_config_.store_opcode == llvm::RISCV::SD) {
-                  //   llvm::BuildMI(MBB, insert, MBB.front().getDebugLoc(),
-                  //                 TII_->get(llvm::RISCV::FSGNJ_D))
-                  //       .addReg(MBB2Liveins[SBB][p.first])
-                  //       .addReg(p.second)
-                  //       .addReg(p.second);
-                  // } else if (riscv_common::getRegType(p.second) ==
-                  //            riscv_common::RegType::FH) {
-                  //   assert(0 && "TODO");
-                  // }
-                }
-              }
-            } else if (riscv_common::setmapContains(nemesis_bbs_, SBB)) {
-              MBB2Liveinsmodifier[SBB] = &MBB;
-              MBB2Liveins[SBB][p.first] = p.second;
+            auto insert = MBB.end();
+            for (auto it = MBB.rbegin(); it != MBB.rend(); ++it) {
+              if (!it->isBranch())
+                continue;
+              for (const auto &operand : it->operands())
+                if (operand.isMBB() && operand.getMBB() == SBB)
+                  insert = it->getIterator();
+              if (insert != MBB.end())
+                break;
             }
+            emitRepairCopies(&MBB, insert, copies);
           }
         }
       } else {
-        // for nemesisBB we create another BB for livein updates as we want to
-        // do this after nemesisBB and before takenBB
-        auto new_BB{MF_->CreateMachineBasicBlock(MBB.getBasicBlock())};
-        MF_->insert(MBB.getIterator(), new_BB);
-
-        llvm::MachineBasicBlock *current_succ{nullptr};
-        for (auto &op : MBB.front().operands()) {
-          if (op.isMBB()) {
-            current_succ = op.getMBB();
-            op.setMBB(new_BB);
-            break;
+        // Checking branches can target the error block without having a CFG
+        // successor yet. Redirect the actual continuation, not the first MBB
+        // operand (which can be that error edge).
+        llvm::MachineBasicBlock *continuation = nullptr;
+        for (auto *successor : MBB.successors())
+          if (successor != err_bb_) {
+            if (continuation)
+              llvm::report_fatal_error(
+                  "COMPAS: ambiguous REPAIR branch continuation");
+            continuation = successor;
           }
-        }
-        assert(current_succ);
-
-        // TODO: can we optimize this without Jump instruction everytime!!
-        llvm::BuildMI(*new_BB, new_BB->end(), MBB.front().getDebugLoc(),
+        if (!continuation)
+          llvm::report_fatal_error(
+              "COMPAS: missing REPAIR branch continuation");
+        auto *bridge = MF_->CreateMachineBasicBlock(MBB.getBasicBlock());
+        // Keep the predecessor's fallthrough entering the duplicate check.
+        // A bridge before MBB would bypass it while the CFG still claimed
+        // that the check had executed, invalidating subsequent signatures.
+        MF_->insert(std::next(MBB.getIterator()), bridge);
+        bool redirected = false;
+        for (auto &instruction : MBB)
+          for (auto &operand : instruction.operands())
+            if (operand.isMBB() && operand.getMBB() == continuation) {
+              operand.setMBB(bridge);
+              redirected = true;
+            }
+        if (!redirected)
+          llvm::BuildMI(MBB, MBB.end(), MBB.front().getDebugLoc(),
+                        TII_->get(llvm::RISCV::PseudoBR))
+              .addMBB(bridge);
+        llvm::BuildMI(*bridge, bridge->end(), MBB.front().getDebugLoc(),
                       TII_->get(llvm::RISCV::PseudoBR))
-            .addMBB(current_succ);
-
-        MBB.replaceSuccessor(current_succ, new_BB);
-        new_BB->addSuccessor(current_succ);
-        MBB2Liveinsmodifier[new_BB] = &MBB;
-        for (const auto &p : LiveP2S) {
-          MBB2Liveins[new_BB][p.first] = p.second;
-        }
+            .addMBB(continuation);
+        MBB.replaceSuccessor(continuation, bridge);
+        bridge->addSuccessor(continuation);
+        MBB2Liveinsmodifier[bridge] = &MBB;
+        MBB2Liveins[bridge] = LiveP2S;
       }
 
       // MBB.dump();
@@ -4153,132 +3948,4 @@ void RISCVDmr::repair() {
       break;
     }
   } // end of while(1)
-
-  //
-  //
-  // DEPENDENCY RESOLUTION IN SHADOW ROTATION INSTRUCTIONS!!!
-  // =========================================================
-  auto isShadowRotInstr{[this](const llvm::MachineInstr *MI) {
-    return (MI->getOpcode() == llvm::RISCV::ADDI && MI->getNumOperands() == 3 &&
-            MI->getOperand(0).isReg() && MI->getOperand(1).isReg() &&
-            MI->getOperand(2).isImm() && MI->getOperand(2).getImm() == 0 &&
-            riscv_common::mapValContains(P2S_, MI->getOperand(0).getReg()) &&
-            riscv_common::mapValContains(P2S_, MI->getOperand(1).getReg())) ||
-           ((MI->getOpcode() == llvm::RISCV::FSGNJ_D ||
-             MI->getOpcode() == llvm::RISCV::FSGNJ_S) &&
-            MI->getNumOperands() == 3 && MI->getOperand(0).isReg() &&
-            MI->getOperand(1).isReg() && MI->getOperand(2).isReg() &&
-            riscv_common::mapValContains(P2S_, MI->getOperand(0).getReg()) &&
-            riscv_common::mapValContains(P2S_, MI->getOperand(1).getReg()));
-  }};
-
-  // TODO: make sure that the dep_res_instr_ranges in below doesn't cover
-  //       functional shadow MV instructions!!
-
-  // to align live reg-maps we had to put in some register rotation operations
-  // at certain points in the program
-  // these instructions should be scheduled such that dependencies are
-  // resolved
-  std::vector<std::pair<llvm::MachineBasicBlock::iterator,
-                        llvm::MachineBasicBlock::iterator>>
-      dep_res_instr_ranges{};
-  for (auto &MBB : *MF_) {
-    llvm::MachineBasicBlock::iterator it{MBB.begin()};
-    while (it != MBB.end()) {
-      if (isShadowRotInstr(&*it)) {
-        bool need_dep_resolution{false};
-        llvm::MachineBasicBlock::iterator start{it}, end{it};
-        RegSetType dst_sofar{start->getOperand(0).getReg()};
-
-        while (1) {
-          assert(it->getOperand(0).getReg() != it->getOperand(1).getReg() &&
-                 "this is funny shadow rotation");
-          it++;
-          if (it == MBB.end()) {
-            break;
-          }
-
-          if (!isShadowRotInstr(&*it)) {
-            break;
-          }
-
-          if (riscv_common::setmapContains(dst_sofar,
-                                           it->getOperand(1).getReg())) {
-            need_dep_resolution = true;
-          }
-          dst_sofar.emplace(it->getOperand(0).getReg());
-          end = it;
-        }
-
-        if (need_dep_resolution) {
-          dep_res_instr_ranges.emplace_back(
-              std::pair<llvm::MachineBasicBlock::iterator,
-                        llvm::MachineBasicBlock::iterator>{start, end});
-        }
-      } else {
-        it++;
-      }
-    }
-  }
-
-  auto dependencyResolved{[this](std::pair<llvm::MachineBasicBlock::iterator,
-                                           llvm::MachineBasicBlock::iterator>
-                                     instr_range) -> llvm::MachineInstr * {
-    RegSetType dst_sofar{};
-    for (auto it{instr_range.first}; it != instr_range.second; ++it) {
-      if (riscv_common::setmapContains(dst_sofar, it->getOperand(1).getReg())) {
-        return &*it;
-      }
-
-      if (it->getOperand(0).getReg() != P2S_.at(riscv_common::k0)) {
-        dst_sofar.emplace(it->getOperand(0).getReg());
-      }
-    }
-    return nullptr;
-  }};
-
-  for (auto &p : dep_res_instr_ranges) {
-    p.second++;
-    llvm::MachineBasicBlock::iterator start{p.first};
-    start--;
-
-    unsigned deadlock_counter{25};
-    while (1) {
-      deadlock_counter--;
-      if (!deadlock_counter) {
-        llvm::outs() << "\tResolving deadlock...\n";
-        // assumption: we need to swap the first 2 instrs around to resolve
-        // the deadlock -> dont know if this holds always!
-
-        if (riscv_common::getRegType(p.first->getOperand(0).getReg()) ==
-            riscv_common::RegType::I) {
-          // using shadow of zero for swapping operation as this is anyways
-          // free
-          auto si{MF_->CloneMachineInstr(&*std::next(p.first))};
-          si->getOperand(0).setReg(P2S_.at(riscv_common::k0));
-          p.first->getParent()->insert(p.first, si);
-          std::next(p.first)->getOperand(1).setReg(P2S_.at(riscv_common::k0));
-          p.first = si->getIterator();
-          llvm::BuildMI(*p.first->getParent(), p.second, p.first->getDebugLoc(),
-                        TII_->get(llvm::RISCV::XOR), P2S_.at(riscv_common::k0))
-              .addReg(P2S_.at(riscv_common::k0))
-              .addReg(P2S_.at(riscv_common::k0));
-        } else {
-          assert(0);
-        }
-
-        deadlock_counter = 25;
-      }
-
-      auto conflict_MI{dependencyResolved(p)};
-      if (!conflict_MI) {
-        break;
-      } else {
-        auto si{MF_->CloneMachineInstr(conflict_MI)};
-        conflict_MI->getParent()->insertAfter(start, si);
-        p.first = si->getIterator();
-        conflict_MI->getParent()->erase_instr(conflict_MI);
-      }
-    }
-  }
 }

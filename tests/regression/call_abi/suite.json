@@ -10,28 +10,71 @@
   "expected": {"exit": 42, "stdout": ""},
   "cases": [
     {
-      "name": "selective_eddi_musttail",
+      "name": "selective_tail_musttail_callee_only",
       "sources": ["tail_musttail.ll"],
       "optimization": 2,
       "sibling_calls": true,
-      "modes": ["EDDI"],
+      "modes": ["EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
       "cfp_modes": ["none"],
       "functions": ["abi_tail_musttail_leaf"],
       "expected_build_diagnostic": {
         "source": "tail_musttail.ll",
-        "modes": ["EDDI"],
+        "modes": ["EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
         "functions": ["abi_tail_musttail_leaf"],
-        "message": "COMPAS: musttail calls across selective EDDI boundaries are unsupported"
-      }
+        "message": "COMPAS: musttail calls across selective DMR boundaries are unsupported"
+      },
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "selective_tail_musttail_caller_only",
+      "sources": ["tail_musttail.ll"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
+      "cfp_modes": ["none"],
+      "functions": ["abi_tail_musttail_wrapper"],
+      "expected_build_diagnostic": {
+        "source": "tail_musttail.ll",
+        "modes": ["EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
+        "functions": ["abi_tail_musttail_wrapper"],
+        "message": "COMPAS: musttail calls across selective DMR boundaries are unsupported"
+      },
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "compatible_tail_musttail",
+      "sources": ["tail_musttail.ll"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
+      "cfp_modes": ["none"],
+      "schedules": ["cgs", "fgs"],
+      "functions": ["abi_tail_musttail_wrapper", "abi_tail_musttail_leaf"],
+      "call_transfers": [
+        {
+          "caller": "abi_tail_musttail_wrapper",
+          "callee": "abi_tail_musttail_leaf",
+          "reference": "tail",
+          "hardened": "tail"
+        }
+      ]
     },
     {
       "name": "converted_tail_word_callee_only",
       "sources": ["tail_calls.c"],
       "optimization": 2,
       "sibling_calls": true,
-      "modes": ["EDDI"],
+      "modes": ["EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
       "schedules": ["cgs", "fgs"],
-      "functions": ["abi_tail_leaf"]
+      "functions": ["abi_tail_leaf"],
+      "call_transfers": [
+        {
+          "caller": "abi_tail_wrapper",
+          "callee": "abi_tail_leaf",
+          "reference": "tail",
+          "hardened": "call"
+        }
+      ]
     },
     {
       "name": "converted_tail_wide_callee_only",
@@ -39,20 +82,36 @@
       "defines": ["TAIL_WIDE=1"],
       "optimization": 2,
       "sibling_calls": true,
-      "modes": ["EDDI"],
+      "modes": ["EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
       "schedules": ["cgs", "fgs"],
-      "functions": ["abi_tail_leaf"]
+      "functions": ["abi_tail_leaf"],
+      "call_transfers": [
+        {
+          "caller": "abi_tail_wrapper",
+          "callee": "abi_tail_leaf",
+          "reference": "tail",
+          "hardened": "call"
+        }
+      ]
     },
     {
       "name": "converted_tail_word_cfp_caller",
       "sources": ["tail_calls.c"],
       "optimization": 2,
       "sibling_calls": true,
-      "modes": ["EDDI"],
+      "modes": ["EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
       "cfp_modes": ["CFCSS", "RASM", "RACFED"],
       "schedules": ["cgs", "fgs"],
       "functions": ["abi_tail_leaf"],
-      "cfp_functions": ["abi_tail_wrapper"]
+      "cfp_functions": ["abi_tail_wrapper"],
+      "call_transfers": [
+        {
+          "caller": "abi_tail_wrapper",
+          "callee": "abi_tail_leaf",
+          "reference": "tail",
+          "hardened": "call"
+        }
+      ]
     },
     {
       "name": "converted_tail_wide_cfp_caller",
@@ -60,11 +119,140 @@
       "defines": ["TAIL_WIDE=1"],
       "optimization": 2,
       "sibling_calls": true,
-      "modes": ["EDDI"],
+      "modes": ["EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
       "cfp_modes": ["CFCSS", "RASM", "RACFED"],
       "schedules": ["cgs", "fgs"],
       "functions": ["abi_tail_leaf"],
-      "cfp_functions": ["abi_tail_wrapper"]
+      "cfp_functions": ["abi_tail_wrapper"],
+      "call_transfers": [
+        {
+          "caller": "abi_tail_wrapper",
+          "callee": "abi_tail_leaf",
+          "reference": "tail",
+          "hardened": "call"
+        }
+      ]
+    },
+    {
+      "name": "converted_tail_word_caller_only",
+      "sources": ["tail_calls.c"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
+      "schedules": ["cgs", "fgs"],
+      "functions": ["abi_tail_wrapper"],
+      "call_transfers": [
+        {
+          "caller": "abi_tail_wrapper",
+          "callee": "abi_tail_leaf",
+          "reference": "tail",
+          "hardened": "call"
+        }
+      ]
+    },
+    {
+      "name": "converted_tail_wide_caller_only",
+      "sources": ["tail_calls.c"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
+      "schedules": ["cgs", "fgs"],
+      "functions": ["abi_tail_wrapper"],
+      "call_transfers": [
+        {
+          "caller": "abi_tail_wrapper",
+          "callee": "abi_tail_leaf",
+          "reference": "tail",
+          "hardened": "call"
+        }
+      ],
+      "defines": ["TAIL_WIDE=1"]
+    },
+    {
+      "name": "stack_tail_word_callee_only",
+      "sources": ["tail_stack.c"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
+      "cfp_modes": ["none"],
+      "schedules": ["cgs", "fgs"],
+      "functions": ["abi_tail_stack_leaf"],
+      "call_transfers": [
+        {
+          "caller": "abi_tail_stack_wrapper",
+          "callee": "abi_tail_stack_leaf",
+          "reference": "call",
+          "hardened": "call"
+        }
+      ]
+    },
+    {
+      "name": "stack_tail_word_caller_only",
+      "sources": ["tail_stack.c"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
+      "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+      "schedules": ["cgs", "fgs"],
+      "functions": ["abi_tail_stack_wrapper"],
+      "call_transfers": [
+        {
+          "caller": "abi_tail_stack_wrapper",
+          "callee": "abi_tail_stack_leaf",
+          "reference": "call",
+          "hardened": "call"
+        }
+      ]
+    },
+    {
+      "name": "stack_tail_wide_callee_only",
+      "sources": ["tail_stack.c"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
+      "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+      "schedules": ["cgs", "fgs"],
+      "functions": ["abi_tail_stack_leaf"],
+      "call_transfers": [
+        {
+          "caller": "abi_tail_stack_wrapper",
+          "callee": "abi_tail_stack_leaf",
+          "reference": "call",
+          "hardened": "call"
+        }
+      ],
+      "defines": ["TAIL_WIDE=1"]
+    },
+    {
+      "name": "stack_tail_wide_caller_only",
+      "sources": ["tail_stack.c"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
+      "cfp_modes": ["none"],
+      "schedules": ["cgs", "fgs"],
+      "functions": ["abi_tail_stack_wrapper"],
+      "call_transfers": [
+        {
+          "caller": "abi_tail_stack_wrapper",
+          "callee": "abi_tail_stack_leaf",
+          "reference": "call",
+          "hardened": "call"
+        }
+      ],
+      "defines": ["TAIL_WIDE=1"]
+    },
+    {
+      "name": "generated_libcall_tail",
+      "sources": ["tail_multiply.ll", "tail_multiply_helper.ll"],
+      "architectures": ["rv32"],
+      "isa": "rv32i",
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI", "SWIFT", "NZDC", "NZDC+NEMESIS", "NZDC+NEMESEC"],
+      "cfp_modes": ["none"],
+      "schedules": ["cgs", "fgs"],
+      "functions": ["libtail_mul"]
     },
     {
       "name": "caller_only",
@@ -250,14 +438,20 @@
     {
       "name": "realigned_dynamic_stack_arguments",
       "defines": ["TEST_CASE=19"],
-      "modes": ["EDDI"],
+      "schedules": ["cgs", "fgs"],
       "functions": ["abi_realigned_dynamic_frame", "abi_dynamic_pointer_middle", "abi_dynamic_pointer_leaf", "abi_ten_args"]
     },
     {
       "name": "realigned_dynamic_stack_arguments_caller_only",
       "defines": ["TEST_CASE=19"],
-      "modes": ["EDDI"],
+      "schedules": ["cgs", "fgs"],
       "functions": ["abi_realigned_dynamic_frame"]
+    },
+    {
+      "name": "realigned_dynamic_indirect_call",
+      "sources": ["realigned_indirect.c"],
+      "schedules": ["cgs", "fgs"],
+      "functions": ["indirect_bp_owner", "indirect_bp_leaf"]
     },
     {
       "name": "libcall_stack_arguments",
@@ -280,9 +474,27 @@
       }
     },
     {
+      "name": "libcall_realigned_dynamic_stack_arguments",
+      "defines": ["TEST_CASE=17", "ABI_REALIGNED_DYNAMIC=1"],
+      "modes": ["EDDI", "SWIFT"],
+      "schedules": ["cgs", "fgs"],
+      "functions": ["abi_libcall_dynamic_stack_arguments"],
+      "expected": {
+        "exit": 42,
+        "stdout": "BCDEFGHIJK\n[bdfhjlnprt]\nHIJKLMNOPQ\n[hjlnprtvxz]\nNOPQRSTUVW\n[nprtvxzbdf]\nBCDEFGHIJK\n[bdfhjlnprt]\nHIJKLMNOPQ\n[hjlnprtvxz]\nNOPQRSTUVW\n[nprtvxzbdf]\n"
+      }
+    },
+    {
       "name": "duplicated_libcall",
       "defines": ["TEST_CASE=18"],
       "modes": ["EDDI", "SWIFT"],
+      "functions": ["abi_duplicated_libcall"]
+    },
+    {
+      "name": "realigned_dynamic_duplicated_libcall",
+      "defines": ["TEST_CASE=18", "ABI_REALIGNED_DYNAMIC=1"],
+      "modes": ["EDDI", "SWIFT"],
+      "schedules": ["cgs", "fgs"],
       "functions": ["abi_duplicated_libcall"]
     },
     {

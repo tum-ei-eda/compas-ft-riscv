@@ -8,10 +8,14 @@ complete literal stdout; the other cases produce no output.
 [cols="1,3",options="header"]
 |===
 |Case |Coverage
-|`selective_eddi_musttail` |An explicit IR `musttail` call cannot become a returning call; the protected configuration must reject this unsupported boundary with the expected diagnostic while the unprotected reference runs normally.
-|`converted_tail_word_callee_only` |An ordinary wrapper tail-calls an EDDI leaf with a runtime-indexed local frame, checking that discarded pointer temporaries do not cause false balance failures.
+|`selective_tail_musttail_callee_only`, `selective_tail_musttail_caller_only` |Explicit IR `musttail` calls across either selective DMR boundary reject cleanly with a common diagnostic in every DMR mode; unprotected references run normally.
+|`compatible_tail_musttail` |A stack-free scalar call with both functions selected retains a real tail transfer and the literal result.
+|`converted_tail_word_callee_only` |An ordinary wrapper calls a protected leaf with a runtime-indexed local frame, checking that discarded pointer temporaries do not cause false balance failures.
 |`converted_tail_wide_callee_only` |The same boundary returns a value with nonzero upper bits; RV32 returns both `a0` and `a1`, and both result registers must remain checked.
-|`converted_tail_word_cfp_caller`, `converted_tail_wide_cfp_caller` |Only the tail wrapper receives CFP, checking independent selection with the EDDI-only leaf and valid signature slots before the wrapper's epilogue.
+|`converted_tail_word_caller_only`, `converted_tail_wide_caller_only` |Only the wrapper receives DMR, checking returning-call preservation at the reciprocal boundary.
+|`converted_tail_word_cfp_caller`, `converted_tail_wide_cfp_caller` |Only the wrapper receives CFP, checking independent selection with a DMR-only leaf and valid signature slots before the wrapper's epilogue.
+|`stack_tail_word_*`, `stack_tail_wide_*` |Twelve arguments exercise four outgoing stack slots, selective protection in either direction, a local frame and a live ordinary observer. These remain ordinary calls in both the reference and hardened output.
+|`generated_libcall_tail` |RV32I multiplication generates an external-symbol `__mulsi3` call without an IR call site, checking returning-call preservation for a protected caller in every DMR mode.
 |`caller_only` |A protected caller invokes an unprotected callee, retaining a live value across the call.
 |`callee_only` |An unprotected caller invokes a protected callee.
 |`caller_and_callee` |Both sides of the same boundary are protected.
@@ -43,11 +47,14 @@ complete literal stdout; the other cases produce no output.
 |`large_fixed_stack_arguments_caller_only` |Only the owner of the large fixed frame is protected, while the ten-argument helper uses the ordinary ABI.
 |`dynamic_stack_arguments_small_frame` |A small fixed frame and two simultaneously live VLAs retain independent contents across nested pointer calls and ten-word stack-argument calls.
 |`dynamic_stack_arguments_small_frame_caller_only` |Only the VLA owner is protected, checking runtime stack movement across ordinary nested callees.
-|`realigned_dynamic_stack_arguments` |An EDDI-protected ten-argument owner retains a 64-byte-aligned fixed array and two aligned VLAs across protected pointer helpers and outgoing stack-argument calls, with ordinary callers covering every entry-SP residue modulo 64.
+|`realigned_dynamic_stack_arguments` |A DMR-protected ten-argument owner retains a 64-byte-aligned fixed array and two aligned VLAs across protected pointer helpers and outgoing stack-argument calls, with ordinary callers covering every entry-SP residue modulo 64.
 |`realigned_dynamic_stack_arguments_caller_only` |Only the realigned VLA owner is protected; pointer helpers and the ten-argument leaf use the ordinary ABI.
+|`realigned_dynamic_indirect_call` |An owner with an aligned fixed array and VLA makes its sole call through a volatile function pointer to another realigned VLA owner, checking early preservation-frame reservation without a direct callee boundary.
 |`libcall_stack_arguments` |A freestanding variadic `printf` shim receives ten character arguments, checking stack arguments, distinct return counts and live fixed locals across two calls.
 |`libcall_dynamic_stack_arguments` |The same calls retain fixed locals and a runtime-sized array, checking libcall preservation with a moving SP.
+|`libcall_realigned_dynamic_stack_arguments` |The variadic caller gives both its fixed array and VLA 64-byte alignment, checking that base-pointer preservation leaves caller snapshots and outgoing stack arguments intact.
 |`duplicated_libcall` |A freestanding `memcmp` shim compares local/global and local/local buffers, retaining zero, negative and positive results and whole-buffer checksums across calls.
+|`realigned_dynamic_duplicated_libcall` |The same `memcmp` comparisons retain an aligned fixed buffer and aligned VLA, checking that base-pointer, caller-context and duplicate-result snapshots remain independent.
 |`realigned_live_values` |A caller with a 64-byte-aligned volatile array and twelve independent live values invokes an unprotected helper with register arguments, checking realigned spill slots separately from stack-passed arguments.
 |`realigned_entry_residues` |An unprotected caller varies runtime stack padding to cover all four ABI-valid entry-SP residues modulo 64, repeatedly invokes the protected realigned function, and checks its returned SP and padding contents.
 |`realigned_entry_residues_protected_leaf` |The same entry residues also protect the nested arithmetic and array-alignment helpers, checking both the ordinary-to-protected and protected-to-protected boundaries.
@@ -60,18 +67,38 @@ alignment case reads the real RISC-V stack pointer in an unprotected leaf helper
 with inline assembly; its native smoke build checks only the arithmetic oracle.
 
 The converted-tail cases opt into `optimization: 2` and `sibling_calls: true`.
-A nine-word volatile scratch array remains live until the ordinary wrapper's
-final call; sibling-call optimization marks that call as eligible for a tail
-transfer. The backend lowers this selective EDDI boundary as a returning call
+A nine-word volatile scratch array remains live until the wrapper's final call;
+sibling-call optimization marks that scalar call as eligible for a tail
+transfer. The backend lowers selective DMR boundaries as returning calls
 while the ABI result registers and register mask remain available, before
 frame lowering. The protected leaf indexes a
 four-element volatile array at runtime, leaving different primary and shadow
 frame addresses in discarded temporaries. An ordinary observer retains a
 volatile-loaded canary across the wrapper and combines it with the return
 value. Four literal result pairs check every local-array index, with each
-input executed twice. Both cases run with coarse- and fine-grained scheduling
-and all four control-flow selections on the protected leaf. The additional
+input executed twice. Both directions run in every DMR mode with both schedules
+and all four control-flow selections on the DMR-selected function. The additional
 CFP-caller cases instead select the tail wrapper for CFCSS, RASM and RACFED.
+
+The twelve-argument variants have equally sized incoming and outgoing stack
+areas. LLVM13/16 nevertheless reject tail lowering when outgoing stack offsets
+are nonzero, so these variants check returning-call ABI compatibility. Their
+literal results include all twelve arguments and a runtime-indexed local value.
+
+The manifest's `call_transfers` expectations check actual `call` or `tail`
+instructions in normal and machine-verifier assembly. Eligible scalar references
+must contain tail transfers; selective hardened boundaries must contain calls.
+The compatible IR control must retain a tail transfer with both functions
+protected. Its coverage is limited to a stack-free scalar signature. Explicit
+`musttail` at either selective boundary instead requires the clean diagnostic
+`COMPAS: musttail calls across selective DMR boundaries are unsupported`.
+
+The RV32I generated-libcall case uses runtime-loaded operands with literal
+products `391` and `91`. A separate ordinary IR module implements `__mulsi3`
+with a shift/add loop marked `noinline optnone`, preventing recursive lowering
+back to multiplication. LLVM16 can tail-lower the original multiplication while
+LLVM13 already emits a returning call, so this case checks functional results
+and machine verification without imposing a shared reference transfer shape.
 
 The frame-pointer cases set `frame_pointer: true` in their manifest, forcing a
 frame pointer even in leaf functions without depending on control-flow protection
@@ -151,12 +178,24 @@ Both VLAs coexist while the first is read again and the fixed array is passed
 to a helper. Literal results include every array element after all calls.
 An ordinary wrapper repeats each input for all four ABI-valid caller-SP
 residues modulo 64, checking its SP and padding after return. These cases
-select EDDI only.
-Realigned dynamic EDDI frames use `t1`/`x6` as the primary fixed-frame base and
+run with every DMR mode, all control-flow selections and both schedules.
+Realigned dynamic DMR frames use `t1`/`x6` as the primary fixed-frame base and
 `t5`/`x30` as its shadow while SP moves for VLAs. Each base pointer is preserved
 independently across returning calls; `s1` remains the shadow SP. Incoming
 scalar stack arguments use the stable frame-pointer context rather than a
 realigned or moving SP.
+EDDI retains its separate primary/shadow memory and runtime-delta context.
+SWIFT and NZDC modes use shared memory, so their corresponding pointers remain
+equal. They preserve the actual primary and shadow base pointers in a dedicated
+16-byte subbank of the fixed FP-relative call-preservation frame. These slots
+remain separate from selective-call and libcall snapshots, and saving them does
+not move SP or the outgoing stack arguments.
+The indirect variant gives both the caller and its known target the same
+protection selection. Their independent aligned fixed arrays and VLAs remain
+live while the target temporarily owns the base-pointer pair. The caller's
+only call is indirect, so early frame reservation cannot depend on discovering
+a direct callee. Three independent literal results run twice under every DMR
+and control-flow selection and both schedules.
 
 The libcall cases give their unprotected shims the real `printf` and `memcmp`
 signatures and symbol names, so COMPAS handles them as recognized libcalls.
@@ -177,6 +216,13 @@ Returning libcalls use fixed caller-context and result snapshots,
 leaving SP and outgoing ABI slots in place. Original results remain in primary
 registers and duplicate results enter the corresponding shadows; preservation
 uses the enabled floating-point register width.
+The realigned dynamic variants run under EDDI and SWIFT with both schedules
+and all control-flow selections. The `printf` variant aligns its fixed array
+and VLA to 64 bytes and retains the same complete stdout and result oracle.
+The `memcmp` variant aligns its fixed buffer and a runtime-sized buffer whose
+volatile count is initialized to 13, preserving the existing three sign checks
+and whole-buffer checksums. These cases exercise the independent base-pointer
+bank together with caller-context preservation and duplicated-libcall results.
 
 The realigned-frame case keeps its local array indexed by a runtime value so it
 cannot shrink to a few scalars, and uses both call results in the independent

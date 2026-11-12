@@ -22,27 +22,21 @@ python3 tests/regression/run.py --case 'stack_args/*' \
   --verify-machineinstrs --build-dir build/tests-todo-stack
 ```
 
-## Other DMR modes: realigned dynamic frames
-
-- [ ] Support realigned variable-sized frames in SWIFT and NZDC modes.
-
-SWIFT, NZDC, NZDC+NEMESIS and NZDC+NEMESEC still abort with `reg not found in P2S_` for a runtime-sized `__attribute__((aligned(64)))` local array on RV32/RV64 with both backends. These modes retain LLVM's `x9`/`s1` base pointer, conflicting with the monitor's shadow SP and lacking a primary-to-shadow register mapping. Extending support requires distinct base-pointer ownership and corresponding address tracking and call preservation. The realigned dynamic regression cases explicitly select EDDI only.
-
 ## Call-boundary instrumentation
 
-- [ ] Audit repair-mode preservation that moves SP around calls.
-- [ ] Make signature instrumentation aware of `+save-restore` prologue/epilogue helpers.
+- [ ] Retain returning calls for the remaining REPAIR tail transfers.
 
-Moving SP in repair-mode call preservation still needs review, including its effect on outgoing stack arguments. Remaining late tail-conversion paths use legacy `saveRegs`/`loadRegs` after the original epilogue has restored FP; they require a separate preservation contract. Ordinary-to-EDDI direct calls now use returning wrappers prepared before frame layout.
-
-Compiler-generated `__riscv_save_*` calls execute before FP setup and can clobber G/RTS in `t0`. Signature initialization and preservation must account for their prologue placement.
+Direct calls across either selective DMR boundary now use returning wrappers prepared before frame layout in every DMR mode. The wrappers preserve context in fixed caller-frame slots; late machine IR that bypasses this decision is diagnosed. Scalar calls between compatible protected functions can still be tails. REPAIR rejects those tails and indirect tails because its fixed caller snapshot requires a live frame; use `-fno-optimize-sibling-calls` for returning calls. Defining the corresponding early REPAIR decision and explicit `musttail` behavior remains separate work.
 
 ## Floating-point checks
 
 - [ ] Correct FP equality checks for NaNs and signed zero.
 - [ ] Define protection of architectural FP control/status state.
+- [ ] Resolve LLVM16 REPAIR FP shadow-register lookup failures.
 
 The current `FEQ_S`/`FEQ_D` checks reject matching NaNs and accept oppositely signed zeroes. The rounding-mode input (`FRM`) is shared by primary and shadow computations; FP control/status state has no shadow. The [hard-float suite](regression/hard_float/README.adoc) checks finite values against exact-bit oracles, including nonzero lower binary64 bits on RV32.
+
+With `-REPAIR` enabled, the `eight_float_rv64` and `eight_double_rv32` fixtures abort in `getPrimaryFromShadow()` on LLVM16 for all three NZDC modes. The assertion also occurs in the compiler before the call-preservation changes. LLVM13 passes both finite-value call probes with both schedules. The [REPAIR call suite](regression/repair_call_abi/README.adoc) currently covers integer-register ABIs.
 
 ```sh
 python3 tests/regression/run.py --case 'hard_float/*' \

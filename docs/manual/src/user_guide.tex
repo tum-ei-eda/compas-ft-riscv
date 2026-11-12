@@ -83,6 +83,61 @@ whether its caller uses this pair for a signature. These caller-clobbered
 registers carry no formal ABI argument. Argument and result checks remain,
 as do ordinary DMR instruction and data checks within functions without CFP.
 
+\subsubsection{Compiler save/restore helpers}
+Signature-only CFCSS, RASM and RACFED functions support
+\texttt{-msave-restore} (\texttt{+save-restore} in \texttt{llc}). Link against
+the target toolchain's matching \texttt{libgcc}, which supplies
+\texttt{\_\_riscv\_save\_*} and \texttt{\_\_riscv\_restore\_*}.
+These compiler-generated helpers have a special calling convention: the save
+helper links through \texttt{t0} before FP setup, while the restore helper
+removes the frame and returns directly to the caller.
+
+Signatures start immediately after the entry save helper. RACFED monitors the
+remaining prologue and body instructions; the helper prefix and helper bodies
+are outside this signature region. Ordinary calls retain fixed-frame signature
+preservation. RASM and RACFED perform their final return check before the
+restore-helper tail transfer.
+
+LLVM15/16 keep save/restore prologues at entry for selected signature functions
+by disabling shrink-wrapping. LLVM13/14 already disable it by default.
+A non-entry save helper is rejected because preserving incoming signature
+history there requires a separate contract.
+
+DMR-selected functions accept \texttt{-msave-restore} by selecting explicit
+callee-saved spills and reloads before LLVM assigns frame slots. EDDI, SWIFT
+and the NZDC modes can then instrument those operations using their normal
+primary/shadow convention, including separate EDDI frames. The GNU helpers
+also restore registers in the shadow bank, so they remain opaque to DMR and
+are not called from selected functions. Helper-based code-size savings remain
+available in ordinary and signature-only functions in the same translation
+unit. A late machine-IR pipeline that already contains opaque helpers must
+regenerate its frame with the DMR selection enabled.
+
+\subsubsection{REPAIR call boundaries}
+\texttt{-REPAIR} changes the live shadow-register pairing in NZDC,
+NZDC+NEMESIS and NZDC+NEMESEC functions. Before a returning call, COMPAS checks
+the current argument pairs and saves both actual register banks in a fixed
+FP-relative snapshot. Canonical shadow arguments are loaded from that snapshot,
+so overlapping register assignments cannot destroy another argument. SP and
+outgoing stack arguments retain their ABI locations, including in variable-sized
+and realigned frames. Indirect targets must implement the protected calling
+convention.
+
+Primary and shadow results occupy separate slots while the caller's original
+pairing is restored. A duplicable libcall runs twice with independently restored
+register arguments; a nonduplicable ordinary call supplies one shared result.
+On return from a protected function, simultaneous register transfers restore
+the canonical shadow results, return address and frame state. Pairing changes
+at conditional branches execute only on their selected control-flow edge.
+REPAIR excludes registers owned by control-flow signatures from its allocation.
+
+REPAIR tail calls between compatible protected functions, and indirect tail
+calls, are rejected because their epilogue has already removed the frame needed
+for this preservation.
+Compile these callers with
+\texttt{-fno-optimize-sibling-calls} to retain returning calls. This restriction
+is separate from the selective-boundary returning-call conversions below.
+
 \subsubsection{Inline assembly in EDDI functions}
 EDDI diagnoses nonempty or operand-bearing inline assembly in selected functions
 because its assembly text has no defined primary/shadow register or stack
@@ -115,14 +170,20 @@ being checked. Indirect or by-value pointer parameters,
 pointer returns, arbitrary memory reloads, and pointer bits transported
 through floating-point registers remain outside this tracking contract.
 
-Realigned variable-sized EDDI frames use \texttt{x6}/\texttt{x30}
+Realigned variable-sized DMR frames use \texttt{x6}/\texttt{x30}
 (\texttt{t1}/\texttt{t5}) as the primary/shadow base-pointer pair for aligned
 fixed locals. The stack pointers remain \texttt{x2}/\texttt{x9}, and the frame
-pointers remain \texttt{x8}/\texttt{x31}. EDDI reserves the base-pointer pair
+pointers remain \texttt{x8}/\texttt{x31}. COMPAS reserves the base-pointer pair
 before register allocation and preserves both actual values in separate
 FP-relative slots around every returning call, including duplicated libcalls.
 These registers remain caller-clobbered under the ordinary ABI; the caller's
 instrumentation restores them before further fixed-frame accesses.
+EDDI retains its separate memory banks and runtime pointer-delta context.
+SWIFT, NZDC, NZDC+NEMESIS and NZDC+NEMESEC share memory, so their corresponding
+base-pointer addresses remain equal. They save both actual values in a dedicated
+16-byte subbank of the fixed call-preservation frame, independent of selective
+call and duplicated-libcall snapshots. Saving this state leaves SP and outgoing
+stack arguments unchanged.
 
 Before a callee establishes its own frame pointer, the incoming \texttt{s0}
 and its shadow belong to the caller. EDDI preserves both independently in the
@@ -131,16 +192,23 @@ point into separate caller frames whose size is unknown to the callee. The
 exception is identified from the saved-register spill metadata. Ordinary data
 stores, including values held in \texttt{s0}, retain their value checks.
 
-\subsubsection{EDDI tail-call boundaries}
-An ordinary caller invoking an EDDI callee must regain control to check the
-results and restore its saved context. Such direct calls are lowered as ordinary
-returning calls before frame layout, even when sibling-call optimization is
-enabled. LLVM supplies the call-preserved mask, actual ABI result registers and
-return operands, and the selective wrapper runs before the caller's epilogue.
-Balance checks retain the results and preserved state while excluding discarded
-caller-clobbered temporaries, which may hold distinct primary and shadow
-addresses. Calls marked \texttt{musttail} across this boundary are rejected
-because the required returning wrapper cannot preserve their tail-call contract.
+\subsubsection{Selective DMR tail-call boundaries}
+An ordinary caller invoking a DMR-protected callee must regain control to check
+the results and restore its saved context. A protected caller invoking ordinary
+code also needs its frame to preserve the shadow context and synchronize the
+actual ABI results. Such direct calls, including calls to known external
+symbols, are lowered as ordinary returning calls before frame layout in every
+DMR mode, even when sibling-call optimization is enabled. LLVM supplies the
+call-preserved mask, actual ABI result registers and return operands. The
+selective wrapper uses fixed frame slots before the caller's epilogue and does
+not move outgoing stack arguments. Calls marked \texttt{musttail} across these
+boundaries are rejected because the required returning wrapper cannot preserve
+their tail-call contract. Late machine IR which bypasses this lowering is
+diagnosed rather than converted after frame layout.
+
+For EDDI callees, balance checks retain the results and preserved state while
+excluding discarded caller-clobbered temporaries, which may hold distinct
+primary and shadow addresses.
 
 An EDDI caller passing pointer-typed arguments also retains a returning call,
 keeping its frame available for independently captured pointer expectations and

@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <map>
+
 #include "RISCV.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 
@@ -55,13 +57,13 @@ const unsigned kGP{llvm::RISCV::X3};
 const unsigned kTP{llvm::RISCV::X4};
 // frame pointer register
 const unsigned kFP{llvm::RISCV::X8};
-// Realigned variable-sized EDDI frames reserve t1/t5 as an independent BP
+// Realigned variable-sized DMR frames reserve t1/t5 as an independent BP
 // pair. Ordinary ABI calls can clobber both; COMPAS preserves them at calls.
-const unsigned kEddiBP{llvm::RISCV::X6};
+const unsigned kDmrBP{llvm::RISCV::X6};
 
 RegType getRegType(llvm::Register);
 bool isDmrFunction(const std::string &name);
-bool usesEddiBasePointer(const llvm::MachineFunction &MF);
+bool usesDmrBasePointer(const llvm::MachineFunction &MF);
 // Stable before/after RA: identify EDDI variable frames and pointer-typed IR
 // merges. Their bank appends GPR deltas and one delta per ordinary FI;
 // variable frames reserve three outgoing-call words, plus two BP words when
@@ -77,6 +79,17 @@ void normalizeControlFlow(llvm::MachineFunction &MF);
 // Runtime control-flow state owned by the selected signature scheme.
 std::vector<llvm::Register> signatureRegisters(const std::string &name);
 std::vector<llvm::Register> signatureRegisters(const llvm::MachineFunction &MF);
+// Compiler-generated prologue/epilogue helpers have a special calling
+// convention: the save helper links through t0 before FP exists, and restore
+// tail-returns after removing the frame. Ordinary calls with similar names
+// must retain their normal handling.
+enum class FrameHelper { None, Save, Restore };
+FrameHelper frameHelper(const llvm::MachineInstr &);
+// Signatures start after an entry save helper, before the remaining prologue.
+// A forced shrink-wrapped helper needs preservation of incoming signature
+// history, which this entry-only contract cannot provide.
+llvm::MachineBasicBlock::iterator
+signatureEntryInsertion(llvm::MachineFunction &);
 // Preserve actual signature state in the preallocated fixed frame, without
 // moving the outgoing argument area at the call. Scratch must be reserved.
 void preserveSignatureAcrossCall(llvm::MachineInstr *call,
@@ -86,16 +99,37 @@ void preserveSignatureAcrossCall(llvm::MachineInstr *call,
 // leave both stack pointers unchanged at the call boundary.
 // A duplicated libcall keeps its post-call ABI values in a separate bank
 // while the caller's original monitor state remains saved in Caller.
-enum class CallFrameBank { Caller, Libcall };
+enum class CallFrameBank {
+  Caller,
+  Libcall,
+  BasePointer,
+  Repair,
+  RepairPrimaryResult,
+  RepairShadowResult
+};
 // Supported RISC-V ABIs return at most two registers, each at most 64 bits.
 // The result snapshot also retains the ABI's sixteen-byte stack alignment.
 constexpr unsigned kLibcallResultFrameSize = 16;
+// Non-EDDI realigned dynamic frames retain both actual BP banks across calls.
+// Two XLEN words fit in one ABI-aligned area on RV32 and RV64.
+constexpr unsigned kBasePointerCallFrameSize = 16;
+// REPAIR snapshots both physical banks before canonicalizing call arguments.
+// The two result banks must survive restoration of that immutable snapshot.
+constexpr unsigned kRepairResultFrameSize = 16;
+unsigned repairCallFrameSize(const llvm::MachineFunction &MF);
 void saveCallRegs(const std::vector<llvm::Register> &, llvm::MachineBasicBlock *,
                   llvm::MachineBasicBlock::iterator,
                   CallFrameBank = CallFrameBank::Caller);
 void loadCallRegs(const std::vector<llvm::Register> &, llvm::MachineBasicBlock *,
                   llvm::MachineBasicBlock::iterator,
                   CallFrameBank = CallFrameBank::Caller);
+// Read selected source slots using exactly snapshot_regs' spill layout and
+// assign their values to the mapped destinations. FP aliases use the physical
+// register's full enabled FLEN, matching saveCallRegs' alias deduplication.
+void loadCallRegsAs(const std::vector<llvm::Register> &snapshot_regs,
+                    const std::map<llvm::Register, llvm::Register> &copies,
+                    llvm::MachineBasicBlock *,
+                    llvm::MachineBasicBlock::iterator, CallFrameBank);
 // save registers in the vector one by one onto the stack and do this
 // at the instruction point pointed to by iterator
 void saveRegs(std::vector<llvm::Register>, llvm::MachineBasicBlock*,

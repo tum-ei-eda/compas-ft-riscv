@@ -1,4 +1,4 @@
-/* Ordinary callers tail-call an EDDI leaf; expected values are literal oracles. */
+/* Selective DMR tail boundaries; expected values are literal oracles. */
 #ifndef TAIL_WIDE
 #define TAIL_WIDE 0
 #endif

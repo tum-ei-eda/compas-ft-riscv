@@ -1,0 +1,227 @@
+{
+  "name": "save_restore_dmr",
+  "adapter": "freestanding",
+  "architectures": [
+    "rv32",
+    "rv64"
+  ],
+  "modes": [
+    "EDDI",
+    "SWIFT",
+    "NZDC",
+    "NZDC+NEMESIS",
+    "NZDC+NEMESEC"
+  ],
+  "cfp_modes": [
+    "none"
+  ],
+  "schedules": [
+    "cgs",
+    "fgs"
+  ],
+  "save_restore": true,
+  "frame_pointer": true,
+  "verify_machineinstrs": true,
+  "sources": [
+    "../dmr_frames.c",
+    "../dmr_helpers.c"
+  ],
+  "expected": {
+    "exit": 42,
+    "stdout": ""
+  },
+  "cases": [
+    {
+      "name": "leaf",
+      "defines": [
+        "TEST_CASE=1"
+      ],
+      "functions": [
+        "dmr_leaf"
+      ],
+      "save_restore_functions": [
+        "dmr_leaf",
+        "dmr_control",
+        "dmr_helper",
+        "dmr_twelve_leaf"
+      ],
+      "cfp_modes": [
+        "none",
+        "CFCSS",
+        "RASM",
+        "RACFED"
+      ]
+    },
+    {
+      "name": "repeated_calls",
+      "defines": [
+        "TEST_CASE=2"
+      ],
+      "functions": [
+        "dmr_repeated_calls"
+      ],
+      "save_restore_functions": [
+        "dmr_repeated_calls",
+        "dmr_control",
+        "dmr_helper",
+        "dmr_twelve_leaf"
+      ],
+      "cfp_modes": [
+        "none",
+        "CFCSS",
+        "RASM",
+        "RACFED"
+      ]
+    },
+    {
+      "name": "return_paths",
+      "defines": [
+        "TEST_CASE=6"
+      ],
+      "functions": [
+        "dmr_return_paths"
+      ],
+      "save_restore_functions": [
+        "dmr_return_paths",
+        "dmr_control",
+        "dmr_helper",
+        "dmr_twelve_leaf"
+      ]
+    },
+    {
+      "name": "cold_branch",
+      "defines": [
+        "TEST_CASE=7"
+      ],
+      "functions": [
+        "dmr_cold_branch"
+      ],
+      "save_restore_functions": [
+        "dmr_cold_branch",
+        "dmr_control",
+        "dmr_helper",
+        "dmr_twelve_leaf"
+      ]
+    },
+    {
+      "name": "twelve_arguments_caller_only",
+      "defines": [
+        "TEST_CASE=3"
+      ],
+      "functions": [
+        "dmr_stack_arguments"
+      ],
+      "save_restore_functions": [
+        "dmr_stack_arguments",
+        "dmr_control",
+        "dmr_helper",
+        "dmr_twelve_leaf"
+      ]
+    },
+    {
+      "name": "twelve_arguments_protected_leaf",
+      "defines": [
+        "TEST_CASE=3"
+      ],
+      "functions": [
+        "dmr_stack_arguments",
+        "dmr_twelve_leaf"
+      ],
+      "save_restore_functions": [
+        "dmr_stack_arguments",
+        "dmr_control",
+        "dmr_helper",
+        "dmr_twelve_leaf"
+      ]
+    },
+    {
+      "name": "dynamic_frame_caller_only",
+      "defines": [
+        "TEST_CASE=4"
+      ],
+      "functions": [
+        "dmr_dynamic_frame"
+      ],
+      "save_restore_functions": [
+        "dmr_dynamic_frame",
+        "dmr_control",
+        "dmr_helper",
+        "dmr_twelve_leaf"
+      ]
+    },
+    {
+      "name": "dynamic_frame_protected_leaf",
+      "defines": [
+        "TEST_CASE=4"
+      ],
+      "functions": [
+        "dmr_dynamic_frame",
+        "dmr_twelve_leaf"
+      ],
+      "save_restore_functions": [
+        "dmr_dynamic_frame",
+        "dmr_control",
+        "dmr_helper",
+        "dmr_twelve_leaf"
+      ]
+    },
+    {
+      "name": "realigned_frame_caller_only",
+      "defines": [
+        "TEST_CASE=5"
+      ],
+      "functions": [
+        "dmr_realigned_frame"
+      ],
+      "save_restore_functions": [
+        "dmr_realigned_frame",
+        "dmr_control",
+        "dmr_helper",
+        "dmr_twelve_leaf"
+      ]
+    },
+    {
+      "name": "realigned_frame_protected_leaf",
+      "defines": [
+        "TEST_CASE=5"
+      ],
+      "functions": [
+        "dmr_realigned_frame",
+        "dmr_twelve_leaf"
+      ],
+      "save_restore_functions": [
+        "dmr_realigned_frame",
+        "dmr_control",
+        "dmr_helper",
+        "dmr_twelve_leaf"
+      ],
+      "cfp_modes": [
+        "none",
+        "CFCSS",
+        "RASM",
+        "RACFED"
+      ]
+    },
+    {
+      "name": "repair_repeated_calls",
+      "defines": [
+        "TEST_CASE=2"
+      ],
+      "modes": [
+        "NZDC",
+        "NZDC+NEMESIS",
+        "NZDC+NEMESEC"
+      ],
+      "repair": true,
+      "functions": [
+        "dmr_repeated_calls"
+      ],
+      "save_restore_functions": [
+        "dmr_repeated_calls",
+        "dmr_control",
+        "dmr_helper",
+        "dmr_twelve_leaf"
+      ]
+    }
+  ]
+}
