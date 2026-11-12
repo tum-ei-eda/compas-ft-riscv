@@ -12,7 +12,7 @@ The transformation passes and shared helpers live in [src](../src/), with corres
 - `RISCVCfcss` and `RISCVRasm` implement control-flow protection, including RASM and RACFED.
 - `common` provides shared register, instruction and calling-convention helpers.
 
-LLVM backend integration belongs in the version-specific [patches](../patches/). The [cmake](../cmake/) directory provides consumer-project integration and RISC-V toolchain files. [tests/regression](../tests/regression/) holds functional regression cases and benchmark suites; [tests/apps](../tests/apps/) holds selected application tests, including [CRC](../tests/apps/crc/). Configuration parsing utilities live in [config_parser](../config_parser/). Register new pass sources in the root [CMakeLists.txt](../CMakeLists.txt).
+LLVM backend integration belongs in the version-specific [patches](../patches/). The [cmake](../cmake/) directory provides consumer-project integration and RISC-V toolchain files. [tests/regression](../tests/regression/) holds functional regression cases and benchmark suites; [tests/apps](../tests/apps/) holds selected application tests, including [CRC](../tests/apps/crc/). Register new pass sources in the root [CMakeLists.txt](../CMakeLists.txt).
 
 Use the C++ standard configured for the LLVM build, currently C++17 in [docker/.env](../docker/.env), and follow the LLVM style in [.clang-format](../.clang-format). Format changed code consistently with its surroundings. Keep assumptions about LLVM machine instructions, register aliases, relocations, CFG edges and pass ordering explicit. When adding an instruction or ISA extension, account for both primary and shadow operands, register widths, stack alignment and interactions with other enabled protection passes.
 

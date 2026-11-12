@@ -1,0 +1,31 @@
+= Clang object-generation regressions
+
+COMPAS also runs inside Clang's backend, where the standalone `llc` driver's
+command-line code-generation state is absent. These tests check both entry
+points rather than relying only on Clang emitting IR for a separate `llc`.
+
+The `identity` case compiles the minimal `unsigned identity(unsigned x)` C
+function directly to an object with `-O2 -ffreestanding` and no hardening flags.
+The `identity_ignored` case repeats it with EDDI selecting a different function.
+Both require a relocatable RISC-V ELF object of the selected architecture.
+
+The `direct` and `llc` cases compile the same two-file executable through direct
+Clang C-to-object generation and Clang IR-to-`llc` object generation, respectively.
+Each runs without hardening and with EDDI under both CGS and FGS. Compiler logs
+must confirm that EDDI ran on both selected functions with the intended schedule.
+Actual machine verification and literal arithmetic, stack-memory and cumulative global
+side-effect oracles must pass; the independently compiled identity function is
+also called with every input. Both RV32I/ILP32 and RV64I/LP64 run by default.
+
+[source,shell]
+----
+python3 tests/regression/clang_codegen/run.py \
+  --clang /path/to/compas/clang --llc /path/to/compas/llc \
+  --cc /path/to/riscv-none-elf-gcc --qemu '/path/to/qemu-riscv{bits}'
+----
+
+Use `--arch rv32`, `--case 'clang_codegen/identity*'`, `--mode EDDI`,
+`--schedule fgs`, `--build-dir` or `--list` to narrow the run. The driver reuses
+the shared runner's tool discovery, target settings, timeouts and command logs.
+It writes per-configuration results to `results.json`. CI runs this focused suite
+alongside the source-level regressions using the integrated Clang and `llc`.
