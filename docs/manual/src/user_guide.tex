@@ -67,20 +67,62 @@ options is provided in Table~\ref{tab:sihft-options}.
 The final step in code generation is to use \texttt{gcc} for RISCV architectures to assemble and link the
 assembly code for a particular RISCV processor.
 
+\subsubsection{Selective data and control-flow protection}
+DMR and CFP can select different functions. Pass the same function selections
+to each translation unit so that the compiler can prepare direct calls to
+protected functions even when their definitions are compiled separately.
+The \texttt{x5}/\texttt{x29} (\texttt{t0}/\texttt{t4}) pair can hold
+independent control-flow state rather than equal data values. Selective-call
+setup and balance checks exclude this pair when either endpoint owns CFP state.
+The CFP pass preserves the caller's actual signature state; an outer DMR
+restore must not replace that state with an earlier snapshot.
+
+NZDC's full-bank entry check also excludes \texttt{t0}/\texttt{t4} whenever
+any CFP selection is enabled, since a separately compiled callee cannot know
+whether its caller uses this pair for a signature. These caller-clobbered
+registers carry no formal ABI argument. Argument and result checks remain,
+as do ordinary DMR instruction and data checks within functions without CFP.
+
+\subsubsection{Inline assembly in EDDI functions}
+EDDI diagnoses nonempty or operand-bearing inline assembly in selected functions
+because its assembly text has no defined primary/shadow register or stack
+contract. Keep such helpers outside the EDDI selection and call them through
+the ordinary selective-call boundary. An empty compiler barrier with no
+register operands, such as \texttt{asm volatile ("" ::: "memory")}, remains
+supported. It is emitted once, after pending shadow instructions, and retains
+its compiler memory-ordering effect.
+
 \subsubsection{Stack pointer arguments}
 EDDI allocates separate primary and shadow stack frames. For call arguments
 derived from the current frame, the argument check compares the shadow address
-with the primary address plus the original frame size. The analysis follows
-register values across basic blocks and preserves value checks for scalar
-arguments loaded from stack memory. SWIFT uses one stack and checks its argument
-values directly. Both instruction schedules retain these checks.
+with the primary address plus the independently established frame separation,
+including padding required for stack realignment. Each variable-sized allocation
+has its own expected separation, which remains attached to its pointers across
+later allocations. The analysis follows register values across basic blocks and
+preserves value checks for scalar arguments loaded from stack memory. SWIFT uses
+one stack and checks its argument values directly. Both instruction schedules
+retain these checks.
 
 Address tracking covers copies and full-width addition and subtraction in integer
-registers. Mixed stack and non-stack provenance, or unsupported arithmetic on a
-tracked stack address, produces a compilation error at the affected call.
-Forwarding pointers from another EDDI frame, spilling pointer values to memory,
-and transporting pointer bits through floating-point registers require additional
-provenance tracking and remain unsupported by this analysis.
+registers, supported pointer merges, and exact full-word private spill slots.
+Ordinary pointer parameters passed in integer argument registers or full-word
+ABI stack slots retain an immutable incoming separation when forwarded through
+other EDDI functions. Each stack formal is identified by its actual ABI offset,
+including when wide scalar arguments change its location between RV32 and RV64.
+Entry capture reads the primary and shadow argument banks independently.
+Checks use the propagated expectation rather than measuring the pointer pair
+being checked. Indirect or by-value pointer parameters,
+pointer returns, arbitrary memory reloads, and pointer bits transported
+through floating-point registers remain outside this tracking contract.
+
+Realigned variable-sized EDDI frames use \texttt{x6}/\texttt{x30}
+(\texttt{t1}/\texttt{t5}) as the primary/shadow base-pointer pair for aligned
+fixed locals. The stack pointers remain \texttt{x2}/\texttt{x9}, and the frame
+pointers remain \texttt{x8}/\texttt{x31}. EDDI reserves the base-pointer pair
+before register allocation and preserves both actual values in separate
+FP-relative slots around every returning call, including duplicated libcalls.
+These registers remain caller-clobbered under the ordinary ABI; the caller's
+instrumentation restores them before further fixed-frame accesses.
 
 Before a callee establishes its own frame pointer, the incoming \texttt{s0}
 and its shadow belong to the caller. EDDI preserves both independently in the
@@ -88,6 +130,45 @@ callee-saved spill slots, without requiring their values to be equal: they can
 point into separate caller frames whose size is unknown to the callee. The
 exception is identified from the saved-register spill metadata. Ordinary data
 stores, including values held in \texttt{s0}, retain their value checks.
+
+\subsubsection{EDDI tail-call boundaries}
+An ordinary caller invoking an EDDI callee must regain control to check the
+results and restore its saved context. Such direct calls are lowered as ordinary
+returning calls before frame layout, even when sibling-call optimization is
+enabled. LLVM supplies the call-preserved mask, actual ABI result registers and
+return operands, and the selective wrapper runs before the caller's epilogue.
+Balance checks retain the results and preserved state while excluding discarded
+caller-clobbered temporaries, which may hold distinct primary and shadow
+addresses. Calls marked \texttt{musttail} across this boundary are rejected
+because the required returning wrapper cannot preserve their tail-call contract.
+
+An EDDI caller passing pointer-typed arguments also retains a returning call,
+keeping its frame available for independently captured pointer expectations and
+selective-call context. This accepts inherited-pointer forwarding in tail
+position with sibling-call optimization enabled. The decision conservatively
+covers all outgoing pointer-typed arguments, including calls to ordinary
+helpers. Scalar calls between compatible protected functions remain eligible
+for tail-call optimization. Pointer calls marked \texttt{musttail} are rejected
+with an explicit diagnostic because they require a separate frame-lifetime
+contract.
+
+\subsubsection{Machine-instruction metadata}
+Indirect calls from protected functions declare the shadow arguments, results
+and convention inputs consumed by a compatible protected target. When the target
+protection is unknown, their preserved-register masks intersect the ordinary ABI
+with the caller's shadow convention. Possible clobbered shadow outputs are
+described explicitly, without claiming additional preservation. This metadata
+does not provide a runtime convention adapter: indirect targets must implement
+the caller's shadow convention.
+
+Ordinary EDDI duplicate loads and stores have independent unknown memory
+provenance in the original address space. They do not inherit the primary
+access's IR value, frame object, alias scopes, ranges, invariant or
+dereferenceability claims. Access types, effective alignment, volatility,
+non-temporal flags and atomic scope/order are retained. Incoming stack-argument
+loads keep their separate bank-aware address rewrite. Store loadbacks remain
+fresh loads with their own metadata. These metadata rules do not add support
+for otherwise unsupported atomic instruction patterns.
 
 \subsubsection{Example}
 For the sake of example, assume we want to protect the \texttt{crc} program from the MiBench suite. The

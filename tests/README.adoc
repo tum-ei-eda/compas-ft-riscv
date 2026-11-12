@@ -9,13 +9,13 @@ These tests check that programs retain their behavior when compiled through the 
 * link:run.py[run.py] discovers `suite.json` files below both directories and runs the shared build, execution and comparison flow.
 * link:regression/run.py[regression/run.py] and link:apps/run.py[apps/run.py] select their respective groups and accept the same options.
 
-The link:regression/stack_args/[stack argument cases] preserve the current failures associated with https://github.com/tum-ei-eda/compas-ft-riscv/issues/14[issue #14]. `mixed_pointer` is a functional-equivalence case, including the merge between a global pointer and a local stack pointer.
+The link:regression/stack_args/[stack argument cases] cover https://github.com/tum-ei-eda/compas-ft-riscv/issues/14[issue #14], including local and inherited pointers across calls, global/local pointer merges, loop-carried pointers and private spills. They run on RV32/RV64 with both schedules and enable machine-instruction verification.
 
 The link:regression/control_flow/README.adoc[control-flow suite] checks branch outcomes, joins, early returns, short-circuit side effects and loop boundaries against constant result tables. It runs on RV32 and RV64 with coarse-grained scheduling, all six DMR selections and all four CFP selections. Its manifest also enables LLVM machine-instruction verification.
 
 The link:regression/crc_control_flow/README.adoc[CRC control-flow suite] reuses the application CRC kernel in a freestanding wrapper. It checks negative, empty and positive lengths against fixed CRC literals on RV32 and RV64, including nested-loop exits, with the full hardening matrix and separate machine verifier.
 
-The link:regression/call_abi/README.adoc[call ABI suite] checks selective hardening across calls, nested and indirect calls, ten integer arguments, wide live values and stack alignment. It runs on RV32 and RV64 with coarse-grained scheduling, all six DMR selections and all four CFP selections. Its manifest also enables LLVM machine-instruction verification.
+The link:regression/call_abi/README.adoc[call ABI suite] checks selective hardening across calls, nested and indirect calls, ten integer arguments, wide live values and stack alignment. It runs on RV32 and RV64 with coarse-grained scheduling, all six DMR selections and all four CFP selections. EDDI converted-tail cases also enable sibling calls and fine-grained scheduling. Its manifest also enables LLVM machine-instruction verification.
 
 The link:regression/pc_relative/README.adoc[PC-relative suite] checks globals, array offsets and addresses retained across calls and branches with both `medlow` and `medany` code models. It disables relaxation to retain address-materialization instructions in the executable and enables the hardening matrix and separate machine verifier.
 
@@ -71,7 +71,7 @@ python3 tests/regression/run.py --case 'multi_function/*'
 python3 tests/regression/run.py --case 'hard_float/*'
 ----
 
-`--case` accepts a glob matching `suite/case`; quote it to prevent shell expansion. Repeat `--case`, `--arch`, `--mode`, `--schedule` or `--cfp` to select multiple values. Available DMR modes are `none`, `EDDI`, `SWIFT`, `NZDC`, `NZDC+NEMESIS` and `NZDC+NEMESEC`; schedules are coarse-grained (`cgs`) and fine-grained (`fgs`); control-flow selections are `none`, `CFCSS`, `RASM` and `RACFED`. Use `--mode none --cfp RASM`, for example, to check control-flow protection alone. `--functions` and `--cfp-functions` override manifest function selections with comma- or semicolon-separated lists. An explicit empty string passes an empty selection, allowing the selective-hardening combinations used by CI to be reproduced.
+`--case` accepts a glob matching `suite/case`; quote it to prevent shell expansion. Repeat `--case`, `--arch`, `--mode`, `--schedule` or `--cfp` to select multiple values. Available DMR modes are `none`, `EDDI`, `SWIFT`, `NZDC`, `NZDC+NEMESIS` and `NZDC+NEMESEC`; schedules are coarse-grained (`cgs`) and fine-grained (`fgs`); control-flow selections are `none`, `CFCSS`, `RASM` and `RACFED`. Use `--mode none --cfp RASM`, for example, to check control-flow protection alone. `--functions` and `--cfp-functions` override manifest function selections with comma- or semicolon-separated lists. An explicit empty string passes an empty selection, allowing the selective-hardening combinations used by CI to be reproduced. Manifests may select CFP independently through `cfp_functions`; when omitted, CFP follows the effective DMR function selection, including `--functions`. `--cfp-functions` always takes precedence. Listing cases shows both effective selections.
 
 Tool paths can also be supplied directly:
 
@@ -100,8 +100,10 @@ Freestanding cases can declare target settings at suite or case level:
 * `code_models` lists `medlow`, `medany` or both; the default is `["medlow"]`. Each model is a separate execution profile with its own unprotected reference.
 * `relax` defaults to `true`. Setting it to `false` disables relaxation in code generation and linking to preserve the address sequences being exercised.
 * `frame_pointer` defaults to `false`. Setting it to `true` passes `-fno-omit-frame-pointer` and `-mno-omit-leaf-frame-pointer` to the frontend, retaining frame pointers in callers and leaf functions. The link:regression/call_abi/suite.json[call ABI cases] use it to exercise frame-pointer preservation across calls.
+* `optimization` selects integer `1` (the default) or `2`, passing the same `-O1` or `-O2` level to the frontend and backend.
+* `sibling_calls` defaults to `false`. Setting it to `true` enables frontend sibling-call optimization. The converted-tail call ABI cases combine it with `optimization: 2`; ordinary cases retain `-fno-optimize-sibling-calls`.
 
-`--isa` and `--abi` override the manifest for a selected freestanding run. Repeating `--code-model` selects one or both models. The runner validates architecture/ISA/ABI compatibility and passes matching settings to the frontend, backend and GNU linker. Build directories and JSON results identify each ISA, ABI, code model, relaxation and frame-pointer selection. Known-failure signatures also match those settings, so changing a profile cannot reuse an allowance for a different one.
+`--isa` and `--abi` override the manifest for a selected freestanding run. Repeating `--code-model` selects one or both models. The runner validates architecture/ISA/ABI compatibility and passes matching settings to the frontend, backend and GNU linker. Build directories and JSON results identify each ISA, ABI, code model, relaxation, frame-pointer, optimization and sibling-call selection. Known-failure signatures also match those settings, so changing a profile cannot reuse an allowance for a different one.
 
 For example, the link:regression/hard_float/suite.json[hard-float manifest] restricts each case to its declared architecture and uses explicit FP ISA/ABI pairs. Listing cases shows these profiles without requiring any tools. CMake applications retain their project's toolchain configuration; these freestanding overrides do not apply to that adapter.
 
@@ -111,7 +113,50 @@ Freestanding cases compare the target exit value recorded in QEMU's syscall trac
 
 Known failures are declared explicitly in a manifest with the affected case, architecture, mode and schedule, an issue link, a reason and the observed target exit value. Only that matching runtime failure is `XFAIL`. A missing tool, a build failure, an invalid reference result or a different runtime failure still fails the run. When a known failure starts passing it is `XPASS`, which fails by default so that stale expectations are reviewed. `--allow-xpass` permits exploratory validation while updating the manifest.
 
-The stack argument manifest records failures in the current implementation. These expectations preserve visible evidence of the behavior; they do not claim fault-detection coverage. Remove or update an expectation when its underlying issue is fixed and the relevant configuration is verified.
+Known-failure expectations preserve visible evidence of functional behavior; they do not claim fault-detection coverage. Remove or update an expectation when its underlying issue is fixed and the relevant configuration is verified.
+
+Compile-diagnostic cases use `expected_build_diagnostic` to check an explicitly
+unsupported pattern, separately from known runtime failures. This freestanding
+field names one source from `sources`, the affected DMR `modes`, the selected
+`functions` that trigger rejection, and the literal diagnostic `message`.
+The expectation applies only when those modes and functions are selected;
+overriding the function selection to leave the helper unprotected instead runs
+the ordinary functional check. An unprotected reference must still execute and
+match its independent oracle. For example:
+
+[,json]
+----
+"expected_build_diagnostic": {
+  "source": "inline_asm.c",
+  "modes": ["EDDI"],
+  "functions": ["asm_opaque"],
+  "message": "COMPAS: inline assembly is unsupported in EDDI-protected function 'asm_opaque'"
+}
+----
+
+Only that source's `llc` stage may satisfy the expectation, with ordinary error
+status `1` and the matching diagnostic. Assertions, signals, unrelated build
+errors and missing tools remain `ERROR`. Unexpected acceptance is a failure.
+When machine verification is requested, the second `llc` invocation must reject
+the same pattern cleanly too; it does not establish verification of rejected
+code. Results identify these checks with `kind: "build_diagnostic"`, retain
+compiler logs, and omit them from `functional_counts`. They do not produce an
+executable or a runtime outcome. See link:regression/inline_asm/README.adoc[the
+inline-assembly cases] for rejection and supported-barrier examples.
+
+The link:regression/late_codegen/README.adoc[late code-generation suite] runs
+separately through `python3 tests/regression/late_codegen/run.py`. It reserves
+a large fixed area in machine IR before prologue/epilogue insertion, then checks
+the normal COMPAS pipeline with machine verification and an independent runtime
+oracle. This reaches preservation offsets that ordinary large C locals do not
+produce. CI runs it alongside the source-level regression suites.
+
+The link:regression/machine_metadata/README.adoc[machine-instruction metadata suite]
+runs separately through `python3 tests/regression/machine_metadata/run.py`. It
+checks indirect-call shadow arguments/results and conservative preserved masks,
+independent EDDI memory provenance, incoming stack arguments and store loadbacks.
+Real MIR operands, mask-consumer verifier probes and literal runtime oracles
+cover properties that fault-free execution alone cannot establish.
 
 Freestanding manifests can set `verify_machineinstrs: true` to compile each IR source a second time with `-verify-machineinstrs`. This extra compilation writes separate `.verify` logs and assembly; the normal build still runs so that a verifier defect does not hide functional evidence. A verifier failure makes the configuration an `ERROR` and the command exits nonzero, including when the runtime result matches a known failure. The JSON report retains `outcome`, `functional_status` and `verification` separately, and includes both overall `counts` and `functional_counts`.
 
@@ -145,7 +190,7 @@ Use `adapter: "freestanding"` for small C reproducers without a C library. For e
 
 The shared adapter supplies startup code and the build/run flow. Source paths and `stdout_file` paths are relative to the manifest directory. Establish the expected exit and output independently; comparing two builds with the same wrong result is insufficient.
 
-Suite-level `sources`, `functions`, `defines`, `expected` and target-profile fields can be overridden by individual cases. Multiple source files are compiled separately and linked together, as in the hard-float call-boundary tests. Use one source file for cases that must share a compiler pass instance, as in the multiple-function suite. Use `modes`, `cfp_modes` and `schedules` to declare the hardening matrix, and `verify_machineinstrs: true` to request the additional compiler check. The freestanding adapter currently uses `-O1` and disables sibling-call optimization; tail-call coverage needs further adapter configuration.
+Suite-level `sources`, `functions`, `cfp_functions`, `defines`, `expected` and target-profile fields can be overridden by individual cases. `functions` and optional `cfp_functions` are lists of strings, including an empty list for an explicit empty selection. Multiple source files are compiled separately and linked together, as in the hard-float call-boundary tests. Use one source file for cases that must share a compiler pass instance, as in the multiple-function suite. Use `modes`, `cfp_modes` and `schedules` to declare the hardening matrix, and `verify_machineinstrs: true` to request the additional compiler check. The freestanding adapter defaults to `-O1` with sibling-call optimization disabled; cases may explicitly select the `optimization` and `sibling_calls` target-profile fields described above.
 
 Use `adapter: "cmake"` for an application with a CMake project. The link:apps/crc/suite.json[CRC manifest] is the initial example: it declares the executable, ISA, protected functions and a case whose expected stdout comes from link:apps/crc/expected.stdout[expected.stdout]. Its CMake project uses the repository's `compas_source()` helper and accepts `DMR_MOD`, `DMR_FUNCTIONS`, `CFP_MOD`, `CFP_FUNCTIONS` and `COMPAS_FINE_GRAINED` from the runner.
 

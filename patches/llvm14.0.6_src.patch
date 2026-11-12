@@ -32,7 +32,7 @@ index 3e8e190eecc3..b4f06fa0e522 100644
 +        }
      }
    }
- 
+
 diff --git a/llvm/lib/Target/RISCV/CMakeLists.txt b/llvm/lib/Target/RISCV/CMakeLists.txt
 index 1e042147223a..3a6f301baf75 100644
 --- a/llvm/lib/Target/RISCV/CMakeLists.txt
@@ -40,7 +40,7 @@ index 1e042147223a..3a6f301baf75 100644
 @@ -56,6 +56,9 @@ add_llvm_target(RISCVCodeGen
    TransformUtils
    GlobalISel
- 
+
 +  LINK_LIBS
 +  Sihft
 +
@@ -58,11 +58,11 @@ index 03462240fd93..2871c621c8c6 100644
 +++ b/llvm/lib/Target/RISCV/RISCV.h
 @@ -15,8 +15,39 @@
  #define LLVM_LIB_TARGET_RISCV_RISCV_H
- 
+
  #include "MCTargetDesc/RISCVBaseInfo.h"
 +#include "llvm/Support/CommandLine.h"
  #include "llvm/Target/TargetMachine.h"
- 
+
 +namespace llvm::cl {
 +inline opt<bool> reserve_rf{"RRF", desc("reserve half of RegFiles"),
 +                            value_desc("pass")};
@@ -96,7 +96,7 @@ index 03462240fd93..2871c621c8c6 100644
  namespace llvm {
  class RISCVRegisterBankInfo;
  class RISCVSubtarget;
-@@ -58,6 +89,15 @@ void initializeRISCVInsertVSETVLIPass(PassRegistry &);
+@@ -58,6 +89,16 @@ void initializeRISCVInsertVSETVLIPass(PassRegistry &);
  InstructionSelector *createRISCVInstructionSelector(const RISCVTargetMachine &,
                                                      RISCVSubtarget &,
                                                      RISCVRegisterBankInfo &);
@@ -107,12 +107,72 @@ index 03462240fd93..2871c621c8c6 100644
 +FunctionPass *createRISCVRasm();
 +FunctionPass *createRISCVRacfed();
 +FunctionPass *createRISCVDmr();
++FunctionPass *createRISCVCompasHardening();
 +FunctionPass *createRISCVPrepareCallFrame();
 +class MachineFunction;
 +void reserveRISCVCompasCallFrame(MachineFunction &);
 +} // namespace llvm
- 
+
  #endif
+diff --git a/llvm/lib/Target/RISCV/RISCVExpandPseudoInsts.cpp b/llvm/lib/Target/RISCV/RISCVExpandPseudoInsts.cpp
+--- a/llvm/lib/Target/RISCV/RISCVExpandPseudoInsts.cpp
++++ b/llvm/lib/Target/RISCV/RISCVExpandPseudoInsts.cpp
+@@ -19,6 +19,7 @@
+ #include "llvm/CodeGen/LivePhysRegs.h"
+ #include "llvm/CodeGen/MachineFunctionPass.h"
+ #include "llvm/CodeGen/MachineInstrBuilder.h"
++#include "llvm/MC/MCContext.h"
+
+ using namespace llvm;
+
+@@ -166,32 +167,21 @@
+   Register DestReg = MI.getOperand(0).getReg();
+   const MachineOperand &Symbol = MI.getOperand(1);
+
+-  MachineBasicBlock *NewMBB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
+-
+-  // Tell AsmPrinter that we unconditionally want the symbol of this label to be
+-  // emitted.
+-  NewMBB->setLabelMustBeEmitted();
+-
+-  MF->insert(++MBB.getIterator(), NewMBB);
+-
+-  BuildMI(NewMBB, DL, TII->get(RISCV::AUIPC), DestReg)
+-      .addDisp(Symbol, 0, FlagsHi);
+-  BuildMI(NewMBB, DL, TII->get(SecondOpcode), DestReg)
+-      .addReg(DestReg)
+-      .addMBB(NewMBB, RISCVII::MO_PCREL_LO);
+-
+-  // Move all the rest of the instructions to NewMBB.
+-  NewMBB->splice(NewMBB->end(), &MBB, std::next(MBBI), MBB.end());
+-  // Update machine-CFG edges.
+-  NewMBB->transferSuccessorsAndUpdatePHIs(&MBB);
+-  // Make the original basic block fall-through to the new.
+-  MBB.addSuccessor(NewMBB);
+-
+-  // Make sure live-ins are correctly attached to this new basic block.
+-  LivePhysRegs LiveRegs;
+-  computeAndAddLiveIns(LiveRegs, *NewMBB);
+-
+-  NextMBBI = MBB.end();
++  // Keep the anchor on the AUIPC instruction so later instrumentation can
++  // insert code before it without changing the PC-relative relocation base.
++  MCSymbol *AUIPCSymbol = MF->getContext().createTempSymbol("pcrel_hi");
++  MachineInstr *MIAUIPC =
++      BuildMI(MBB, MBBI, DL, TII->get(RISCV::AUIPC), DestReg)
++          .addDisp(Symbol, 0, FlagsHi);
++  MIAUIPC->setPreInstrSymbol(*MF, AUIPCSymbol);
++  MachineInstr *SecondMI =
++      BuildMI(MBB, MBBI, DL, TII->get(SecondOpcode), DestReg)
++          .addReg(DestReg)
++          .addSym(AUIPCSymbol, RISCVII::MO_PCREL_LO);
++
++  if (MI.hasOneMemOperand())
++    SecondMI->addMemOperand(*MF, *MI.memoperands_begin());
++
+   MI.eraseFromParent();
+   return true;
+ }
 diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp b/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp
 --- a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp
 +++ b/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp
@@ -124,7 +184,54 @@ diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp b/llvm/lib/Target/RISC
  #include "RISCVMachineFunctionInfo.h"
  #include "RISCVSubtarget.h"
  #include "llvm/CodeGen/MachineFrameInfo.h"
-@@ -899,6 +900,7 @@
+@@ -247,6 +248,14 @@
+          TRI->hasStackRealignment(MF);
+ }
+
++Register RISCVFrameLowering::getBPReg(const MachineFunction &MF) const {
++  // EDDI owns s1 as its shadow SP. Its aligned fixed frame uses the
++  // caller-owned t1/t5 pair, which COMPAS preserves across returning calls.
++  if (riscv_common::inCSString(cl::enable_eddi, MF.getName().str()))
++    return RISCV::X6;
++  return RISCVABI::getBPReg();
++}
++
+ // Determines the size of the frame and maximum call frame size.
+ void RISCVFrameLowering::determineFrameLayout(MachineFunction &MF) const {
+   MachineFrameInfo &MFI = MF.getFrameInfo();
+@@ -352,7 +361,7 @@
+
+   Register FPReg = getFPReg(STI);
+   Register SPReg = getSPReg(STI);
+-  Register BPReg = RISCVABI::getBPReg();
++  Register BPReg = getBPReg(MF);
+
+   // Debug location must be unknown since the first debug location is used
+   // to determine the end of the prologue.
+@@ -672,7 +681,7 @@
+     // SP to be restored, so we need another base register to record the stack
+     // after realignment.
+     if (hasBP(MF)) {
+-      FrameReg = RISCVABI::getBPReg();
++      FrameReg = getBPReg(MF);
+       // |--------------------------| -- <-- FP
+       // | callee-allocated save    | | <----|
+       // | area for register varargs| |      |
+@@ -821,9 +830,11 @@
+     SavedRegs.set(RISCV::X1);
+     SavedRegs.set(RISCV::X8);
+   }
+-  // Mark BP as used if function has dedicated base pointer.
++  // Mark BP as used if function has dedicated base pointer. EDDI's t1 is
++  // caller-owned and absent from the ordinary ABI save list; COMPAS preserves
++  // it and its shadow at each returning call instead of adding an ABI promise.
+   if (hasBP(MF))
+-    SavedRegs.set(RISCVABI::getBPReg());
++    SavedRegs.set(getBPReg(MF));
+
+   // If interrupt is enabled and there are calls in the handler,
+   // unconditionally save all Caller-saved registers and
+@@ -899,6 +910,7 @@
 
  void RISCVFrameLowering::processFunctionBeforeFrameFinalized(
      MachineFunction &MF, RegScavenger *RS) const {
@@ -132,10 +239,199 @@ diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp b/llvm/lib/Target/RISC
    const RISCVRegisterInfo *RegInfo =
        MF.getSubtarget<RISCVSubtarget>().getRegisterInfo();
    MachineFrameInfo &MFI = MF.getFrameInfo();
+@@ -1002,6 +1014,17 @@
+       // Ensure the stack remains aligned after adjustment.
+       Amount = alignSPAdjust(Amount);
+
++      if (MF.getFrameInfo().hasVarSizedObjects() &&
++          riscv_common::inCSString(cl::enable_eddi, MF.getName().str())) {
++        // A dynamic EDDI caller needs two outgoing argument banks below its
++        // current allocations. Preserve their boundaries for late expansion.
++        const unsigned Opcode = MI->getOpcode() == RISCV::ADJCALLSTACKDOWN
++                                    ? RISCV::COMPAS_CALLDOWN
++                                    : RISCV::COMPAS_CALLUP;
++        BuildMI(MBB, MI, DL, MF.getSubtarget().getInstrInfo()->get(Opcode))
++            .addImm(Amount);
++        return MBB.erase(MI);
++      }
+       if (MI->getOpcode() == RISCV::ADJCALLSTACKDOWN)
+         Amount = -Amount;
+
+diff --git a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp b/llvm/lib/Target/RISCV/RISCVISelLowering.cpp
+--- a/llvm/lib/Target/RISCV/RISCVISelLowering.cpp
++++ b/llvm/lib/Target/RISCV/RISCVISelLowering.cpp
+@@ -18,6 +18,7 @@
+ #include "RISCVRegisterInfo.h"
+ #include "RISCVSubtarget.h"
+ #include "RISCVTargetMachine.h"
++#include "compas-ft-riscv/include/common.h"
+ #include "llvm/ADT/SmallSet.h"
+ #include "llvm/ADT/Statistic.h"
+ #include "llvm/Analysis/MemoryLocation.h"
+@@ -26,6 +27,7 @@
+ #include "llvm/CodeGen/MachineInstrBuilder.h"
+ #include "llvm/CodeGen/MachineJumpTableInfo.h"
+ #include "llvm/CodeGen/MachineRegisterInfo.h"
++#include "llvm/CodeGen/TargetFrameLowering.h"
+ #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
+ #include "llvm/CodeGen/ValueTypes.h"
+ #include "llvm/IR/DiagnosticInfo.h"
+@@ -174,7 +176,7 @@
+     setLoadExtAction(N, XLenVT, MVT::i1, Promote);
+
+   // TODO: add all necessary setOperationAction calls.
+-  setOperationAction(ISD::DYNAMIC_STACKALLOC, XLenVT, Expand);
++  setOperationAction(ISD::DYNAMIC_STACKALLOC, XLenVT, Custom);
+
+   setOperationAction(ISD::BR_JT, MVT::Other, Expand);
+   setOperationAction(ISD::BR_CC, XLenVT, Expand);
+@@ -2880,6 +2882,31 @@
+ SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
+                                             SelectionDAG &DAG) const {
+   switch (Op.getOpcode()) {
++  case ISD::DYNAMIC_STACKALLOC: {
++    MachineFunction &MF = DAG.getMachineFunction();
++    if (!riscv_common::inCSString(cl::enable_eddi, MF.getName().str()))
++      return SDValue(); // Retain generic expansion outside EDDI.
++    SDLoc DL(Op);
++    EVT VT = Op.getValueType();
++    const uint64_t Alignment = std::max(
++        DAG.getSubtarget().getFrameLowering()->getStackAlign().value(),
++        cast<ConstantSDNode>(Op.getOperand(2))->getZExtValue());
++    // Both halves require the requested alignment, even when it exceeds the
++    // ordinary stack alignment. COMPAS retains it for aligning each base.
++    SDValue Size = DAG.getNode(ISD::ADD, DL, VT, Op.getOperand(1),
++                               DAG.getConstant(Alignment - 1, DL, VT));
++    Size = DAG.getNode(ISD::AND, DL, VT, Size,
++                       DAG.getConstant(-Alignment, DL, VT));
++    SDValue Chain = DAG.getCALLSEQ_START(Op.getOperand(0), 0, 0, DL);
++    SDValue Operands[] = {Size, DAG.getTargetConstant(Alignment, DL, VT),
++                          Chain};
++    SDNode *Allocation = DAG.getMachineNode(
++        RISCV::COMPAS_DYNALLOC, DL, DAG.getVTList(VT, MVT::Other), Operands);
++    Chain = DAG.getCALLSEQ_END(
++        SDValue(Allocation, 1), DAG.getIntPtrConstant(0, DL, true),
++        DAG.getIntPtrConstant(0, DL, true), SDValue(), DL);
++    return DAG.getMergeValues({SDValue(Allocation, 0), Chain}, DL);
++  }
+   default:
+     report_fatal_error("unimplemented operand");
+   case ISD::GlobalAddress:
+@@ -9487,6 +9514,35 @@
+                      CallConv == CallingConv::Fast ? CC_RISCV_FastCC
+                                                    : CC_RISCV);
+
++  // Record pointer locations while the calling convention still identifies
++  // each lowered value's original IR argument. Physical argument positions
++  // cannot be inferred from IR indices after wide or hard-float arguments.
++  auto *CompasInfo = MF.getInfo<RISCVMachineFunctionInfo>();
++  for (const CCValAssign &VA : ArgLocs) {
++    const auto &Input = Ins[VA.getValNo()];
++    if (!Input.isOrigArg())
++      continue;
++    const Argument &Arg = *Func.getArg(Input.OrigArgIndex);
++    if (!Arg.getType()->isPointerTy())
++      continue;
++    const bool OrdinaryPointer =
++        CallConv == CallingConv::C && Input.PartOffset == 0 &&
++        !Input.Flags.isByVal() && !Input.Flags.isByRef() &&
++        !Input.Flags.isInAlloca() &&
++        VA.getLocInfo() == CCValAssign::Full && VA.getValVT() == XLenVT &&
++        VA.getLocVT() == XLenVT &&
++        DAG.getDataLayout().getPointerSizeInBits(
++            Arg.getType()->getPointerAddressSpace()) == Subtarget.getXLen();
++    if (OrdinaryPointer && VA.isRegLoc() &&
++        VA.getLocReg() >= RISCV::X10 && VA.getLocReg() <= RISCV::X17)
++      CompasInfo->addCompasIncomingPointerReg(VA.getLocReg());
++    else if (OrdinaryPointer && VA.isMemLoc() &&
++             VA.getLocMemOffset() >= 0)
++      CompasInfo->addCompasIncomingStackPointerOffset(VA.getLocMemOffset());
++    else
++      CompasInfo->setCompasUnsupportedPointerArgs();
++  }
++
+   for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i) {
+     CCValAssign &VA = ArgLocs[i];
+     SDValue ArgValue;
+@@ -9699,13 +9755,46 @@
+                       CallConv == CallingConv::Fast ? CC_RISCV_FastCC
+                                                     : CC_RISCV);
+
++  // An ordinary caller needs a returning wrapper around an EDDI callee.
++  // An EDDI caller may also need its frame's pointer deltas while checking
++  // outgoing arguments. Keep that frame for every pointer-typed argument;
++  // physical argument positions no longer retain the original IR types.
++  // Decide here so LLVM retains exact results, call masks and context slots.
++  bool CompasPointerArgs = false;
++  if (IsTailCall &&
++      riscv_common::inCSString(cl::enable_eddi, MF.getName().str()))
++    for (const auto &Arg : CLI.getArgs())
++      CompasPointerArgs |= Arg.Ty->isPointerTy();
++  const auto *CompasCallee = dyn_cast<GlobalAddressSDNode>(Callee);
++  const bool CompasSelectiveBoundary =
++      CompasCallee &&
++      riscv_common::inCSString(cl::enable_eddi,
++                              CompasCallee->getGlobal()->getName().str()) &&
++      !riscv_common::isDmrFunction(MF.getName().str());
++  const bool CompasReturningCall =
++      IsTailCall && (CompasPointerArgs || CompasSelectiveBoundary);
++  if (CompasReturningCall) {
++    if (CLI.CB && CLI.CB->isMustTailCall()) {
++      MF.getFunction().getContext().diagnose(DiagnosticInfoUnsupported{
++          MF.getFunction(),
++          CompasPointerArgs
++              ? "COMPAS: musttail calls with EDDI pointer arguments require a "
++                "returning call"
++              : "COMPAS: musttail calls across selective EDDI boundaries are "
++                "unsupported"});
++    }
++    // Continue lowering rejected musttail IR with valid frame semantics.
++    // The diagnostic above makes compilation fail without a later crash.
++    IsTailCall = false;
++  }
++
+   // Check if it's really possible to do a tail call.
+   if (IsTailCall)
+     IsTailCall = isEligibleForTailCallOptimization(ArgCCInfo, CLI, MF, ArgLocs);
+
+   if (IsTailCall)
+     ++NumTailCalls;
+-  else if (CLI.CB && CLI.CB->isMustTailCall())
++  else if (CLI.CB && CLI.CB->isMustTailCall() && !CompasReturningCall)
+     report_fatal_error("failed to perform tail call elimination on a call "
+                        "site marked musttail");
+
+diff --git a/llvm/lib/Target/RISCV/RISCVMCInstLower.cpp b/llvm/lib/Target/RISCV/RISCVMCInstLower.cpp
+--- a/llvm/lib/Target/RISCV/RISCVMCInstLower.cpp
++++ b/llvm/lib/Target/RISCV/RISCVMCInstLower.cpp
+@@ -125,6 +125,9 @@
+   case MachineOperand::MO_JumpTableIndex:
+     MCOp = lowerSymbolOperand(MO, AP.GetJTISymbol(MO.getIndex()), AP);
+     break;
++  case MachineOperand::MO_MCSymbol:
++    MCOp = lowerSymbolOperand(MO, MO.getMCSymbol(), AP);
++    break;
+   }
+   return true;
+ }
 diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
 --- a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
 +++ b/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h
-@@ -48,6 +48,10 @@
+@@ -14,9 +14,13 @@
+ #define LLVM_LIB_TARGET_RISCV_RISCVMACHINEFUNCTIONINFO_H
+
+ #include "RISCVSubtarget.h"
++#include "llvm/ADT/ArrayRef.h"
++#include "llvm/ADT/SmallVector.h"
++#include "llvm/MC/MCRegister.h"
+ #include "llvm/CodeGen/MIRYamlMapping.h"
+ #include "llvm/CodeGen/MachineFrameInfo.h"
+ #include "llvm/CodeGen/MachineFunction.h"
++#include <cstdint>
+
+ namespace llvm {
+
+@@ -48,6 +52,19 @@
  private:
    /// FrameIndex for start of varargs area
    int VarArgsFrameIndex = 0;
@@ -143,10 +439,19 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/
 +  int CompasSignatureFrameIndex = 0;
 +  /// Fixed slot for ordinary selective DMR call preservation.
 +  int CompasDmrCallFrameIndex = 0;
++  /// Caller shadow SP used by EDDI incoming stack-argument loads.
++  int CompasIncomingShadowSPFrameIndex = 0;
++  /// Physical locations of ordinary full-width incoming pointer arguments.
++  SmallVector<MCPhysReg, 4> CompasIncomingPointerRegs;
++  /// Incoming-SP-relative locations of ordinary full-width pointers.
++  SmallVector<int64_t, 4> CompasIncomingStackPointerOffsets;
++  /// One XLEN delta per incoming register, then stack pointer formal.
++  int CompasPointerDeltaFrameIndex = 0;
++  bool CompasUnsupportedPointerArgs = false;
    /// Size of the save area used for varargs
    int VarArgsSaveSize = 0;
    /// FrameIndex used for transferring values between 64-bit FPRs and a pair
-@@ -67,6 +71,11 @@
+@@ -67,6 +84,47 @@
 
    int getVarArgsFrameIndex() const { return VarArgsFrameIndex; }
    void setVarArgsFrameIndex(int Index) { VarArgsFrameIndex = Index; }
@@ -155,17 +460,62 @@ diff --git a/llvm/lib/Target/RISCV/RISCVMachineFunctionInfo.h b/llvm/lib/Target/
 +  void setCompasSignatureFrameIndex(int Index) { CompasSignatureFrameIndex = Index; }
 +  int getCompasDmrCallFrameIndex() const { return CompasDmrCallFrameIndex; }
 +  void setCompasDmrCallFrameIndex(int Index) { CompasDmrCallFrameIndex = Index; }
++  int getCompasIncomingShadowSPFrameIndex() const {
++    return CompasIncomingShadowSPFrameIndex;
++  }
++  void setCompasIncomingShadowSPFrameIndex(int Index) {
++    CompasIncomingShadowSPFrameIndex = Index;
++  }
++  ArrayRef<MCPhysReg> getCompasIncomingPointerRegs() const {
++    return CompasIncomingPointerRegs;
++  }
++  void addCompasIncomingPointerReg(MCPhysReg Reg) {
++    for (MCPhysReg Existing : CompasIncomingPointerRegs)
++      if (Existing == Reg)
++        return;
++    CompasIncomingPointerRegs.push_back(Reg);
++  }
++  ArrayRef<int64_t> getCompasIncomingStackPointerOffsets() const {
++    return CompasIncomingStackPointerOffsets;
++  }
++  void addCompasIncomingStackPointerOffset(int64_t Offset) {
++    for (int64_t Existing : CompasIncomingStackPointerOffsets)
++      if (Existing == Offset)
++        return;
++    CompasIncomingStackPointerOffsets.push_back(Offset);
++  }
++  int getCompasPointerDeltaFrameIndex() const {
++    return CompasPointerDeltaFrameIndex;
++  }
++  void setCompasPointerDeltaFrameIndex(int Index) {
++    CompasPointerDeltaFrameIndex = Index;
++  }
++  bool hasCompasUnsupportedPointerArgs() const {
++    return CompasUnsupportedPointerArgs;
++  }
++  void setCompasUnsupportedPointerArgs(bool Unsupported = true) {
++    CompasUnsupportedPointerArgs = Unsupported;
++  }
 
    unsigned getVarArgsSaveSize() const { return VarArgsSaveSize; }
    void setVarArgsSaveSize(int Size) { VarArgsSaveSize = Size; }
 diff --git a/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp b/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
-index 35363bf37c0d..d8c137c7d6ad 100644
 --- a/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
 +++ b/llvm/lib/Target/RISCV/RISCVRegisterInfo.cpp
-@@ -106,6 +106,103 @@ BitVector RISCVRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
+@@ -94,7 +94,7 @@
+   // Reserve the base register if we need to realign the stack and allocate
+   // variable-sized objects at runtime.
+   if (TFI->hasBP(MF))
+-    markSuperRegs(Reserved, RISCVABI::getBPReg()); // bp
++    markSuperRegs(Reserved, TFI->getBPReg(MF)); // bp
+
+   // V registers for code generation. We handle them manually.
+   markSuperRegs(Reserved, RISCV::VL);
+@@ -105,6 +105,103 @@
+   // Floating point environment registers.
    markSuperRegs(Reserved, RISCV::FRM);
    markSuperRegs(Reserved, RISCV::FFLAGS);
- 
++
 +  if (riscv_common::inCSString(llvm::cl::enable_cfcss,
 +                               std::string{MF.getName()}) ||
 +      riscv_common::inCSString(llvm::cl::enable_rasm,
@@ -262,26 +612,22 @@ index 35363bf37c0d..d8c137c7d6ad 100644
 +    markSuperRegs(Reserved, RISCV::F30_H);
 +    markSuperRegs(Reserved, RISCV::F31_H);
 +  }
-+
+
    assert(checkAllSuperRegsMarked(Reserved));
    return Reserved;
- }
 diff --git a/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp b/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
 --- a/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
 +++ b/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
-@@ -197,6 +197,11 @@
+@@ -197,6 +197,8 @@
    // possibility for other passes to break the requirements for forward
    // progress in the LR/SC block.
    addPass(createRISCVExpandAtomicPseudoPass());
 +
-+  addPass(createRISCVDmr());
-+  addPass(createRISCVCfcss());
-+  addPass(createRISCVRasm());
-+  addPass(createRISCVRacfed());
++  addPass(createRISCVCompasHardening());
  }
 
  void RISCVPassConfig::addMachineSSAOptimization() {
-@@ -207,6 +212,7 @@
+@@ -207,6 +209,7 @@
  }
 
  void RISCVPassConfig::addPreRegAlloc() {
@@ -289,3 +635,35 @@ diff --git a/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp b/llvm/lib/Target/RISC
    if (TM->getOptLevel() != CodeGenOpt::None)
      addPass(createRISCVMergeBaseOffsetOptPass());
    addPass(createRISCVInsertVSETVLIPass());
+diff --git a/llvm/lib/Target/RISCV/RISCVInstrInfo.td b/llvm/lib/Target/RISCV/RISCVInstrInfo.td
+--- a/llvm/lib/Target/RISCV/RISCVInstrInfo.td
++++ b/llvm/lib/Target/RISCV/RISCVInstrInfo.td
+@@ -1392,6 +1392,16 @@
+ }
+ /// Other pseudo-instructions
+
++// Keep dynamic EDDI allocation/call-area semantics until COMPAS expands the
++// paired intervals after register allocation and frame-index elimination.
++let Defs = [X2], Uses = [X2], hasSideEffects = 1,
++    mayLoad = 0, mayStore = 0, hasNoSchedulingInfo = 1 in {
++def COMPAS_DYNALLOC : Pseudo<(outs GPR:$dst),
++                            (ins GPR:$size, ixlenimm:$alignment), []>;
++def COMPAS_CALLDOWN : Pseudo<(outs), (ins ixlenimm:$amount), []>;
++def COMPAS_CALLUP : Pseudo<(outs), (ins ixlenimm:$amount), []>;
++}
++
+ // Pessimistically assume the stack pointer will be clobbered
+ let Defs = [X2], Uses = [X2] in {
+ def ADJCALLSTACKDOWN : Pseudo<(outs), (ins i32imm:$amt1, i32imm:$amt2),
+diff --git a/llvm/lib/Target/RISCV/RISCVFrameLowering.h b/llvm/lib/Target/RISCV/RISCVFrameLowering.h
+--- a/llvm/lib/Target/RISCV/RISCVFrameLowering.h
++++ b/llvm/lib/Target/RISCV/RISCVFrameLowering.h
+@@ -43,6 +43,8 @@
+
+   bool hasBP(const MachineFunction &MF) const;
+
++  Register getBPReg(const MachineFunction &MF) const;
++
+   bool hasReservedCallFrame(const MachineFunction &MF) const override;
+   MachineBasicBlock::iterator
+   eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,

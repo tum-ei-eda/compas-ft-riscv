@@ -41,8 +41,12 @@ bases remain live through the second join.
 
 The default matrix covers RV32 and RV64 with both `medlow` and `medany` code
 models. The `medany` builds exercise AUIPC/PC-relative low-part address pairs;
-`medlow` provides coverage of the alternative global address lowering. Builds
-disable linker relaxation so the final executable retains the address
+`medlow` provides coverage of the alternative global address lowering.
+The `%pcrel_lo` label must identify its matching `AUIPC` instruction, including
+when frame or signature instructions precede it in the same basic block.
+Primary and shadow materializations use separate instruction anchors and produce
+equal complete addresses before comparisons; their raw AUIPC values can differ.
+Builds disable linker relaxation so the final executable retains the address
 materialization being checked rather than replacing it with a GP-relative load.
 Every supported data-flow/control-flow protection combination uses coarse-grained
 scheduling. Machine-instruction verification runs separately from functional

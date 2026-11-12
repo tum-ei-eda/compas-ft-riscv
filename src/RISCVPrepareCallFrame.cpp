@@ -21,6 +21,8 @@
 #include "common.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/MachineMemOperand.h"
+#include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
@@ -63,19 +65,57 @@ bool needs_dmr_frame(const llvm::MachineFunction &MF) {
   return false;
 }
 
+bool needs_incoming_shadow_sp(const llvm::MachineFunction &MF) {
+  if (!riscv_common::inCSString(llvm::cl::enable_eddi,
+                                std::string{MF.getName()}))
+    return false;
+
+  const auto &frame = MF.getFrameInfo();
+  for (const auto &MBB : MF)
+    for (const auto &MI : MBB) {
+      if (!MI.mayLoad())
+        continue;
+      for (const auto *memory : MI.memoperands()) {
+        if (!memory->isLoad())
+          continue;
+        const auto *slot =
+            llvm::dyn_cast_or_null<llvm::FixedStackPseudoSourceValue>(
+                memory->getPseudoValue());
+        // Formal stack arguments live at or above incoming SP. Negative
+        // fixed objects also include register-varargs saves and CSI slots.
+        if (slot && frame.isFixedObjectIndex(slot->getFrameIndex()) &&
+            frame.getObjectOffset(slot->getFrameIndex()) >= 0)
+          return true;
+      }
+    }
+  return false;
+}
+
+bool needs_pointer_deltas(const llvm::MachineFunction &MF) {
+  return riscv_common::inCSString(llvm::cl::enable_eddi,
+                                  std::string{MF.getName()}) &&
+         (riscv_common::incomingPointerDeltaSlots(MF) ||
+          riscv_common::usesPointerProvenance(MF));
+}
+
 unsigned dmr_frame_size(const llvm::MachineFunction &MF) {
   const auto &subtarget = MF.getSubtarget<llvm::RISCVSubtarget>();
   const unsigned word_size = subtarget.is64Bit() ? 8 : 4;
-  if (riscv_common::isDmrFunction(std::string{MF.getName()}))
-    // SCC2 saves only the integer caller-clobbered register set. Leave one
-    // additional word in its upper bound without reserving an unused FP bank.
-    return llvm::alignTo(18 * word_size, 16);
-  // SCC1 can preserve sixteen live shadow GPRs and sixteen physical FPRs.
-  // FP aliases consume one slot with the enabled FLEN, matching spill_frame.
-  unsigned size = 16 * word_size;
+  // SCC1 preserves live shadow registers; SCC2 preserves caller-clobbered
+  // shadows around an ordinary ABI call. A narrower ABI can clobber the full
+  // hardware FP view even when it preserves a subregister. Allow sixteen
+  // physical FP slots and deduplicate aliases as spill_frame does.
+  unsigned size =
+      (riscv_common::isDmrFunction(std::string{MF.getName()}) ? 18 : 16) *
+      word_size;
   if (subtarget.hasStdExtF())
     size += 16 * std::max(word_size, subtarget.hasStdExtD() ? 8u : 4u);
-  return llvm::alignTo(size, 16);
+  // A protected caller can duplicate a libcall. Its outer monitor snapshot
+  // and the first call's ABI arguments/results must remain independent.
+  return llvm::alignTo(size, 16) +
+         (riscv_common::isDmrFunction(std::string{MF.getName()})
+              ? riscv_common::kLibcallResultFrameSize
+              : 0);
 }
 
 class RISCVPrepareCallFrame : public llvm::MachineFunctionPass {
@@ -89,13 +129,15 @@ public:
   }
 
   bool runOnMachineFunction(llvm::MachineFunction &MF) override {
-    if (!needs_signature_frame(MF) && !needs_dmr_frame(MF))
+    if (!needs_signature_frame(MF) && !needs_dmr_frame(MF) &&
+        !needs_incoming_shadow_sp(MF) && !needs_pointer_deltas(MF))
       return false;
     auto &frame = MF.getFrameInfo();
     if (frame.isFrameAddressTaken())
       return false;
-    // Reserve a stable base before register allocation. Both signature state
-    // and selective DMR call context receive fixed slots after CSI assignment.
+    // Reserve a stable base before register allocation. Signature state,
+    // selective-call context and EDDI's incoming pointer state receive fixed
+    // slots after CSI assignment.
     frame.setFrameAddressIsTaken(true);
     return true;
   }
@@ -120,7 +162,12 @@ void llvm::reserveRISCVCompasCallFrame(llvm::MachineFunction &MF) {
       info->getCompasSignatureFrameIndex() >= 0 && needs_signature_frame(MF);
   const bool dmr_frame =
       info->getCompasDmrCallFrameIndex() >= 0 && needs_dmr_frame(MF);
-  if (!signature_frame && !dmr_frame)
+  const bool incoming_shadow_sp =
+      info->getCompasIncomingShadowSPFrameIndex() >= 0 &&
+      needs_incoming_shadow_sp(MF);
+  const bool pointer_deltas =
+      info->getCompasPointerDeltaFrameIndex() >= 0 && needs_pointer_deltas(MF);
+  if (!signature_frame && !dmr_frame && !incoming_shadow_sp && !pointer_deltas)
     return;
 
   auto &frame = MF.getFrameInfo();
@@ -162,4 +209,16 @@ void llvm::reserveRISCVCompasCallFrame(llvm::MachineFunction &MF) {
             : word_size;
     info->setCompasDmrCallFrameIndex(reserve(dmr_frame_size(MF), alignment));
   }
+  if (incoming_shadow_sp)
+    // Keep the caller's argument bank distinct from this callee's shadow
+    // frame, even when nested calls overwrite the live shadow SP.
+    info->setCompasIncomingShadowSPFrameIndex(reserve(word_size, word_size));
+  if (pointer_deltas)
+    // Each formal pointer can address a different caller bank. Preserve one
+    // independent shadow-minus-primary relation for each register/stack formal,
+    // a capture scratch word, then mutable per-location expectations.
+    info->setCompasPointerDeltaFrameIndex(reserve(
+        word_size * (riscv_common::incomingPointerDeltaSlots(MF) +
+                     riscv_common::pointerProvenanceSlots(MF)),
+        word_size));
 }

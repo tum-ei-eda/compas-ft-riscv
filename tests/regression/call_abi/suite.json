@@ -10,6 +10,63 @@
   "expected": {"exit": 42, "stdout": ""},
   "cases": [
     {
+      "name": "selective_eddi_musttail",
+      "sources": ["tail_musttail.ll"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "cfp_modes": ["none"],
+      "functions": ["abi_tail_musttail_leaf"],
+      "expected_build_diagnostic": {
+        "source": "tail_musttail.ll",
+        "modes": ["EDDI"],
+        "functions": ["abi_tail_musttail_leaf"],
+        "message": "COMPAS: musttail calls across selective EDDI boundaries are unsupported"
+      }
+    },
+    {
+      "name": "converted_tail_word_callee_only",
+      "sources": ["tail_calls.c"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "schedules": ["cgs", "fgs"],
+      "functions": ["abi_tail_leaf"]
+    },
+    {
+      "name": "converted_tail_wide_callee_only",
+      "sources": ["tail_calls.c"],
+      "defines": ["TAIL_WIDE=1"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "schedules": ["cgs", "fgs"],
+      "functions": ["abi_tail_leaf"]
+    },
+    {
+      "name": "converted_tail_word_cfp_caller",
+      "sources": ["tail_calls.c"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "cfp_modes": ["CFCSS", "RASM", "RACFED"],
+      "schedules": ["cgs", "fgs"],
+      "functions": ["abi_tail_leaf"],
+      "cfp_functions": ["abi_tail_wrapper"]
+    },
+    {
+      "name": "converted_tail_wide_cfp_caller",
+      "sources": ["tail_calls.c"],
+      "defines": ["TAIL_WIDE=1"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "cfp_modes": ["CFCSS", "RASM", "RACFED"],
+      "schedules": ["cgs", "fgs"],
+      "functions": ["abi_tail_leaf"],
+      "cfp_functions": ["abi_tail_wrapper"]
+    },
+    {
       "name": "caller_only",
       "defines": ["TEST_CASE=1"],
       "functions": ["abi_caller"]
@@ -23,6 +80,56 @@
       "name": "caller_and_callee",
       "defines": ["TEST_CASE=1"],
       "functions": ["abi_caller", "abi_leaf"]
+    },
+    {
+      "name": "dmr_callee_cfp_caller",
+      "defines": ["TEST_CASE=1"],
+      "functions": ["abi_leaf"],
+      "cfp_functions": ["abi_caller"],
+      "cfp_modes": ["CFCSS", "RASM", "RACFED"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "dmr_caller_cfp_callee",
+      "defines": ["TEST_CASE=1"],
+      "functions": ["abi_caller"],
+      "cfp_functions": ["abi_leaf"],
+      "cfp_modes": ["CFCSS", "RASM", "RACFED"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "nested_dmr_callee_cfp_callers",
+      "defines": ["TEST_CASE=2"],
+      "functions": ["abi_leaf"],
+      "cfp_functions": ["abi_nested_top", "abi_nested_middle"],
+      "cfp_modes": ["CFCSS", "RASM", "RACFED"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "nested_dmr_callers_cfp_callee",
+      "defines": ["TEST_CASE=2"],
+      "functions": ["abi_nested_top", "abi_nested_middle"],
+      "cfp_functions": ["abi_leaf"],
+      "cfp_modes": ["CFCSS", "RASM", "RACFED"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "split_dmr_callee_cfp_caller",
+      "sources": ["call_abi.c", "selective_leaf.c"],
+      "defines": ["TEST_CASE=20"],
+      "functions": ["abi_selective_leaf"],
+      "cfp_functions": ["abi_selective_caller"],
+      "cfp_modes": ["CFCSS", "RASM", "RACFED"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "split_dmr_both_cfp_caller",
+      "sources": ["call_abi.c", "selective_leaf.c"],
+      "defines": ["TEST_CASE=20"],
+      "functions": ["abi_selective_caller", "abi_selective_leaf"],
+      "cfp_functions": ["abi_selective_caller"],
+      "cfp_modes": ["CFCSS", "RASM", "RACFED"],
+      "schedules": ["cgs", "fgs"]
     },
     {
       "name": "nested_live_values",
@@ -43,6 +150,12 @@
       "name": "ten_integer_arguments_caller_only",
       "defines": ["TEST_CASE=4"],
       "functions": ["abi_stack_arguments"]
+    },
+    {
+      "name": "ten_integer_arguments_callee_only_frame_pointer",
+      "defines": ["TEST_CASE=4"],
+      "frame_pointer": true,
+      "functions": ["abi_ten_args"]
     },
     {
       "name": "wide_live_values",
@@ -93,6 +206,18 @@
       "functions": ["abi_ten_arg_middle", "abi_ten_args"]
     },
     {
+      "name": "nested_stack_arguments_frame_pointer",
+      "defines": ["TEST_CASE=8"],
+      "frame_pointer": true,
+      "functions": ["abi_nested_stack_arguments", "abi_ten_arg_middle", "abi_ten_args"]
+    },
+    {
+      "name": "nested_stack_arguments_callee_only_frame_pointer",
+      "defines": ["TEST_CASE=8"],
+      "frame_pointer": true,
+      "functions": ["abi_ten_arg_middle", "abi_ten_args"]
+    },
+    {
       "name": "dynamic_stack_arguments",
       "defines": ["TEST_CASE=9"],
       "functions": ["abi_dynamic_stack_arguments", "abi_ten_args"]
@@ -103,9 +228,77 @@
       "functions": ["abi_dynamic_stack_arguments"]
     },
     {
+      "name": "large_fixed_stack_arguments",
+      "defines": ["TEST_CASE=14"],
+      "functions": ["abi_large_fixed_stack_arguments", "abi_ten_args"]
+    },
+    {
+      "name": "large_fixed_stack_arguments_caller_only",
+      "defines": ["TEST_CASE=14"],
+      "functions": ["abi_large_fixed_stack_arguments"]
+    },
+    {
+      "name": "dynamic_stack_arguments_small_frame",
+      "defines": ["TEST_CASE=15"],
+      "functions": ["abi_dynamic_small_frame", "abi_dynamic_pointer_middle", "abi_dynamic_pointer_leaf", "abi_ten_args"]
+    },
+    {
+      "name": "dynamic_stack_arguments_small_frame_caller_only",
+      "defines": ["TEST_CASE=15"],
+      "functions": ["abi_dynamic_small_frame"]
+    },
+    {
+      "name": "realigned_dynamic_stack_arguments",
+      "defines": ["TEST_CASE=19"],
+      "modes": ["EDDI"],
+      "functions": ["abi_realigned_dynamic_frame", "abi_dynamic_pointer_middle", "abi_dynamic_pointer_leaf", "abi_ten_args"]
+    },
+    {
+      "name": "realigned_dynamic_stack_arguments_caller_only",
+      "defines": ["TEST_CASE=19"],
+      "modes": ["EDDI"],
+      "functions": ["abi_realigned_dynamic_frame"]
+    },
+    {
+      "name": "libcall_stack_arguments",
+      "defines": ["TEST_CASE=16"],
+      "modes": ["EDDI", "SWIFT"],
+      "functions": ["abi_libcall_stack_arguments"],
+      "expected": {
+        "exit": 42,
+        "stdout": "BCDEFGHIJK\n[bdfhjlnprt]\nHIJKLMNOPQ\n[hjlnprtvxz]\nNOPQRSTUVW\n[nprtvxzbdf]\nBCDEFGHIJK\n[bdfhjlnprt]\nHIJKLMNOPQ\n[hjlnprtvxz]\nNOPQRSTUVW\n[nprtvxzbdf]\n"
+      }
+    },
+    {
+      "name": "libcall_dynamic_stack_arguments",
+      "defines": ["TEST_CASE=17"],
+      "modes": ["EDDI", "SWIFT"],
+      "functions": ["abi_libcall_dynamic_stack_arguments"],
+      "expected": {
+        "exit": 42,
+        "stdout": "BCDEFGHIJK\n[bdfhjlnprt]\nHIJKLMNOPQ\n[hjlnprtvxz]\nNOPQRSTUVW\n[nprtvxzbdf]\nBCDEFGHIJK\n[bdfhjlnprt]\nHIJKLMNOPQ\n[hjlnprtvxz]\nNOPQRSTUVW\n[nprtvxzbdf]\n"
+      }
+    },
+    {
+      "name": "duplicated_libcall",
+      "defines": ["TEST_CASE=18"],
+      "modes": ["EDDI", "SWIFT"],
+      "functions": ["abi_duplicated_libcall"]
+    },
+    {
       "name": "realigned_live_values",
       "defines": ["TEST_CASE=10"],
       "functions": ["abi_realigned_live_values"]
+    },
+    {
+      "name": "realigned_entry_residues",
+      "defines": ["TEST_CASE=13"],
+      "functions": ["abi_realigned_live_values"]
+    },
+    {
+      "name": "realigned_entry_residues_protected_leaf",
+      "defines": ["TEST_CASE=13"],
+      "functions": ["abi_realigned_live_values", "abi_leaf", "abi_array_alignment"]
     },
     {
       "name": "signature_join_calls",

@@ -30,6 +30,13 @@ def function_list(value):
     return [part.strip() for part in re.split("[,;]", value) if part.strip()]
 
 
+def function_selections(args, case):
+    functions = args.functions if args.functions is not None else case.get("functions", [])
+    cfp_functions = (args.cfp_functions if args.cfp_functions is not None
+                     else case.get("cfp_functions", functions))
+    return functions, cfp_functions
+
+
 def parser(default_suite):
     cli = argparse.ArgumentParser(description=__doc__)
     cli.add_argument("--suite", choices=("all", "regression", "apps"), default=default_suite)
@@ -70,8 +77,9 @@ def target_profiles(args, case, arch):
     if case["adapter"] != "freestanding":
         if (args.isa is not None or args.abi is not None or args.code_model
                 or "abi" in case or "code_models" in case or "relax" in case
-                or "frame_pointer" in case):
-            raise ValueError("ISA/ABI overrides, code_models, relax and frame_pointer are supported by the freestanding adapter")
+                or "frame_pointer" in case or "optimization" in case
+                or "sibling_calls" in case):
+            raise ValueError("ISA/ABI overrides, code_models, relax, frame_pointer, optimization and sibling_calls are supported by the freestanding adapter")
         return [None]
     isa = (args.isa if args.isa is not None else case.get("isa", "rv{bits}im")).format(bits=arch[2:])
     match = re.fullmatch(r"rv(32|64)(i[mafdc]*|gc?)", isa)
@@ -91,8 +99,11 @@ def target_profiles(args, case, arch):
     if not relax:
         features.append("-relax")
     frame_pointer = {"frame_pointer": True} if case.get("frame_pointer", False) else {}
+    codegen = {field: case[field] for field, default in
+               (("optimization", 1), ("sibling_calls", False))
+               if case.get(field, default) != default}
     return [dict(isa=isa, abi=abi, code_model=model, relax=relax, features=features,
-                 **frame_pointer)
+                 **frame_pointer, **codegen)
             for model in dict.fromkeys(args.code_model or case.get("code_models", ["medlow"]))]
 
 
@@ -137,7 +148,7 @@ def discover(args):
                         values = config.get(field, default)
                         if not isinstance(values, list) or not values or any(value not in choices for value in values):
                             raise ValueError(f"{field} must be a nonempty list drawn from {choices}")
-                    for field in ("functions", "defines"):
+                    for field in ("functions", "cfp_functions", "defines"):
                         values = config.get(field, [])
                         if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
                             raise ValueError(f"{field} must be a list of strings")
@@ -145,8 +156,27 @@ def discover(args):
                         sources = config["sources"]
                         if not isinstance(sources, list) or not sources or any(not isinstance(value, str) for value in sources):
                             raise ValueError("sources must be a nonempty list of paths")
+                        diagnostic = config.get("expected_build_diagnostic")
+                        if diagnostic is not None:
+                            if (not isinstance(diagnostic, dict)
+                                    or diagnostic.get("source") not in sources
+                                    or not isinstance(diagnostic.get("message"), str)
+                                    or not diagnostic["message"].strip()):
+                                raise ValueError("expected_build_diagnostic requires a source from sources and a nonempty message")
+                            modes = diagnostic.get("modes")
+                            functions = diagnostic.get("functions")
+                            if (not isinstance(modes, list) or not modes
+                                    or any(value not in MODES[1:] for value in modes)):
+                                raise ValueError("expected_build_diagnostic.modes must select nonempty DMR modes")
+                            if (not isinstance(functions, list) or not functions
+                                    or any(not isinstance(value, str) or not value
+                                           or value not in config.get("functions", [])
+                                           for value in functions)):
+                                raise ValueError("expected_build_diagnostic.functions must select manifest DMR functions")
                     elif not isinstance(config["executable"], str) or not config["executable"]:
                         raise ValueError("CMake suites require an executable path")
+                    elif "expected_build_diagnostic" in config:
+                        raise ValueError("expected_build_diagnostic is supported by the freestanding adapter")
                     if not isinstance(config.get("verify_machineinstrs", False), bool):
                         raise ValueError("verify_machineinstrs must be a boolean")
                     for field in ("isa", "abi"):
@@ -159,6 +189,11 @@ def discover(args):
                         raise ValueError("relax must be a boolean")
                     if not isinstance(config.get("frame_pointer", False), bool):
                         raise ValueError("frame_pointer must be a boolean")
+                    if (type(config.get("optimization", 1)) is not int
+                            or config.get("optimization", 1) not in (1, 2)):
+                        raise ValueError("optimization must be the integer 1 or 2")
+                    if not isinstance(config.get("sibling_calls", False), bool):
+                        raise ValueError("sibling_calls must be a boolean")
                     if args.case and not any(fnmatch.fnmatchcase(name, pattern) for pattern in args.case):
                         continue
                     config["selected_arches"] = [a for a in (args.arch or arches) if a in arches]
@@ -231,6 +266,25 @@ def command(argv, directory, label, timeout, check=True):
     return dict(host_exit=process.returncode, stdout=stdout, stderr=stderr)
 
 
+def build_diagnostic_for(case, mode, functions):
+    diagnostic = case.get("expected_build_diagnostic")
+    if (diagnostic and mode in diagnostic["modes"]
+            and all(function in functions for function in diagnostic["functions"])):
+        return diagnostic
+    return None
+
+
+def check_build_diagnostic(observed, diagnostic, directory, label):
+    # Match an ordinary compiler rejection, never an assertion or a signal
+    # that happens to print the requested message before crashing.
+    if (observed["host_exit"] != 1
+            or diagnostic["message"] not in observed["stderr"]
+            or re.search(r"Assertion .* failed|PLEASE submit a bug report|Stack dump:",
+                         observed["stderr"])):
+        raise TestError(f"expected compiler diagnostic was not emitted cleanly; "
+                        f"status {observed['host_exit']}; see {directory / (label + '.stderr')}")
+
+
 def build_and_run(args, tools, case, arch, mode, cfp, schedule, functions, cfp_functions, directory, target):
     directory.mkdir(parents=True, exist_ok=True)
     build = lambda argv, label: command(argv, directory, label, args.build_timeout)
@@ -249,18 +303,44 @@ def build_and_run(args, tools, case, arch, mode, cfp, schedule, functions, cfp_f
             flags.append(f"-FGS={','.join(functions)}")
         frame_flags = (["-fno-omit-frame-pointer", "-mno-omit-leaf-frame-pointer"]
                        if target.get("frame_pointer", False) else [])
+        optimization = "-O" + str(target.get("optimization", 1))
+        sibling_flag = ("-foptimize-sibling-calls" if target.get("sibling_calls", False)
+                        else "-fno-optimize-sibling-calls")
+        diagnostic = build_diagnostic_for(case, mode, functions)
         for index, source in enumerate(case["sources"]):
             stem = f"source-{index}"
             ir = directory / (stem + ".ll")
             asm = directory / (stem + ".s")
             build([tools["clang"], f"--target=riscv{arch[2:]}", *isa_flags,
-                   "-O1", "-fno-optimize-sibling-calls", "-emit-llvm", "-S",
+                   optimization, sibling_flag, "-emit-llvm", "-S",
                    *frame_flags,
                    *["-D" + define for define in case.get("defines", [])],
                    case["directory"] / source, "-o", ir], stem + ".clang")
             llc = [tools["llc"], f"-march=riscv{arch[2:]}", "-mattr=" + ",".join(target["features"]),
                    "-target-abi=" + abi, "-code-model=" + ("small" if model == "medlow" else "medium"),
-                   "-O1", *flags, ir]
+                   optimization, *flags, ir]
+            if diagnostic and source == diagnostic["source"]:
+                label = stem + ".llc"
+                observed = command([*llc, "-o", asm], directory, label,
+                                   args.build_timeout, check=False)
+                matched = observed["host_exit"] != 0
+                if matched:
+                    check_build_diagnostic(observed, diagnostic, directory, label)
+                if verify:
+                    verification["kind"] = "build_diagnostic"
+                    label = stem + ".verify"
+                    try:
+                        checked = command([*llc, "-verify-machineinstrs", "-o", directory / (stem + ".verify.s")],
+                                          directory, label, args.build_timeout, check=False)
+                        if matched or checked["host_exit"] != 0:
+                            check_build_diagnostic(checked, diagnostic, directory, label)
+                    except TestError as error:
+                        verification["status"] = "ERROR"
+                        verification["errors"].append(str(error))
+                # Rejected code has no executable or functional outcome.
+                return {"build_diagnostic": dict(matched=matched,
+                            message=diagnostic["message"], source=source,
+                            host_exit=observed["host_exit"])}, verification
             build([*llc, "-o", asm], stem + ".llc")
             if verify:
                 # A verifier failure must not prevent the normal executable
@@ -327,7 +407,8 @@ def attach_verification(result, verification):
 
 
 def known_failure(case, arch, mode, cfp, schedule, functions, cfp_functions, target):
-    if functions != case.get("functions", []) or cfp_functions != case.get("functions", []):
+    if (functions != case.get("functions", [])
+            or cfp_functions != case.get("cfp_functions", case.get("functions", []))):
         return None
     for failure in case.get("known_failures", []):
         if (failure["case"] == case["case_name"] and failure["mode"] == mode
@@ -335,7 +416,8 @@ def known_failure(case, arch, mode, cfp, schedule, functions, cfp_functions, tar
                 and cfp == failure.get("cfp", "none")):
             if target and any(target.get(field, default) != failure.get(field, default) for field, default in (
                     ("isa", arch + "im"), ("abi", "ilp32" if arch == "rv32" else "lp64"),
-                    ("code_model", "medlow"), ("relax", True), ("frame_pointer", False))):
+                    ("code_model", "medlow"), ("relax", True), ("frame_pointer", False),
+                    ("optimization", 1), ("sibling_calls", False))):
                 continue
             if not failure.get("issue") or not failure.get("reason") or "target_exit" not in failure:
                 raise TestError("known failures require issue, reason and target_exit")
@@ -355,13 +437,16 @@ def emit(results, result):
         config += f" {result['isa']}/{result['abi']}/{result['code_model']}"
         if result.get("frame_pointer", False):
             config += "/frame-pointer"
+        if result.get("optimization", 1) != 1:
+            config += "/O" + str(result["optimization"])
+        if result.get("sibling_calls", False):
+            config += "/sibling-calls"
     print(f"{result['status']:6} {result['name']} {result['arch']} {config}: {result['detail']}", flush=True)
 
 
 def execute(args, tools, cases, results):
     for case in cases:
-        functions = args.functions if args.functions is not None else case.get("functions", [])
-        cfp_functions = args.cfp_functions if args.cfp_functions is not None else functions
+        functions, cfp_functions = function_selections(args, case)
         configurations = list(dict.fromkeys(itertools.product(
             args.mode or case.get("modes", ["EDDI", "SWIFT"]),
             args.cfp or case.get("cfp_modes", ["none"]),
@@ -382,8 +467,12 @@ def execute(args, tools, cases, results):
                     profile += "-no-relax"
                 if target.get("frame_pointer", False):
                     profile += "-frame-pointer"
+                if target.get("optimization", 1) != 1:
+                    profile += "-O" + str(target["optimization"])
+                if target.get("sibling_calls", False):
+                    profile += "-sibling-calls"
                 root /= profile
-                base.update({field: target[field] for field in ("isa", "abi", "code_model", "relax", "frame_pointer")
+                base.update({field: target[field] for field in ("isa", "abi", "code_model", "relax", "frame_pointer", "optimization", "sibling_calls")
                              if field in target})
             reference = dict(base, mode="reference", cfp="none", schedule="cgs", logdir=str(root / "reference"))
             try:
@@ -403,12 +492,26 @@ def execute(args, tools, cases, results):
                     continue  # The reference already checks this configuration.
                 directory = root / f"{mode}-{cfp}-{schedule}"
                 result = dict(base, mode=mode, cfp=cfp, schedule=schedule, logdir=str(directory))
+                if build_diagnostic_for(case, mode, functions):
+                    result["kind"] = "build_diagnostic"
                 try:
                     failure = known_failure(case, arch, mode, cfp, schedule, functions, cfp_functions, target)
                     if failure:
                         result["known_failure"] = failure
                     observed, verification = build_and_run(args, tools, case, arch, mode, cfp, schedule,
                                                            functions, cfp_functions, directory, target)
+                    if "build_diagnostic" in observed:
+                        diagnostic = observed["build_diagnostic"]
+                        result["build_diagnostic"] = diagnostic
+                        result.update(status="PASS" if diagnostic["matched"] else "FAIL",
+                                      detail=("expected compiler diagnostic matched" if diagnostic["matched"]
+                                              else "compiler unexpectedly accepted an unsupported pattern"))
+                        if verification is not None:
+                            result["verification"] = verification
+                            if verification["status"] == "ERROR":
+                                result.update(status="ERROR", detail="; ".join(verification["errors"]))
+                        emit(results, result)
+                        continue
                     result["outcome"] = observed
                     if observed == outcome and oracle_matches(case, observed):
                         result.update(status="XPASS" if failure else "PASS", detail="matches reference and independent oracle")
@@ -432,13 +535,17 @@ def main(default_suite="all"):
         cases = discover(args)
         if args.list:
             for case in cases:
+                functions, cfp_functions = function_selections(args, case)
                 profiles = [f"{target['isa']}/{target['abi']}/{target['code_model']}"
                             + ("/no-relax" if not target["relax"] else "")
                             + ("/frame-pointer" if target.get("frame_pointer", False) else "")
+                            + ("/O" + str(target["optimization"]) if target.get("optimization", 1) != 1 else "")
+                            + ("/sibling-calls" if target.get("sibling_calls", False) else "")
                             for targets in case["targets"].values() for target in targets if target]
                 print(f"{case['name']} [{case['adapter']}] arch={','.join(case['selected_arches'])} "
                       f"modes={','.join(args.mode or case.get('modes', []))} "
                       f"cfp={','.join(args.cfp or case.get('cfp_modes', ['none']))} "
+                      f"functions={','.join(functions)} cfp-functions={','.join(cfp_functions)} "
                       f"schedules={','.join(args.schedule or case.get('schedules', ['cgs']))} "
                       f"verify={args.verify_machineinstrs if args.verify_machineinstrs is not None else case.get('verify_machineinstrs', False)} "
                       f"targets={';'.join(profiles) if profiles else 'CMake toolchain'}")
@@ -457,7 +564,8 @@ def main(default_suite="all"):
             print(f"ERROR {error}", file=sys.stderr)
         finally:
             counts = dict(Counter(result["status"] for result in results))
-            functional_counts = dict(Counter(result.get("functional_status", result["status"]) for result in results))
+            functional_counts = dict(Counter(result.get("functional_status", result["status"]) for result in results
+                                            if result.get("kind") != "build_diagnostic"))
             report = dict(results=results, counts=counts, functional_counts=functional_counts)
             (args.build_dir / "results.json").write_text(json.dumps(report, indent=2) + "\n")
         print("Results: " + ", ".join(f"{count} {status}" for status, count in sorted(counts.items())))

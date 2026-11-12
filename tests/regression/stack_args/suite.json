@@ -4,7 +4,88 @@
   "architectures": ["rv32", "rv64"],
   "modes": ["EDDI", "SWIFT"],
   "schedules": ["cgs", "fgs"],
+  "verify_machineinstrs": true,
   "cases": [
+    {
+      "name": "pointer_tail_musttail",
+      "sources": ["pointer_tail_musttail.ll"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "cfp_modes": ["none"],
+      "functions": ["pointer_tail_musttail_leaf", "pointer_tail_musttail_middle"],
+      "expected": {"exit": 42, "stdout": ""},
+      "expected_build_diagnostic": {
+        "source": "pointer_tail_musttail.ll",
+        "modes": ["EDDI"],
+        "functions": ["pointer_tail_musttail_middle"],
+        "message": "COMPAS: musttail calls with EDDI pointer arguments require a returning call"
+      }
+    },
+    {
+      "name": "pointer_tail_protected",
+      "sources": ["pointer_tail.c"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+      "functions": ["pointer_tail_leaf", "pointer_tail_middle", "pointer_tail_owner"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "pointer_tail_ordinary_leaf",
+      "sources": ["pointer_tail.c"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+      "functions": ["pointer_tail_middle", "pointer_tail_owner"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "pointer_tail_merged",
+      "sources": ["pointer_tail.c"],
+      "defines": ["MERGED_POINTERS=1"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+      "functions": ["pointer_tail_leaf", "pointer_tail_middle", "pointer_tail_owner"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "pointer_tail_merged_ordinary_leaf",
+      "sources": ["pointer_tail.c"],
+      "defines": ["MERGED_POINTERS=1"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+      "functions": ["pointer_tail_middle", "pointer_tail_owner"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "pointer_tail_stack_formals",
+      "sources": ["pointer_tail.c"],
+      "defines": ["STACK_POINTERS=1"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+      "functions": ["pointer_tail_leaf", "pointer_tail_middle", "pointer_tail_owner"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "pointer_tail_stack_formals_ordinary_leaf",
+      "sources": ["pointer_tail.c"],
+      "defines": ["STACK_POINTERS=1"],
+      "optimization": 2,
+      "sibling_calls": true,
+      "modes": ["EDDI"],
+      "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"],
+      "functions": ["pointer_tail_middle", "pointer_tail_owner"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
     {
       "name": "direct",
       "sources": ["stack_args.c"],
@@ -62,139 +143,135 @@
       "expected": {"exit": 42, "stdout": ""}
     },
     {
+      "name": "forwarded_frames",
+      "sources": ["stack_args.c"],
+      "defines": ["TEST_CASE=9"],
+      "functions": ["inherited_pair_sink", "inherited_inner", "inherited_middle", "inherited_local", "inherited_global"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "forwarded_frames_frame_pointer",
+      "sources": ["stack_args.c"],
+      "defines": ["TEST_CASE=9"],
+      "frame_pointer": true,
+      "functions": ["inherited_pair_sink", "inherited_inner", "inherited_middle", "inherited_local", "inherited_global"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
+      "name": "forwarded_wide",
+      "sources": ["stack_args.c"],
+      "defines": ["TEST_CASE=10"],
+      "functions": ["wide_leaf", "wide_forward", "wide_local", "wide_global"],
+      "expected": {"exit": 42, "stdout": ""}
+    },
+    {
       "name": "mixed_pointer",
       "sources": ["mixed_pointer.c"],
       "defines": [],
       "functions": ["pointer_sink", "mixed_pointer"],
       "expected": {"exit": 42, "stdout": ""}
-    }
-  ],
-  "known_failures": [
-    {
-      "case": "branch", "mode": "EDDI", "schedule": "cgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "EDDI loses local stack-pointer origins across predecessor blocks."
     },
     {
-      "case": "loop", "mode": "EDDI", "schedule": "cgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "EDDI loses local stack-pointer origins across loop backedges."
+      "name": "mixed_pointer_loop",
+      "sources": ["mixed_pointer.c"],
+      "defines": ["TEST_CASE=2"],
+      "functions": ["pointer_sink", "mixed_pointer_loop"],
+      "expected": {"exit": 42, "stdout": ""}
     },
     {
-      "case": "forwarded", "mode": "EDDI", "schedule": "cgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "EDDI cannot reconcile a forwarded pointer into the caller's duplicated stack frame."
+      "name": "mixed_pointer_origins",
+      "sources": ["mixed_pointer.c"],
+      "defines": ["TEST_CASE=3"],
+      "functions": ["mixed_pair_sink", "mixed_pointer_origins", "mixed_pointer_caller"],
+      "expected": {"exit": 42, "stdout": ""}
     },
     {
-      "case": "mixed_pointer", "mode": "EDDI", "schedule": "cgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "EDDI cannot reconcile a merge between global and duplicated local stack addresses."
+      "name": "stack_pointer_formals",
+      "sources": ["stack_pointer_formals.c"],
+      "defines": ["TEST_CASE=1"],
+      "modes": ["EDDI"],
+      "functions": ["stack_pair_leaf", "stack_pair_middle", "stack_pair_owner"],
+      "expected": {"exit": 42, "stdout": ""}
     },
     {
-      "case": "direct", "mode": "EDDI", "schedule": "fgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "Fine-grained EDDI scheduling reaches the dataflow error handler in a fault-free execution."
+      "name": "stack_pointer_formals_caller_only",
+      "sources": ["stack_pointer_formals.c"],
+      "defines": ["TEST_CASE=1"],
+      "modes": ["EDDI"],
+      "functions": ["stack_pair_owner"],
+      "expected": {"exit": 42, "stdout": ""}
     },
     {
-      "case": "branch", "mode": "EDDI", "schedule": "fgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "Fine-grained EDDI scheduling and cross-block stack-pointer tracking do not preserve this call."
+      "name": "stack_pointer_formals_callee_only",
+      "sources": ["stack_pointer_formals.c"],
+      "defines": ["TEST_CASE=1"],
+      "modes": ["EDDI"],
+      "functions": ["stack_pair_leaf", "stack_pair_middle"],
+      "expected": {"exit": 42, "stdout": ""}
     },
     {
-      "case": "loop", "mode": "EDDI", "schedule": "fgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "Fine-grained EDDI scheduling and loop stack-pointer tracking do not preserve this call."
+      "name": "split_pointer_formals",
+      "sources": ["stack_pointer_formals.c"],
+      "defines": ["TEST_CASE=2"],
+      "modes": ["EDDI"],
+      "functions": ["split_pair_leaf", "split_pair_middle", "split_pair_owner"],
+      "expected": {"exit": 42, "stdout": ""}
     },
     {
-      "case": "scalar", "mode": "EDDI", "schedule": "fgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "Fine-grained EDDI scheduling reaches the dataflow error handler in a fault-free execution."
+      "name": "split_pointer_formals_caller_only",
+      "sources": ["stack_pointer_formals.c"],
+      "defines": ["TEST_CASE=2"],
+      "modes": ["EDDI"],
+      "functions": ["split_pair_owner"],
+      "expected": {"exit": 42, "stdout": ""}
     },
     {
-      "case": "mixed", "mode": "EDDI", "schedule": "fgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "Fine-grained EDDI scheduling reaches the dataflow error handler in a fault-free execution."
+      "name": "split_pointer_formals_callee_only",
+      "sources": ["stack_pointer_formals.c"],
+      "defines": ["TEST_CASE=2"],
+      "modes": ["EDDI"],
+      "functions": ["split_pair_leaf", "split_pair_middle"],
+      "expected": {"exit": 42, "stdout": ""}
     },
     {
-      "case": "register_reuse", "mode": "EDDI", "schedule": "fgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "Fine-grained EDDI scheduling reaches the dataflow error handler in a fault-free execution."
+      "name": "wide_pointer_formals",
+      "sources": ["stack_pointer_formals.c"],
+      "defines": ["TEST_CASE=3"],
+      "modes": ["EDDI"],
+      "functions": ["wide_pair_leaf", "wide_pair_middle", "wide_pair_owner"],
+      "expected": {"exit": 42, "stdout": ""}
     },
     {
-      "case": "global", "mode": "EDDI", "schedule": "fgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "Fine-grained EDDI scheduling reaches the dataflow error handler in a fault-free execution."
+      "name": "stack_pointer_formals_dynamic",
+      "sources": ["stack_pointer_formals.c"],
+      "defines": ["TEST_CASE=1", "STACK_DYNAMIC=1"],
+      "modes": ["EDDI"],
+      "functions": ["stack_pair_leaf", "stack_pair_middle", "stack_pair_owner"],
+      "expected": {"exit": 42, "stdout": ""}
     },
     {
-      "case": "forwarded", "mode": "EDDI", "schedule": "fgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "Fine-grained EDDI scheduling and pointers into the caller's duplicated stack frame do not preserve this call."
+      "name": "stack_pointer_formals_realigned_dynamic",
+      "sources": ["stack_pointer_formals.c"],
+      "defines": ["TEST_CASE=1", "STACK_DYNAMIC=64"],
+      "modes": ["EDDI"],
+      "functions": ["stack_pair_leaf", "stack_pair_middle", "stack_pair_owner"],
+      "expected": {"exit": 42, "stdout": ""}
     },
     {
-      "case": "mixed_pointer", "mode": "EDDI", "schedule": "fgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "Fine-grained EDDI scheduling and merged global/local stack addresses do not preserve this call."
+      "name": "many_stack_pointer_formals",
+      "sources": ["many_stack_pointer_formals.c"],
+      "defines": [],
+      "modes": ["EDDI"],
+      "functions": ["many_stack_pointer_sink", "many_stack_pointer_owner"],
+      "expected": {"exit": 42, "stdout": ""}
     },
     {
-      "case": "direct", "mode": "SWIFT", "schedule": "fgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "Fine-grained SWIFT scheduling reaches the dataflow error handler in a fault-free execution."
-    },
-    {
-      "case": "branch", "mode": "SWIFT", "schedule": "fgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "Fine-grained SWIFT scheduling reaches the dataflow error handler in a fault-free execution."
-    },
-    {
-      "case": "loop", "mode": "SWIFT", "schedule": "fgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "Fine-grained SWIFT scheduling reaches the dataflow error handler in a fault-free execution."
-    },
-    {
-      "case": "mixed", "mode": "SWIFT", "schedule": "fgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "Fine-grained SWIFT scheduling reaches the dataflow error handler in a fault-free execution."
-    },
-    {
-      "case": "register_reuse", "mode": "SWIFT", "schedule": "fgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "Fine-grained SWIFT scheduling reaches the dataflow error handler in a fault-free execution."
-    },
-    {
-      "case": "global", "mode": "SWIFT", "schedule": "fgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "Fine-grained SWIFT scheduling reaches the dataflow error handler in a fault-free execution."
-    },
-    {
-      "case": "forwarded", "mode": "SWIFT", "schedule": "fgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "Fine-grained SWIFT scheduling reaches the dataflow error handler in a fault-free execution."
-    },
-    {
-      "case": "mixed_pointer", "mode": "SWIFT", "schedule": "fgs",
-      "architectures": ["rv32", "rv64"], "target_exit": -512,
-      "issue": "https://github.com/tum-ei-eda/compas-ft-riscv/issues/14",
-      "reason": "Fine-grained SWIFT scheduling reaches the dataflow error handler in a fault-free execution."
+      "name": "many_dynamic_pointer_formals",
+      "sources": ["many_stack_pointer_formals.c"],
+      "defines": ["MANY_DYNAMIC=1"],
+      "modes": ["EDDI"],
+      "functions": ["many_stack_pointer_sink", "many_stack_pointer_owner"],
+      "expected": {"exit": 42, "stdout": ""}
     }
   ]
 }

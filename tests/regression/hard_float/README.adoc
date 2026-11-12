@@ -16,6 +16,8 @@ inferring the callee's register usage. Volatile inputs, a volatile multiplier an
 |`double_callee_rv32` |RV32IMAFD / ILP32D |An unprotected caller invokes a protected binary64 callee.
 |`mixed_float_rv64` |RV64IMAF / LP64F |Both sides are protected, with integer and FP arguments and live values across both calls.
 |`mixed_double_rv32` |RV32IMAFD / ILP32D |Both sides are protected, retaining integer and full-width binary64 values across calls.
+|`eight_float_rv64` |RV64IMAF / LP64F |All eight FP arguments cross a protected caller; four remain live across an unprotected helper that clobbers `ft7` and `ft8`–`ft11`.
+|`eight_double_rv32` |RV32IMAFD / ILP32D |The eight-argument check with full binary64 values and nonzero lower 32 bits.
 |===
 
 The checks compare exact IEEE binary32 or binary64 encodings, rather than using
@@ -26,6 +28,21 @@ are `10.25` and `0.5`; its binary64 results are `10.25 + 19*2^-30` and
 before combining its encoding with an independently checked integer sentinel.
 For binary32 these intermediate results are `7` and `3.5`; for binary64 they are
 `7 - 2^-28` and `3.5`.
+
+The eight-argument helper evaluates `a + 2*b + ... + 8*h`; the caller then adds
+`e + f + g + h`. Ascending and descending integer inputs produce exactly `230`
+and `130`. The binary64 inputs are each `n + n*2^-30`, so their exact results are
+`230 + 230*2^-30` and `130 + 130*2^-30`. Both encodings are literal oracles.
+The unprotected helper's RISC-V assembly clobbers only ABI caller-clobbered FP
+registers. The compiler may spill the values live across that call; these cases
+exercise argument mapping and preservation without requiring particular register
+allocation or claiming that the physical shadow registers remain live.
+
+These finite-input functional checks do not establish coverage of the shared
+floating-point rounding mode or exception flags. COMPAS currently uses `feq.s`
+and `feq.d` for FP balance checks: equal NaNs compare unequal, while positive
+and negative zero compare equal. The exact-bit application oracles remain
+separate from those monitoring semantics.
 
 Every case exits with `42` on success or `17` on an oracle mismatch, and produces
 no output. No libc floating-point routines are required. The manifest enables

@@ -55,10 +55,27 @@ const unsigned kGP{llvm::RISCV::X3};
 const unsigned kTP{llvm::RISCV::X4};
 // frame pointer register
 const unsigned kFP{llvm::RISCV::X8};
+// Realigned variable-sized EDDI frames reserve t1/t5 as an independent BP
+// pair. Ordinary ABI calls can clobber both; COMPAS preserves them at calls.
+const unsigned kEddiBP{llvm::RISCV::X6};
 
 RegType getRegType(llvm::Register);
 bool isDmrFunction(const std::string &name);
+bool usesEddiBasePointer(const llvm::MachineFunction &MF);
+// Stable before/after RA: identify EDDI variable frames and pointer-typed IR
+// merges. Their bank appends GPR deltas and one delta per ordinary FI;
+// variable frames reserve three outgoing-call words, plus two BP words when
+// realigned fixed locals need a stable base independent of the moving SP.
+bool usesPointerProvenance(const llvm::MachineFunction &MF);
+// Entry bank: immutable register/stack formal deltas, plus one word preserving
+// the actual shadow RA while the two incoming stack banks are read.
+unsigned incomingPointerDeltaSlots(const llvm::MachineFunction &MF);
+unsigned pointerProvenanceSlots(const llvm::MachineFunction &MF);
+// Finalize emitted instrumentation without changing instruction order or
+// assigning signatures to the continuation blocks introduced here.
+void normalizeControlFlow(llvm::MachineFunction &MF);
 // Runtime control-flow state owned by the selected signature scheme.
+std::vector<llvm::Register> signatureRegisters(const std::string &name);
 std::vector<llvm::Register> signatureRegisters(const llvm::MachineFunction &MF);
 // Preserve actual signature state in the preallocated fixed frame, without
 // moving the outgoing argument area at the call. Scratch must be reserved.
@@ -67,10 +84,18 @@ void preserveSignatureAcrossCall(llvm::MachineInstr *call,
                                  llvm::Register scratch);
 // Preserve selective-call context in a preallocated fixed frame. These helpers
 // leave both stack pointers unchanged at the call boundary.
+// A duplicated libcall keeps its post-call ABI values in a separate bank
+// while the caller's original monitor state remains saved in Caller.
+enum class CallFrameBank { Caller, Libcall };
+// Supported RISC-V ABIs return at most two registers, each at most 64 bits.
+// The result snapshot also retains the ABI's sixteen-byte stack alignment.
+constexpr unsigned kLibcallResultFrameSize = 16;
 void saveCallRegs(const std::vector<llvm::Register> &, llvm::MachineBasicBlock *,
-                  llvm::MachineBasicBlock::iterator);
+                  llvm::MachineBasicBlock::iterator,
+                  CallFrameBank = CallFrameBank::Caller);
 void loadCallRegs(const std::vector<llvm::Register> &, llvm::MachineBasicBlock *,
-                  llvm::MachineBasicBlock::iterator);
+                  llvm::MachineBasicBlock::iterator,
+                  CallFrameBank = CallFrameBank::Caller);
 // save registers in the vector one by one onto the stack and do this
 // at the instruction point pointed to by iterator
 void saveRegs(std::vector<llvm::Register>, llvm::MachineBasicBlock*,

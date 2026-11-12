@@ -2,18 +2,30 @@
 
 These freestanding cases check fault-free calling-convention behavior on RV32 and
 RV64. Each case checks independently calculated results, exits with `42` on
-success or `17` on an oracle mismatch, and produces no output.
+success or `17` on an oracle mismatch. The variadic libcall cases also check
+complete literal stdout; the other cases produce no output.
 
 [cols="1,3",options="header"]
 |===
 |Case |Coverage
+|`selective_eddi_musttail` |An explicit IR `musttail` call cannot become a returning call; the protected configuration must reject this unsupported boundary with the expected diagnostic while the unprotected reference runs normally.
+|`converted_tail_word_callee_only` |An ordinary wrapper tail-calls an EDDI leaf with a runtime-indexed local frame, checking that discarded pointer temporaries do not cause false balance failures.
+|`converted_tail_wide_callee_only` |The same boundary returns a value with nonzero upper bits; RV32 returns both `a0` and `a1`, and both result registers must remain checked.
+|`converted_tail_word_cfp_caller`, `converted_tail_wide_cfp_caller` |Only the tail wrapper receives CFP, checking independent selection with the EDDI-only leaf and valid signature slots before the wrapper's epilogue.
 |`caller_only` |A protected caller invokes an unprotected callee, retaining a live value across the call.
 |`callee_only` |An unprotected caller invokes a protected callee.
 |`caller_and_callee` |Both sides of the same boundary are protected.
+|`dmr_callee_cfp_caller` |The caller has only control-flow protection and the leaf only data protection, checking that callee balance checks respect caller-owned signature state.
+|`dmr_caller_cfp_callee` |The reciprocal selection checks a data-protected caller invoking a leaf with only control-flow protection.
+|`nested_dmr_callee_cfp_callers` |Two control-flow-protected callers make repeated calls to a data-protected leaf while retaining their own live values and signatures.
+|`nested_dmr_callers_cfp_callee` |The reciprocal nested selection protects the two callers with DMR and only the leaf with CFP.
+|`split_dmr_callee_cfp_caller` |A caller with only CFP invokes a separately compiled DMR leaf before a branch, within either branch and after their join.
+|`split_dmr_both_cfp_caller` |The same separate compilation also selects the caller for DMR, checking the overlapping selection against the DMR-only callee.
 |`nested_live_values` |Repeated nested calls retain values across multiple calls and stack frames.
 |`indirect_calls` |A volatile function pointer invokes two distinct targets, then restores the first target for the next invocation.
 |`ten_integer_arguments` |Ten word-sized arguments require argument passing on the stack as well as in registers.
 |`ten_integer_arguments_caller_only` |Only the caller is protected, checking that its preservation spills leave the unprotected callee's stack arguments at their ABI offsets.
+|`ten_integer_arguments_callee_only_frame_pointer` |An unprotected caller invokes the protected ten-argument leaf with FP forced, isolating FP-relative incoming ABI stack arguments.
 |`wide_live_values` |Arguments, return values and values live across a call contain nonzero upper 32 bits; RV32 also exercises register pairs.
 |`stack_alignment` |The caller and callee observe 16-byte stack alignment and the caller observes the same stack pointer after return.
 |`frame_pointer_calls` |Three protected functions have different frame-size requirements, retain FP-relative locals across repeated nested calls, and restore each caller's incoming frame pointer.
@@ -23,16 +35,43 @@ success or `17` on an oracle mismatch, and produces no output.
 |`nested_stack_arguments` |Both nested call boundaries pass ten words, keeping incoming stack arguments live across an outgoing call; all participating functions are selected.
 |`nested_stack_arguments_caller_only` |The same nested calls select only the outer caller, exercising the boundary to unprotected callees.
 |`nested_stack_arguments_callee_only` |An unprotected outer caller invokes the two protected nested callees, checking that entry wrappers preserve stack arguments and the caller's live values.
+|`nested_stack_arguments_frame_pointer` |The nested ten-argument calls force FP in all functions, checking incoming stack slots and independent shadow arguments from protected callers.
+|`nested_stack_arguments_callee_only_frame_pointer` |The same forced-FP calls select only the middle and leaf, exercising ordinary incoming ABI slots and protected-to-protected shadow arguments in one execution.
 |`dynamic_stack_arguments` |A large fixed frame and a runtime-sized local array keep values live across ten-word calls, exercising frame-pointer addressing and a moving stack pointer.
 |`dynamic_stack_arguments_caller_only` |Only the caller with the large fixed frame and VLA is protected, checking stable preservation slots while calling an unprotected ten-argument helper.
+|`large_fixed_stack_arguments` |A 1024-word fixed array and fixed-size scratch storage isolate large frame adjustments from runtime-sized allocation, retaining the original combined case's arithmetic oracle.
+|`large_fixed_stack_arguments_caller_only` |Only the owner of the large fixed frame is protected, while the ten-argument helper uses the ordinary ABI.
+|`dynamic_stack_arguments_small_frame` |A small fixed frame and two simultaneously live VLAs retain independent contents across nested pointer calls and ten-word stack-argument calls.
+|`dynamic_stack_arguments_small_frame_caller_only` |Only the VLA owner is protected, checking runtime stack movement across ordinary nested callees.
+|`realigned_dynamic_stack_arguments` |An EDDI-protected ten-argument owner retains a 64-byte-aligned fixed array and two aligned VLAs across protected pointer helpers and outgoing stack-argument calls, with ordinary callers covering every entry-SP residue modulo 64.
+|`realigned_dynamic_stack_arguments_caller_only` |Only the realigned VLA owner is protected; pointer helpers and the ten-argument leaf use the ordinary ABI.
+|`libcall_stack_arguments` |A freestanding variadic `printf` shim receives ten character arguments, checking stack arguments, distinct return counts and live fixed locals across two calls.
+|`libcall_dynamic_stack_arguments` |The same calls retain fixed locals and a runtime-sized array, checking libcall preservation with a moving SP.
+|`duplicated_libcall` |A freestanding `memcmp` shim compares local/global and local/local buffers, retaining zero, negative and positive results and whole-buffer checksums across calls.
 |`realigned_live_values` |A caller with a 64-byte-aligned volatile array and twelve independent live values invokes an unprotected helper with register arguments, checking realigned spill slots separately from stack-passed arguments.
+|`realigned_entry_residues` |An unprotected caller varies runtime stack padding to cover all four ABI-valid entry-SP residues modulo 64, repeatedly invokes the protected realigned function, and checks its returned SP and padding contents.
+|`realigned_entry_residues_protected_leaf` |The same entry residues also protect the nested arithmetic and array-alignment helpers, checking both the ordinary-to-protected and protected-to-protected boundaries.
 |`signature_join_calls` |A protected caller invokes an unprotected helper in its entry block, in either branch before a join, and after the join; the helper explicitly overwrites both signature registers on RISC-V.
 |===
 
 `volatile` inputs and `noinline` functions keep the calls dependent on runtime
-loads. Sibling-call optimization is disabled by the shared runner. The stack
+loads. Sibling-call optimization is disabled by default. The stack
 alignment case reads the real RISC-V stack pointer in an unprotected leaf helper
 with inline assembly; its native smoke build checks only the arithmetic oracle.
+
+The converted-tail cases opt into `optimization: 2` and `sibling_calls: true`.
+A nine-word volatile scratch array remains live until the ordinary wrapper's
+final call; sibling-call optimization marks that call as eligible for a tail
+transfer. The backend lowers this selective EDDI boundary as a returning call
+while the ABI result registers and register mask remain available, before
+frame lowering. The protected leaf indexes a
+four-element volatile array at runtime, leaving different primary and shadow
+frame addresses in discarded temporaries. An ordinary observer retains a
+volatile-loaded canary across the wrapper and combines it with the return
+value. Four literal result pairs check every local-array index, with each
+input executed twice. Both cases run with coarse- and fine-grained scheduling
+and all four control-flow selections on the protected leaf. The additional
+CFP-caller cases instead select the tail wrapper for CFCSS, RASM and RACFED.
 
 The frame-pointer cases set `frame_pointer: true` in their manifest, forcing a
 frame pointer even in leaf functions without depending on control-flow protection
@@ -46,12 +85,121 @@ The stack-argument cases also check that DMR boundary wrappers and control-flow
 signature preservation do not move the outgoing arguments from the ABI offsets
 observed by the callee. Caller-only and callee-only selections exercise the two
 directions of the selective-hardening boundary with the same arithmetic oracle.
+The asymmetric cases set `functions` and `cfp_functions` independently, covering
+both directions with CFCSS, RASM and RACFED under both schedules. They reuse
+the direct and nested scenarios and their independent literal results, so a
+fault-free balance check must accept the monitor's reserved register values
+without weakening the application-result oracle. The split cases compile the
+arithmetic leaf in a second source file, so its compiler pass sees the configured
+CFP caller's name without seeing that caller's definition. Volatile effects on
+opposite sides of the branch calls retain a real branch and join. Both paths
+run twice; literal results check the three calls, a value live across them and
+the complete sequence of volatile effects. The overlap case selects both
+functions for DMR while only the caller owns CFP state.
+
+The mixed-boundary contract excludes CFP-owned `t0`/`t4` from endpoint balance
+checks and from DMR shadow initialization at that call boundary. Incoming UC3
+checks also exempt this pair whenever any CFP function is selected: a separately
+compiled callee cannot inspect the caller's definition to determine ownership.
+Neither register carries an ordinary ABI argument. Other incoming data checks,
+application argument and result checks, and function-internal DMR checks remain
+active.
+
+The forced-FP variants reuse the direct and nested arithmetic scenarios. They
+check that incoming fixed stack slots retain their entry-frame addresses when
+EDDI allocates separate primary and shadow frames. The nested variants
+keep arguments nine and ten live across another ten-argument call, with both
+protected and ordinary callers entering the protected middle function.
 The dynamic-frame case uses a 1024-word volatile fixed array and a variable-length
 volatile array. Its calls consume both stack-passed arguments and local values;
 the final result checks values retained in both arrays after the calls.
+The large-fixed variants reuse its `23041`/`23711`/`24365` oracle with an
+18-word fixed scratch array, so no VLA remains. They repeat every input twice.
+The small-frame variants retain five fixed words and allocate a first VLA,
+pass its pointer through two nested helpers, then allocate a second VLA while
+the first pointer remains live. They call the same helpers with both arrays
+and read every element of the fixed array and both VLAs after the calls. The
+middle helper also invokes the ten-argument leaf while retaining its incoming
+pointer. All pointer formals use ordinary integer argument registers.
+Runtime size pairs `(3,9)`, `(8,4)` and `(17,21)` run twice with three distinct
+inputs. Independent literal results include weighted checksums of every array,
+detecting overlap or loss of either allocation. All-selected and caller-only
+selections share the same arithmetic and oracles.
+
+For fixed frames, EDDI uses LLVM's complete nominal frame size, including when
+the prologue and epilogue split it into immediate and register adjustments.
+EDDI keeps frame allocation at function entry so it dominates every return.
+The original adjustments and frame-index addressing stay intact; a separate
+primary allocation provides the shadow-frame separation and is released at
+return. Stack-pointer adjustment steps retain ABI alignment. Primary CFA and
+saved-register offsets account for the relocated primary frame. These cases
+isolate large fixed-frame handling from variable-sized allocation.
+
+For ABI-aligned VLAs, EDDI checks the independently computed sizes and allocates
+a fresh primary/shadow interval below the existing storage. Each VLA pointer
+retains its own expected runtime separation when later arrays are allocated.
+Outgoing stack arguments use separate primary/shadow call storage at the ABI
+offsets; returning from the call restores the caller's prior stack context.
+The small-frame cases exercise these operations while both arrays remain live.
+
+The realigned dynamic cases reuse the pointer helpers and size pairs, adding
+a runtime-indexed 33-word fixed array and 64-byte alignment to all three
+arrays. A noinline helper checks each actual array address. The VLA counts
+arrive as incoming stack arguments and remain live across nested calls;
+the owner also forwards all ten original arguments through an outgoing call.
+Both VLAs coexist while the first is read again and the fixed array is passed
+to a helper. Literal results include every array element after all calls.
+An ordinary wrapper repeats each input for all four ABI-valid caller-SP
+residues modulo 64, checking its SP and padding after return. These cases
+select EDDI only.
+Realigned dynamic EDDI frames use `t1`/`x6` as the primary fixed-frame base and
+`t5`/`x30` as its shadow while SP moves for VLAs. Each base pointer is preserved
+independently across returning calls; `s1` remains the shadow SP. Incoming
+scalar stack arguments use the stable frame-pointer context rather than a
+realigned or moving SP.
+
+The libcall cases give their unprotected shims the real `printf` and `memcmp`
+signatures and symbol names, so COMPAS handles them as recognized libcalls.
+Only callers are selected, for EDDI and SWIFT. The `printf` shim implements
+literal text and `%c`, writes the resulting bytes directly, and returns the
+number written. Each call consumes ten promoted integer arguments in addition
+to its format pointer. Complete literal stdout checks their order and requires
+each call to execute once; return values `11` and `13` remain live together.
+Fixed and VLA callers also check weighted contents of every local word after
+the calls. The duplicated `memcmp` case uses actual byte comparisons and retains
+zero, negative and positive results alongside local contents and an independent
+live value. Only the signs are required, matching the C `memcmp` contract.
+Each input executes twice. No currently recognized duplicable libcall needs
+more than eight integer argument registers with its actual RISC-V signature;
+the variadic case checks stack arguments and the comparison case checks the
+separate original/duplicate snapshots and result reloads.
+Returning libcalls use fixed caller-context and result snapshots,
+leaving SP and outgoing ABI slots in place. Original results remain in primary
+registers and duplicate results enter the corresponding shadows; preservation
+uses the enabled floating-point register width.
+
 The realigned-frame case keeps its local array indexed by a runtime value so it
 cannot shrink to a few scalars, and uses both call results in the independent
 live-value checks.
+The entry-residue variants reuse that function and its three literal results.
+An unprotected wrapper allocates runtime padding of 16, 32, 48 and 64 bytes after
+ABI rounding, calls the function, and checks the same SP before and after return.
+The target run requires all four residues modulo 64 to occur; the wrapper's
+volatile padding must also survive every call. Each combination of input and
+padding executes twice. A noinline helper checks the array's actual address for
+64-byte alignment. One variant selects every helper called by the realigned
+function, avoiding selective-call preservation slots in that function. The
+other selects only the realigned function. Both keep the VLA and inline SP probe
+unprotected.
+
+EDDI must keep the realigned primary and shadow frames disjoint with enough
+padding for alignment rounding. Spilled frame addresses retain their known
+primary-to-shadow offset; ordinary scalar stores still require equal values.
+An ordinary caller checks return values, ABI-preserved registers and control
+state after a protected call. Discarded caller-clobbered temporaries fall outside
+that return contract. Stack-passed pointer formals and save/restore libcalls
+remain separate
+follow-ups in link:../../TODO.md[the test TODO].
 
 The signature-join case exercises preservation of both the running signature and
 the CFCSS predecessor adjustment across calls. Its helper overwrites `t0` and

@@ -1,0 +1,169 @@
+= Stack-address call regressions
+
+These freestanding cases check pointers into caller-owned stack memory across
+function calls on RV32 and RV64. Each functional case uses an independent result oracle,
+exits with `42` on success or `17` on an oracle mismatch, and produces no output.
+The manifest runs EDDI and SWIFT with coarse- and fine-grained scheduling.
+
+[cols="1,3",options="header"]
+|===
+|Case |Coverage
+|`direct` |A pointer to a local scalar crosses one protected call.
+|`branch` |Both predecessors pass different offsets into the same local array.
+|`loop` |A local-array pointer advances across a loop before a call.
+|`scalar` |A scalar loaded from a volatile local remains an ordinary scalar argument.
+|`mixed` |A call carries both a local pointer and a scalar value.
+|`register_reuse` |A pointer call is followed by a scalar call using the returned value.
+|`global` |A pointer to global storage crosses the same pointer-helper interface.
+|`forwarded` |A caller-owned local pointer passes through another protected function before being dereferenced.
+|`forwarded_frames` |Two pointers and a scalar traverse repeated nested calls, distinct local frames, constant pointer offsets and a scalar branch join.
+|`forwarded_frames_frame_pointer` |The same nested calls force FP, covering stable frame addressing independently of control-flow protection.
+|`forwarded_wide` |A 64-bit tag and scalar precede an inherited pointer, checking its actual ABI register after arguments split differently on RV32 and RV64.
+|`pointer_tail_protected` |An O2 sibling-call candidate forwards inherited local/global pointers, swapped with independent offsets, to a protected leaf.
+|`pointer_tail_ordinary_leaf` |The same protected forwarder passes the primary pointers to an ordinary leaf.
+|`pointer_tail_merged` |Runtime pointer joins select between independent incoming roots and globals before tail-position forwarding to a protected leaf.
+|`pointer_tail_merged_ordinary_leaf` |The runtime joins cross into an ordinary leaf.
+|`pointer_tail_stack_formals` |Eight scalar words force both incoming pointers onto the stack; the tail-position leaf call passes its arguments in registers.
+|`pointer_tail_stack_formals_ordinary_leaf` |The incoming stack pointers are forwarded to an ordinary leaf in tail position.
+|`pointer_tail_musttail` |Explicit `musttail` on an EDDI pointer boundary receives a diagnostic instead of silently changing the required tail-call contract.
+|`stack_pointer_formals` |Eight XLEN scalar arguments force two ordinary pointer formals into stack argument slots nine and ten, across nested protected calls.
+|`stack_pointer_formals_caller_only` |The same stack arguments cross from a protected owner into ordinary helpers.
+|`stack_pointer_formals_callee_only` |Ordinary callers pass local and global pointers to protected helpers without allocating shadow pointees.
+|`split_pointer_formals` |Seven XLEN scalars put one pointer in `a7` and the other on the stack, retaining independent pointer origins across nested calls.
+|`split_pointer_formals_caller_only` |Only the owner of the register/stack pointer pair is protected.
+|`split_pointer_formals_callee_only` |Only the nested register/stack pointer helpers are protected.
+|`wide_pointer_formals` |Six XLEN scalars and a 64-bit tag put both pointers on the stack on RV32, and split them between `a7` and the stack on RV64.
+|`stack_pointer_formals_dynamic` |The middle helper retains a runtime-sized local array across nested calls while preserving two inherited stack pointer formals.
+|`stack_pointer_formals_realigned_dynamic` |The same combination requires 64-byte VLA realignment and a separate primary/shadow base-pointer pair.
+|`many_stack_pointer_formals` |A local pointer follows 544 XLEN scalars, requiring materialized addresses for its outgoing stack slot on RV32 and RV64.
+|`many_dynamic_pointer_formals` |The same large outgoing argument area follows a runtime-sized local array whose weighted checksum remains live after the call.
+|`mixed_pointer` |A control-flow merge selects global or local storage inside one function.
+|`mixed_pointer_loop` |A loop selects global or local array elements, or retains its previous pointer across a backedge, before the same helper call.
+|`mixed_pointer_origins` |Independent pointer joins select between two inherited roots, the helper's own local storage and globals across nested calls with distinct frames.
+|===
+
+The original nested frame cases call the same helpers from separate local and global
+callers. One call also passes a caller-local pointer and a global pointer
+together, so each pointer needs its own relationship to the shadow pointee.
+Forwarding a pointer does not make it refer to the forwarding function's frame.
+Protected callers retain independent primary and shadow local arrays throughout
+the chain; global pointers retain their global origin. All participating pointer
+helpers are selected, keeping these cases focused on protected boundaries.
+
+EDDI gives ordinary pointer parameters passed in integer registers an immutable
+entry snapshot of each primary-to-shadow address difference. The caller checks
+the pair before entry; later forwarding checks use the saved difference for that
+pointer, even when the forwarding function has a different frame size. A fault
+between the caller's validation and the entry capture falls outside this check.
+Ordinary full-XLEN pointer parameters passed in stack argument slots receive
+independent snapshots as well. Indirect and `byval` parameters, and pointer
+provenance that the pass cannot represent, require separate support or an
+explicit diagnostic. These cases do not establish detection coverage for those
+paths.
+
+The inner and middle helpers retain volatile arrays of three and seven integers
+across two calls, while the local caller owns two eight-element arrays. Incoming
+pointers are read again after nested calls. The inner helper branches only on a
+scalar result choice, avoiding a global/local pointer merge in these cases.
+Three volatile inputs exercise both paths twice. Main compares the results with
+literal values calculated independently by expanding the weighted sums and
+checksums. Sibling-call optimization is disabled by default; the `pointer_tail_*`
+cases explicitly enable it with optimization level two.
+
+The wide-argument case keeps nonzero high and low halves of its tag in the
+result. With the default ABIs, the pointer is passed in `a3` on RV32 and `a2`
+on RV64. Separate local and global callers exercise the same forwarding helper;
+each result is checked twice against a literal oracle.
+
+The EDDI-only tail fixtures use a single direct call in the forwarding helper's
+return expression. The input IR contains a `tail` call and the unprotected
+backend produces a genuine sibling call. The protected forwarder retains an
+ordinary returning call before frame layout, so its immutable incoming-pointer
+snapshots and any runtime-merge metadata remain available during argument
+checks. Its seven-element volatile frame differs from the leaf's three-element
+frame and the owner's two ten-element arrays. Local/global, global/local,
+local/local and global/global pairs run for three inputs twice, with literal
+weighted-sum oracles. Runtime-merge variants choose each outgoing pointer
+independently; incoming-stack variants place both pointers above eight XLEN
+scalar arguments before forwarding them in argument registers. All six runtime
+selections run both schedules and all four control-flow protection modes.
+These fixtures establish functional equivalence and machine verification;
+they do not establish support for genuine inherited-pointer `musttail` calls.
+
+The pointer-formal fixtures are EDDI-only. Both pointer arguments are full
+XLEN values on RV32 and RV64; no hidden aggregate or `byval` argument changes
+their ABI locations. Eight `unsigned long` scalar arguments place pointers in
+incoming slots zero and one above the caller's stack pointer. Removing the
+eighth scalar puts the first pointer in `a7` and the second in incoming slot
+zero. The scalar values contribute independently to the result, preventing a
+shifted argument area from silently passing the oracle.
+
+Each shape calls the same middle helper with local/global, global/local,
+local/local and global/global pairs. The middle and leaf helpers own volatile
+arrays of seven and three integers, while the owner retains two ten-element
+arrays. The middle reuses both incoming pointers after two nested calls with
+swapped pointers and different offsets. Three volatile inputs run twice;
+literal result tables cover every call and every array access stays in bounds.
+Selecting both helpers and the owner exercises independent primary/shadow local
+banks. The caller-only and callee-only selections also check ordinary ABI
+boundaries, where unprotected helpers or callers use the primary pointees.
+
+The wide-prefix shape uses the same prototype on both architectures. Its
+64-bit tag occupies `a6`/`a7` on RV32 and only `a6` on RV64, so the same pointer
+formals have different ABI locations. Both nonzero halves of the tag contribute
+to the checksum, and nested calls change them independently. This checks actual
+argument locations after splitting wide scalars rather than guessing them from
+the source parameter index.
+
+The dynamic variants replace the middle helper's fixed seven-element array
+with a runtime-sized array of seven to ten integers. The realigned variant
+additionally requires 64-byte alignment. The weighted checksum includes every
+element after the nested calls; all incoming pointers remain live as well.
+These cases combine immutable entry-pointer snapshots with dynamic call-area
+and, where needed, base-pointer preservation contexts.
+
+The many-argument case places its pointer at incoming byte offset `2144` on
+RV32 and `4288` on RV64. These offsets exceed the signed 12-bit displacement of
+ordinary stores. The outgoing store therefore uses an address materialized in
+a temporary register instead of a literal SP-relative slot. Its pointer value
+must retain the local-frame relationship when checking primary and shadow
+arguments. The first and last scalar arguments also contribute to the literal
+oracle, `1 + 544 + input + 10`.
+Its dynamic variant additionally retains every element of a runtime-sized
+array across the call, combining materialized outgoing addresses with runtime
+stack separation. The post-call weighted checksum has independent literal
+oracles for three different allocation sizes.
+
+The mixed-pointer cases share one fixture. The original case retains its
+literal `12`/`8` oracle. The loop case runs all three selector phases twice for
+each of three inputs, including a negative input. One phase retains the
+previous pointer, requiring its relationship to survive a backedge rather than
+being replaced at every iteration.
+
+The origins case calls the same helper with local/global, global/local and
+local/local pointer pairs. Inside that helper, one pointer independently joins
+two incoming roots and its own frame while the other joins an incoming root
+with a global address. Both pointers remain in use across two nested calls;
+private volatile frame values also remain live. Eight selection masks and two
+inputs run twice, with every result checked against a literal weighted-sum
+oracle. The caller and helper own different arrays, so inherited and current
+frame separations must remain distinct. Source-level pointer variables are not
+stored into arbitrary shared memory.
+
+For pointer-typed IR PHI/select merges, EDDI propagates an independent expected
+primary/shadow address difference through registers and exact full-word private
+spills. Global pointers use zero, fixed-frame pointers use the frame separation,
+VLA pointers use their allocation's runtime separation, and inherited pointers
+use their immutable entry snapshots. The expectation is
+kept in a fixed FP-relative metadata bank; only definitions needed by pointer
+checks receive transport instructions. Checks do not derive a new expectation
+from the pointer pair they are validating. Integer-encoded pointer merges,
+unsupported pointer arithmetic and arbitrary memory reloads remain outside this
+tracking contract. Runtime metadata requires a stable frame pointer and
+encodable FP-relative stores; the nominal fixed frame can use LLVM's split
+stack adjustments.
+
+The manifest enables machine-instruction verification. Remaining unsupported
+configurations and metadata work are recorded in
+link:../../TODO.md[the test TODO]. Fault-free equivalence does not establish
+fault-detection coverage.

@@ -18,18 +18,79 @@
 
 #include <algorithm>
 #include <iterator>
+#include <map>
+#include <set>
 #include <sstream>
 
 #include "RISCVFrameLowering.h"
 #include "RISCVInstrInfo.h"
 #include "RISCVMachineFunctionInfo.h"
 #include "RISCVSubtarget.h"
+#include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/Config/llvm-config.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
+#if LLVM_VERSION_MAJOR < 15
+#include "MCTargetDesc/RISCVMatInt.h"
+#endif
+
 namespace {
+
+void remove_operand(llvm::MachineInstr &MI, unsigned index) {
+#if LLVM_VERSION_MAJOR < 15
+  MI.RemoveOperand(index);
+#else
+  MI.removeOperand(index);
+#endif
+}
+
+void materialize_frame_offset(llvm::MachineBasicBlock &MBB,
+                              llvm::MachineBasicBlock::iterator insert,
+                              const llvm::DebugLoc &DL, llvm::Register dest,
+                              int64_t value) {
+  assert(dest.isPhysical() && "Late frame addressing needs a physical register");
+  const auto &subtarget =
+      MBB.getParent()->getSubtarget<llvm::RISCVSubtarget>();
+  const auto *tii = subtarget.getInstrInfo();
+#if LLVM_VERSION_MAJOR >= 15
+  tii->movImm(MBB, insert, DL, dest, value);
+#else
+  // LLVM 13/14 movImm creates virtual temporaries for multi-instruction
+  // constants. These accesses run after RA; reuse the borrowed physical
+  // destination throughout the target's immediate-materialization sequence.
+  if (!subtarget.is64Bit() && !llvm::isInt<32>(value))
+    llvm::report_fatal_error("COMPAS: frame offset exceeds RV32 address width");
+  llvm::Register source{llvm::RISCV::X0};
+  for (const auto &inst :
+       llvm::RISCVMatInt::generateInstSeq(value, subtarget.getFeatureBits())) {
+    auto builder = llvm::BuildMI(MBB, insert, DL, tii->get(inst.Opc), dest);
+    if (inst.Opc == llvm::RISCV::LUI) {
+      builder.addImm(inst.Imm);
+#if LLVM_VERSION_MAJOR == 13
+    } else if (inst.Opc == llvm::RISCV::ADDUW) {
+#else
+    } else if (inst.Opc == llvm::RISCV::ADD_UW) {
+#endif
+      builder.addReg(source).addReg(llvm::RISCV::X0);
+#if LLVM_VERSION_MAJOR >= 14
+    } else if (inst.Opc == llvm::RISCV::SH1ADD ||
+               inst.Opc == llvm::RISCV::SH2ADD ||
+               inst.Opc == llvm::RISCV::SH3ADD) {
+      builder.addReg(source).addReg(source);
+#endif
+    } else {
+      builder.addReg(source).addImm(inst.Imm);
+    }
+    source = dest;
+  }
+#endif
+}
 
 struct SpillSlot {
   llvm::Register reg;
@@ -105,12 +166,205 @@ SpillFrame spill_frame(const std::vector<llvm::Register> &regs,
 
 } // namespace
 
+void riscv_common::normalizeControlFlow(llvm::MachineFunction &MF) {
+  if (MF.empty())
+    return;
+  const auto *tii = MF.getSubtarget().getInstrInfo();
+
+  // Preserve PHI values through splits by remembering the original incoming
+  // block of every new continuation. The normal post-RA pipeline has no PHIs,
+  // but the standalone factories can also be used in machine-IR pipelines.
+  struct PhiInputs {
+    llvm::MachineInstr *phi;
+    std::map<llvm::MachineBasicBlock *, llvm::MachineOperand> values;
+  };
+  std::vector<PhiInputs> phis;
+  std::map<llvm::MachineBasicBlock *, llvm::MachineBasicBlock *> origins;
+  std::map<llvm::MachineBasicBlock *, std::vector<llvm::MachineBasicBlock *>>
+      original_successors;
+  for (auto &MBB : MF) {
+    origins.emplace(&MBB, &MBB);
+    original_successors.emplace(&MBB, std::vector<llvm::MachineBasicBlock *>(
+                                          MBB.succ_begin(), MBB.succ_end()));
+    for (auto &phi : MBB.phis()) {
+      PhiInputs inputs{&phi, {}};
+      for (unsigned i = 1; i + 1 < phi.getNumOperands(); i += 2)
+        inputs.values.emplace(phi.getOperand(i + 1).getMBB(),
+                              phi.getOperand(i));
+      phis.push_back(std::move(inputs));
+    }
+    for (auto &MI : MBB) {
+      // A no-link local transfer is a branch, not a call. Keep the original
+      // instruction's symbols and flags while using LLVM's branch descriptor.
+      if (MI.getOpcode() == llvm::RISCV::JAL && MI.getNumOperands() >= 2 &&
+          MI.getOperand(0).isReg() && MI.getOperand(0).getReg() == k0 &&
+          MI.getOperand(1).isMBB()) {
+        MI.setDesc(tii->get(llvm::RISCV::PseudoBR));
+        remove_operand(MI, 0);
+      }
+    }
+  }
+
+  // A label changes no emitted instruction order. Split after each terminator
+  // so checks have ordinary fallthrough blocks. Also retain instructions after
+  // barriers: unreachable trap jumps deliberately detect skipped branches.
+  for (auto &MBB : MF) {
+    for (auto &MI : MBB) {
+      if ((!MI.isTerminator() && !MI.isBarrier()) ||
+          std::next(MI.getIterator()) == MBB.end())
+        continue;
+      auto *continuation = MBB.splitAt(MI, false);
+      origins.emplace(continuation, origins.at(&MBB));
+      break;
+    }
+  }
+
+  // Reconstruct nominal edges rather than inheriting duplicate or unreachable
+  // edges from instrumentation. Preserve existing destinations for indirect
+  // branches, inlineasm_br and exceptional control flow.
+  for (auto &MBB : MF) {
+    std::set<llvm::MachineBasicBlock *> targets;
+    const auto &old_targets = original_successors.at(origins.at(&MBB));
+    for (auto *successor : old_targets)
+      if (successor->isEHPad())
+        targets.insert(successor);
+
+    bool falls_through = true;
+    for (const auto &MI : MBB) {
+      if (MI.isIndirectBranch() ||
+          MI.getOpcode() == llvm::TargetOpcode::INLINEASM_BR)
+        targets.insert(old_targets.begin(), old_targets.end());
+      if (MI.isBranch() || MI.getOpcode() == llvm::TargetOpcode::INLINEASM_BR)
+        for (const auto &operand : MI.operands())
+          if (operand.isMBB())
+            targets.insert(operand.getMBB());
+      if (MI.isBarrier() || MI.isReturn() || tii->isTailCall(MI)) {
+        falls_through = false;
+        break;
+      }
+    }
+    if (falls_through && MBB.getNextNode())
+      targets.insert(MBB.getNextNode());
+
+    while (!MBB.succ_empty())
+      MBB.removeSuccessor(MBB.succ_begin());
+    for (auto *target : targets)
+      MBB.addSuccessor(target);
+    MBB.normalizeSuccProbs();
+  }
+
+  for (auto &inputs : phis) {
+    auto &phi = *inputs.phi;
+    while (phi.getNumOperands() > 1)
+      remove_operand(phi, phi.getNumOperands() - 1);
+    for (auto *predecessor : phi.getParent()->predecessors()) {
+      const auto value = inputs.values.find(origins.at(predecessor));
+      if (value == inputs.values.end())
+        llvm::report_fatal_error("COMPAS: cannot repair PHI after CFG split");
+      phi.addOperand(MF, value->second);
+      phi.addOperand(MF, llvm::MachineOperand::CreateMBB(predecessor));
+    }
+  }
+
+  if (!MF.getRegInfo().tracksLiveness())
+    return;
+
+  // Solve from an empty state to eliminate stale loop live-ins. Entry keeps
+  // only its declared ABI and monitor inputs: inferring new function inputs
+  // from uses here would conceal genuinely missing register definitions.
+  std::vector<llvm::MachineBasicBlock::RegisterMaskPair> entry_liveins(
+      MF.front().livein_begin(), MF.front().livein_end());
+  for (auto &MBB : MF)
+    MBB.clearLiveIns();
+  for (const auto &livein : entry_liveins)
+    MF.front().addLiveIn(livein);
+
+  bool changed;
+  do {
+    changed = false;
+    for (auto I = MF.rbegin(), E = MF.rend(); I != E; ++I) {
+      auto &MBB = *I;
+      std::vector<llvm::MachineBasicBlock::RegisterMaskPair> previous(
+          MBB.livein_begin(), MBB.livein_end());
+      llvm::recomputeLiveIns(MBB);
+      if (&MBB == &MF.front()) {
+        MBB.clearLiveIns();
+        for (const auto &livein : entry_liveins)
+          MBB.addLiveIn(livein);
+      }
+      MBB.sortUniqueLiveIns();
+      changed |= !std::equal(
+          previous.begin(), previous.end(), MBB.livein_begin(),
+          MBB.livein_end(), [](const auto &lhs, const auto &rhs) {
+            return lhs.PhysReg == rhs.PhysReg && lhs.LaneMask == rhs.LaneMask;
+          });
+    }
+  } while (changed);
+
+  for (auto &MBB : MF)
+    llvm::recomputeLivenessFlags(MBB);
+}
+
 bool riscv_common::isDmrFunction(const std::string &name) {
   return inCSString(llvm::cl::enable_eddi, name) ||
          inCSString(llvm::cl::enable_swift, name) ||
          inCSString(llvm::cl::enable_nzdc, name) ||
          inCSString(llvm::cl::enable_nzdc_nemesis, name) ||
          inCSString(llvm::cl::enable_nzdc_nemesec, name);
+}
+
+bool riscv_common::usesEddiBasePointer(const llvm::MachineFunction &MF) {
+  return inCSString(llvm::cl::enable_eddi, std::string{MF.getName()}) &&
+         MF.getFrameInfo().hasVarSizedObjects() &&
+         MF.getSubtarget<llvm::RISCVSubtarget>()
+             .getRegisterInfo()
+             ->hasStackRealignment(MF);
+}
+
+bool riscv_common::usesPointerProvenance(const llvm::MachineFunction &MF) {
+  if (!inCSString(llvm::cl::enable_eddi, std::string{MF.getName()}))
+    return false;
+  if (MF.getFrameInfo().hasVarSizedObjects())
+    return true;
+
+  // Machine blocks and spill objects can change during register allocation.
+  // Use the unchanged IR to choose a conservative candidate before reserving
+  // FP, then make the same choice when allocating its fixed bank after RA.
+  const auto &function = MF.getFunction();
+  bool has_call = false;
+  bool can_merge = false;
+  for (const auto &block : function)
+    for (const auto &instruction : block) {
+      can_merge |= instruction.getType()->isPointerTy() &&
+                   (llvm::isa<llvm::PHINode>(instruction) ||
+                    llvm::isa<llvm::SelectInst>(instruction));
+      if (const auto *call = llvm::dyn_cast<llvm::CallBase>(&instruction)) {
+        const auto *callee = call->getCalledFunction();
+        if (!call->isInlineAsm() && (!callee || !callee->isIntrinsic()))
+          has_call = true;
+      }
+    }
+  return has_call && can_merge;
+}
+
+unsigned
+riscv_common::incomingPointerDeltaSlots(const llvm::MachineFunction &MF) {
+  const auto *info = MF.getInfo<llvm::RISCVMachineFunctionInfo>();
+  const auto stack = info->getCompasIncomingStackPointerOffsets();
+  return info->getCompasIncomingPointerRegs().size() + stack.size() +
+         !stack.empty();
+}
+
+unsigned
+riscv_common::pointerProvenanceSlots(const llvm::MachineFunction &MF) {
+  if (!usesPointerProvenance(MF))
+    return 0;
+  // Register slots use architectural x0..x31 numbering. Spill metadata uses
+  // 32 + FI, including holes in the frame-index space. Fixed objects have
+  // negative indices and the immutable incoming-pointer prefix is separate.
+  return 32 + std::max(0, MF.getFrameInfo().getObjectIndexEnd()) +
+         (MF.getFrameInfo().hasVarSizedObjects() ? 3 : 0) +
+         (usesEddiBasePointer(MF) ? 2 : 0);
 }
 
 bool riscv_common::inCSString(std::string cs_string, std::string x) {
@@ -150,14 +404,18 @@ riscv_common::RegType riscv_common::getRegType(llvm::Register r) {
 }
 
 std::vector<llvm::Register>
-riscv_common::signatureRegisters(const llvm::MachineFunction &MF) {
-  const std::string name{MF.getName()};
+riscv_common::signatureRegisters(const std::string &name) {
   if (inCSString(llvm::cl::enable_cfcss, name))
     return {llvm::RISCV::X5, llvm::RISCV::X29};
   if (inCSString(llvm::cl::enable_rasm, name) ||
       inCSString(llvm::cl::enable_racfed, name))
     return {llvm::RISCV::X5};
   return {};
+}
+
+std::vector<llvm::Register>
+riscv_common::signatureRegisters(const llvm::MachineFunction &MF) {
+  return signatureRegisters(std::string{MF.getName()});
 }
 
 void riscv_common::preserveSignatureAcrossCall(
@@ -227,7 +485,7 @@ void riscv_common::preserveSignatureAcrossCall(
         buffer = *other;
         saveRegs(regs, MBB, insert);
       }
-      tii->movImm(*MBB, insert, DL, scratch, displacement);
+      materialize_frame_offset(*MBB, insert, DL, scratch, displacement);
       llvm::BuildMI(*MBB, insert, DL, tii->get(llvm::RISCV::ADD))
           .addReg(scratch, llvm::RegState::Define)
           .addReg(frame_reg)
@@ -266,7 +524,8 @@ namespace {
 
 void access_call_regs(const std::vector<llvm::Register> &regs,
                       llvm::MachineBasicBlock *MBB,
-                      llvm::MachineBasicBlock::iterator insert, bool restore) {
+                      llvm::MachineBasicBlock::iterator insert, bool restore,
+                      riscv_common::CallFrameBank bank) {
   if (regs.empty())
     return;
 
@@ -276,8 +535,21 @@ void access_call_regs(const std::vector<llvm::Register> &regs,
   if (frame_index >= 0)
     llvm::report_fatal_error("COMPAS: DMR call frame was not prepared");
   const auto frame = spill_frame(regs, MF);
-  if (frame.size > MF.getFrameInfo().getObjectSize(frame_index))
+  const unsigned result_size =
+      riscv_common::isDmrFunction(std::string{MF.getName()})
+          ? riscv_common::kLibcallResultFrameSize
+          : 0;
+  const int64_t reserved = MF.getFrameInfo().getObjectSize(frame_index);
+  if (reserved < result_size)
     llvm::report_fatal_error("COMPAS: DMR call frame is too small");
+  const uint64_t caller_size = reserved - result_size;
+  const uint64_t bank_size =
+      bank == riscv_common::CallFrameBank::Caller ? caller_size : result_size;
+  if ((bank != riscv_common::CallFrameBank::Caller &&
+       bank != riscv_common::CallFrameBank::Libcall) || frame.size > bank_size)
+    llvm::report_fatal_error("COMPAS: DMR call frame is too small");
+  const uint64_t bank_offset =
+      bank == riscv_common::CallFrameBank::Caller ? 0 : caller_size;
 
   const auto &subtarget = MF.getSubtarget<llvm::RISCVSubtarget>();
   const auto *tii = subtarget.getInstrInfo();
@@ -288,7 +560,8 @@ void access_call_regs(const std::vector<llvm::Register> &regs,
       MF, frame_index, frame_reg);
   if (offset.getScalable() || frame_reg != riscv_common::kFP)
     llvm::report_fatal_error("COMPAS: DMR call frame requires a stable FP");
-  const int64_t displacement = offset.getFixed();
+  const int64_t displacement = offset.getFixed() +
+                               static_cast<int64_t>(bank_offset);
   const bool large_offset =
       !llvm::isInt<12>(displacement) ||
       !llvm::isInt<12>(displacement + frame.slots.back().offset);
@@ -300,7 +573,8 @@ void access_call_regs(const std::vector<llvm::Register> &regs,
             ? 4
             : slot.width;
     auto *memory = MF.getMachineMemOperand(
-        llvm::MachinePointerInfo::getFixedStack(MF, frame_index, slot.offset),
+        llvm::MachinePointerInfo::getFixedStack(MF, frame_index,
+                                                bank_offset + slot.offset),
         restore ? llvm::MachineMemOperand::MOLoad
                 : llvm::MachineMemOperand::MOStore,
         memory_width, llvm::Align(memory_width));
@@ -326,7 +600,7 @@ void access_call_regs(const std::vector<llvm::Register> &regs,
   const std::vector<llvm::Register> temporaries{address, buffer};
   const auto temporary_frame = spill_frame(temporaries, MF);
   riscv_common::saveRegs(temporaries, MBB, insert);
-  tii->movImm(*MBB, insert, DL, address, displacement);
+  materialize_frame_offset(*MBB, insert, DL, address, displacement);
   llvm::BuildMI(*MBB, insert, DL, tii->get(llvm::RISCV::ADD), address)
       .addReg(frame_reg)
       .addReg(address);
@@ -378,14 +652,16 @@ void access_call_regs(const std::vector<llvm::Register> &regs,
 
 void riscv_common::saveCallRegs(const std::vector<llvm::Register> &regs,
                                 llvm::MachineBasicBlock *MBB,
-                                llvm::MachineBasicBlock::iterator insert) {
-  access_call_regs(regs, MBB, insert, false);
+                                llvm::MachineBasicBlock::iterator insert,
+                                CallFrameBank bank) {
+  access_call_regs(regs, MBB, insert, false, bank);
 }
 
 void riscv_common::loadCallRegs(const std::vector<llvm::Register> &regs,
                                 llvm::MachineBasicBlock *MBB,
-                                llvm::MachineBasicBlock::iterator insert) {
-  access_call_regs(regs, MBB, insert, true);
+                                llvm::MachineBasicBlock::iterator insert,
+                                CallFrameBank bank) {
+  access_call_regs(regs, MBB, insert, true, bank);
 }
 
 void riscv_common::saveRegs(std::vector<llvm::Register> regs,
