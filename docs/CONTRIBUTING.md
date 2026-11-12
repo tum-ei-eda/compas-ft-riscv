@@ -4,7 +4,7 @@ COMPAS implements software fault tolerance as LLVM passes for the RISC-V backend
 
 ## Design and coding conventions
 
-Start with the [README](../README.adoc), the [user manual sources](manual/src/), and the interfaces and implementation for the behavior being changed. Update documentation, interface comments and relevant regression cases when changing a pass option, register assignment, signature scheme or supported instruction pattern. Identify proposals and deferred features as such.
+Start with the [README](../README.md), the [user manual sources](manual/src/), and the interfaces and implementation for the behavior being changed. Update documentation, interface comments and relevant regression cases when changing a pass option, register assignment, signature scheme or supported instruction pattern. Identify proposals and deferred features as such.
 
 The transformation passes and shared helpers live in [src](../src/), with corresponding interfaces in [include](../include/):
 
@@ -110,6 +110,8 @@ For fault-detection changes, report the injected instruction or data faults, the
 For performance or benchmark claims, compare matched source programs, inputs, target ISA/ABI, LLVM revisions, optimization flags and protection settings. Report compilation cost, binary size and execution overhead separately. For fault campaigns, include the fault model, campaign size, seeds and outcome classification. Keep generated IR, assembly, executables and logs under an ignored `build/` directory, and include concise results and reproduction commands in the contribution.
 
 ## Documentation
+
+The root [README](../README.md) uses Markdown for GitHub's Mermaid rendering. The other AsciiDoc guides retain their existing format. Keep the README and the [Pages landing page](site/index.html) consistent when changing the compiler flow or quickstart commands.
 
 The LaTeX user manual and published PDFs live in [docs/manual](manual/). Install `latexmk` and the LaTeX packages used by [main.tex](manual/src/main.tex), then run this from the repository root:
 
