@@ -2,20 +2,33 @@ name: Build COMPAS Manual and GitHub Pages
 
 on:
   push:
+    branches:
+      - main
     tags:
       - v*
+    paths:
+      - README.md
+      - docs/**
+      - docker/.env
+      - .github/workflows/doc.yml
+  pull_request:
+    paths:
+      - README.md
+      - docs/**
+      - docker/.env
+      - .github/workflows/doc.yml
   workflow_dispatch: {}
 
 permissions:
   contents: read
 
 concurrency:
-  group: github-pages
-  cancel-in-progress: false
+  group: github-pages-${{ github.event.pull_request.number || 'deploy' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build_manual:
-    name: Build PDF and HTML manual
+    name: Build project site and manual
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -24,9 +37,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            latexmk texlive-latex-extra texlive-fonts-recommended pandoc poppler-utils
+            latexmk texlive-latex-extra texlive-fonts-recommended pandoc poppler-utils python3
       - name: Build manual and Pages site
         run: sh docs/manual/generate.sh "$GITHUB_WORKSPACE/build/manual/site"
+      - name: Check site links and assets
+        run: python3 docs/manual/check_links.py build/manual/site
       - name: Upload Pages site
         uses: actions/upload-pages-artifact@v3
         with:
@@ -34,6 +49,7 @@ jobs:
 
   deploy_pages:
     name: Deploy GitHub Pages
+    if: github.event_name != 'pull_request'
     needs: build_manual
     runs-on: ubuntu-24.04
     permissions:

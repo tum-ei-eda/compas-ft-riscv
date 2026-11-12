@@ -1,0 +1,68 @@
+:root {
+  color-scheme: light;
+  --ink: #20283e;
+  --muted: #596179;
+  --indigo: #2d3a8c;
+  --line: #dfe2e8;
+  --paper: #fcfbf7;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: var(--paper);
+  line-height: 1.7;
+}
+* { box-sizing: border-box; }
+html { scroll-padding-top: 2rem; }
+body { margin: 0; }
+a { color: var(--indigo); text-underline-offset: .2em; }
+a:hover { text-decoration-thickness: .12em; }
+a:focus-visible { outline: 3px solid #dca928; outline-offset: 4px; }
+.skip-link { position: absolute; left: 1rem; top: -6rem; z-index: 10; padding: .6rem 1rem; background: white; }
+.skip-link:focus { top: 1rem; }
+.manual-header { display: flex; justify-content: space-between; align-items: center; gap: 2rem; padding: 1.2rem max(4vw, 1.2rem); border-bottom: 1px solid var(--line); background: #fff; }
+.brand { display: flex; align-items: center; gap: .65rem; color: var(--ink); font-weight: 750; text-decoration: none; letter-spacing: .03em; }
+.brand span { color: var(--muted); font-weight: 400; letter-spacing: 0; }
+.manual-header nav { display: flex; flex-wrap: wrap; gap: 1.4rem; font-size: .9rem; }
+.manual-layout { display: grid; grid-template-columns: 16rem minmax(0, 1fr); gap: 4rem; max-width: 82rem; margin: 0 auto; padding: 3rem 2rem 6rem; }
+.manual-sidebar { position: sticky; top: 1.5rem; align-self: start; max-height: calc(100vh - 3rem); overflow-y: auto; font-size: .85rem; padding-right: .8rem; }
+.manual-sidebar ul { list-style: none; margin: 0; padding-left: .8rem; }
+.manual-sidebar nav > ul { padding-left: 0; }
+.manual-sidebar li { margin: .5rem 0; line-height: 1.45; }
+.manual-sidebar a { color: var(--muted); text-decoration: none; }
+.manual-sidebar a:hover { color: var(--indigo); text-decoration: underline; }
+.eyebrow { color: var(--indigo); font-size: .72rem; text-transform: uppercase; letter-spacing: .13em; font-weight: 700; }
+article { min-width: 0; max-width: 54rem; overflow-wrap: break-word; }
+.manual-intro { padding-bottom: 2rem; margin-bottom: 3rem; border-bottom: 1px solid var(--line); }
+.manual-intro h1 { font-size: clamp(2.3rem, 4.5vw, 3.5rem); line-height: 1.12; letter-spacing: -.045em; margin: .65rem 0 1rem; }
+.manual-intro > p:not(.eyebrow) { color: var(--muted); font-size: 1.1rem; }
+h1, h2, h3, h4 { line-height: 1.25; scroll-margin-top: 1.5rem; }
+article > h1 { font-size: 2rem; margin-top: 3rem; }
+h2 { margin-top: 2.5rem; font-size: 1.6rem; }
+h3 { margin-top: 2rem; font-size: 1.25rem; }
+h4 { font-size: 1.05rem; }
+p, ul, ol { margin-top: 1rem; margin-bottom: 1rem; }
+li { margin: .4rem 0; }
+img { max-width: 100%; height: auto; }
+figure { margin: 2rem 0; text-align: center; }
+figure img { max-height: 28rem; width: auto; }
+figcaption { color: var(--muted); font-size: .9rem; }
+code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: .87em; }
+code { background: #edf0f5; border-radius: .2rem; padding: .12em .28em; }
+pre { background: #19223b; color: #edf2fc; padding: 1.3rem; border-radius: .45rem; overflow-x: auto; white-space: pre; line-height: 1.7; }
+pre code { background: transparent; padding: 0; border-radius: 0; font-size: inherit; }
+div.sourceCode { overflow-x: auto; }
+table { border-collapse: collapse; display: block; overflow-x: auto; max-width: 100%; margin: 1.5rem 0; font-size: .9rem; }
+th, td { border-bottom: 1px solid var(--line); padding: .7rem .9rem; text-align: left; }
+th { background: #edf0f5; }
+blockquote { border-left: 3px solid #dca928; padding-left: 1.2rem; color: var(--muted); margin-left: 0; }
+.csl-entry { margin: 1rem 0; }
+@media (max-width: 850px) {
+  .manual-layout { grid-template-columns: 1fr; gap: 2rem; padding: 2rem 1.2rem 4rem; }
+  .manual-sidebar { position: static; max-height: 19rem; border-bottom: 1px solid var(--line); padding-bottom: 1.5rem; }
+  .manual-header { align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
+  .manual-header nav { gap: 1rem; }
+}
+@media print {
+  .manual-header, .manual-sidebar, .skip-link, .manual-intro { display: none; }
+  .manual-layout { display: block; padding: 0; }
+  pre { white-space: pre-wrap; color: #111; background: #f4f4f4; }
+}

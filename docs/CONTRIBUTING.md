@@ -4,7 +4,7 @@ COMPAS implements software fault tolerance as LLVM passes for the RISC-V backend
 
 ## Design and coding conventions
 
-Start with the [README](../README.adoc), the [user manual sources](manual/src/), and the interfaces and implementation for the behavior being changed. Update documentation, interface comments and relevant regression cases when changing a pass option, register assignment, signature scheme or supported instruction pattern. Identify proposals and deferred features as such.
+Start with the [README](../README.md), the [user manual sources](manual/src/), and the interfaces and implementation for the behavior being changed. Update documentation, interface comments and relevant regression cases when changing a pass option, register assignment, signature scheme or supported instruction pattern. Identify proposals and deferred features as such.
 
 The transformation passes and shared helpers live in [src](../src/), with corresponding interfaces in [include](../include/):
 
@@ -111,6 +111,8 @@ For performance or benchmark claims, compare matched source programs, inputs, ta
 
 ## Documentation
 
+The root [README](../README.md) uses Markdown for GitHub's Mermaid rendering. The other AsciiDoc guides retain their existing format. Keep the README and the [Pages landing page](site/index.html) consistent when changing the compiler flow or quickstart commands.
+
 The LaTeX user manual and published PDFs live in [docs/manual](manual/). Install `latexmk` and the LaTeX packages used by [main.tex](manual/src/main.tex), then run this from the repository root:
 
 ```sh
@@ -118,6 +120,18 @@ latexmk -cd -pdf -outdir="$(pwd)/build/manual" docs/manual/src/main.tex
 ```
 
 The `-cd` option resolves included sources and figures from `docs/manual/src`. Open `build/manual/main.pdf` to review the result. The source contains an `@VERSION@` placeholder that the [documentation workflow](../.github/workflows/doc.yml) replaces for releases. Keep generated build files out of the source directory; update published PDFs only when preparing the corresponding documentation release. Documentation-only changes need link, path and formatting checks, plus a manual build when changing LaTeX sources or build instructions.
+
+To build the complete Pages site, install `latexmk`, `texlive-latex-extra`, `texlive-fonts-recommended`, `pandoc` and `poppler-utils`, then run:
+
+```sh
+sh docs/manual/generate.sh
+python3 docs/manual/check_links.py build/manual/site
+python3 -m http.server 8000 --directory build/manual/site
+```
+
+Preview `http://localhost:8000/` for the project introduction and `/manual/` for the HTML manual. The builder stages [docs/site](site/), copies the shared [COMPAS logo](manual/src/figs/compas.svg), fills in the version from [docker/.env](../docker/.env), and renders the manual with its [HTML template](manual/template.html) and [stylesheet](manual/manual.css). The versioned PDF and HTML filenames remain available at the site root. Generated files go under `build/manual/site`; the script also accepts another output directory as its first argument.
+
+The documentation workflow builds documentation pull requests without deploying them. Documentation changes on `main`, `v*` tags and manual workflow runs publish the Pages artifact. Validate the generated site at desktop and mobile widths, check navigation and download links, and compile the quickstart example when editing its commands.
 
 ## Issues and pull requests
 
