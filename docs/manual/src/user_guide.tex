@@ -111,6 +111,23 @@ whether its caller uses this pair for a signature. These caller-clobbered
 registers carry no formal ABI argument. Argument and result checks remain,
 as do ordinary DMR instruction and data checks within functions without CFP.
 
+\subsubsection{Floating-point balance checks}
+Single- and double-precision balance checks compare the register's raw bits.
+Identical quiet or signaling NaNs pass; different NaN payloads, signs or zero
+signs fail. Numerical equality is insufficient for the duplicated-state
+contract: positive and negative zero can produce different later results,
+such as division or sign extraction.
+
+The checks use integer bit comparisons without modifying FP exception flags.
+With the D extension, comparisons include the full 64-bit register, including
+the NaN-boxing bits of single-precision values. RV32 checks compare both halves
+of that stored representation.
+Temporary stack storage and the borrowed register are restored before the
+error branch, including when checking FP arguments before a protected tail
+transfer. These instructions belong to the \texttt{balance} RSM category.
+This does not provide a shadow copy of the architectural rounding mode or
+exception flags; protecting that shared state remains separate work.
+
 \subsubsection{Compiler save/restore helpers}
 Signature-only CFCSS, RASM and RACFED functions support
 \texttt{-msave-restore} (\texttt{+save-restore} in \texttt{llc}). Link against

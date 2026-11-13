@@ -1,6 +1,6 @@
 = Functional regression tests
 
-These tests check that programs retain their behavior when compiled through the COMPAS flow. Each case has an unprotected reference and an independently specified expected result. Protected builds must match both. The suite does not measure fault-detection capability or coverage.
+These tests check that programs retain their behavior when compiled through the COMPAS flow. Each case has an unprotected reference and an independently specified expected result. Protected builds must match both. Separate monitor probes also check specified error outcomes; they do not measure fault-detection coverage.
 
 == Layout
 
@@ -25,7 +25,7 @@ The link:regression/pc_relative/README.adoc[PC-relative suite] checks globals, a
 
 The link:regression/multi_function/README.adoc[multiple-function suite] compiles differently shaped protected functions and unprotected helpers together in one module. It checks repeated and reordered calls with selective hardening and enables the separate machine verifier.
 
-The link:regression/hard_float/README.adoc[hard-float suite] checks exact FP results and live values with RV32/RV64 F/D ISA and ABI profiles, including XLEN/FLEN mismatches. It enables the hardening matrix and separate machine verifier.
+The link:regression/hard_float/README.adoc[hard-float suite] checks exact FP results and live values with RV32/RV64 F/D ISA and ABI profiles, including XLEN/FLEN mismatches. It covers NaN payloads, signed zeros and subnormals with the hardening matrix and separate machine verifier, plus protected tail calls with CFP disabled. Its separate link:regression/hard_float/run_bit_checks.py[comparison probes] supply controlled primary/shadow differences to check the generated monitor's acceptance and rejection behavior, including both binary64 halves on RV32 and unchanged exception flags.
 
 The link:regression/rsm_layering/README.adoc[RSM instruction-selection suite] checks all seven combinations of original instructions, DMR instructions and balance checks on RV32/RV64. It combines functional equivalence with assembly assertions around entry checks, NEMESIS/NEMESEC duplicate branches and RACFED updates for original and duplicated arithmetic.
 
@@ -75,6 +75,7 @@ python3 tests/regression/run.py --case 'call_abi/*'
 python3 tests/regression/run.py --case 'pc_relative/*' --code-model medany
 python3 tests/regression/run.py --case 'multi_function/*'
 python3 tests/regression/run.py --case 'hard_float/*'
+python3 tests/regression/hard_float/run_bit_checks.py
 ----
 
 `--case` accepts a glob matching `suite/case`; quote it to prevent shell expansion. Repeat `--case`, `--arch`, `--mode`, `--schedule` or `--cfp` to select multiple values. Available DMR modes are `none`, `EDDI`, `SWIFT`, `NZDC`, `NZDC+NEMESIS` and `NZDC+NEMESEC`; schedules are coarse-grained (`cgs`) and fine-grained (`fgs`); control-flow selections are `none`, `CFCSS`, `RASM` and `RACFED`. Use `--mode none --cfp RASM`, for example, to check control-flow protection alone. `--functions` and `--cfp-functions` override manifest function selections with comma- or semicolon-separated lists. An explicit empty string passes an empty selection, allowing the selective-hardening combinations used by CI to be reproduced. Manifests may select CFP independently through `cfp_functions`; when omitted, CFP follows the effective DMR function selection, including `--functions`. `--cfp-functions` always takes precedence. Listing cases shows both effective selections.

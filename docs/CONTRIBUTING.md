@@ -65,7 +65,7 @@ This cache belongs to the LLVM CI build job. Docker image builds do not yet rest
 
 ### Functional validation
 
-Use the [shared test runner](../tests/README.adoc) to build unprotected references, run programs through the COMPAS flow and compare their functional behavior against independent expected results. `python3 tests/run.py --list` lists available cases without requiring tools. The runners under `tests/regression` and `tests/apps` select each group; use manifests to add cases without writing a separate build/run script. The current suite checks fault-free equivalence, not fault-detection capability or coverage.
+Use the [shared test runner](../tests/README.adoc) to build unprotected references, run programs through the COMPAS flow and compare their functional behavior against independent expected results. `python3 tests/run.py --list` lists available cases without requiring tools. The runners under `tests/regression` and `tests/apps` select each group; use manifests to add cases without writing a separate build/run script. The manifest suite checks fault-free equivalence. Separate [FP comparison probes](../tests/regression/hard_float/README.adoc) also check specified monitor error outcomes; these do not measure fault-detection coverage.
 
 Runtime validation requires a RISC-V GNU toolchain for assembly and linking, QEMU user-mode executables for freestanding regressions, and Spike with a matching proxy kernel (`pk`) for CMake applications. Application builds also need the toolchain's C library headers. For example, run the CRC configuration through the shared harness:
 

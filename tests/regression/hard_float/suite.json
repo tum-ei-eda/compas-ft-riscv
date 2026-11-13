@@ -68,6 +68,174 @@
       "architectures": ["rv32"], "isa": "rv32imafd", "abi": "ilp32d",
       "defines": ["TEST_CASE=6"],
       "functions": ["fp_eight_double_caller"]
+    },
+    {
+      "name": "float_bits_caller_rv32",
+      "architectures": ["rv32"], "isa": "rv32imaf", "abi": "ilp32f",
+      "sources": ["bit_patterns.c", "bit_patterns_helpers.c"],
+      "defines": [],
+      "functions": ["fp_pattern_caller"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "float_bits_callee_rv32",
+      "architectures": ["rv32"], "isa": "rv32imaf", "abi": "ilp32f",
+      "sources": ["bit_patterns.c", "bit_patterns_helpers.c"],
+      "defines": [],
+      "functions": ["fp_pattern_leaf"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "float_bits_caller_rv64",
+      "architectures": ["rv64"], "isa": "rv64imaf", "abi": "lp64f",
+      "sources": ["bit_patterns.c", "bit_patterns_helpers.c"],
+      "defines": [],
+      "functions": ["fp_pattern_caller"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "float_bits_callee_rv64",
+      "architectures": ["rv64"], "isa": "rv64imaf", "abi": "lp64f",
+      "sources": ["bit_patterns.c", "bit_patterns_helpers.c"],
+      "defines": [],
+      "functions": ["fp_pattern_leaf"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "double_bits_caller_rv32",
+      "architectures": ["rv32"], "isa": "rv32imafd", "abi": "ilp32d",
+      "sources": ["bit_patterns.c", "bit_patterns_helpers.c"],
+      "defines": ["FP_DOUBLE"],
+      "functions": ["fp_pattern_caller"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "double_bits_callee_rv32",
+      "architectures": ["rv32"], "isa": "rv32imafd", "abi": "ilp32d",
+      "sources": ["bit_patterns.c", "bit_patterns_helpers.c"],
+      "defines": ["FP_DOUBLE"],
+      "functions": ["fp_pattern_leaf"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "double_bits_caller_rv64",
+      "architectures": ["rv64"], "isa": "rv64imafd", "abi": "lp64d",
+      "sources": ["bit_patterns.c", "bit_patterns_helpers.c"],
+      "defines": ["FP_DOUBLE"],
+      "functions": ["fp_pattern_caller"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "double_bits_callee_rv64",
+      "architectures": ["rv64"], "isa": "rv64imafd", "abi": "lp64d",
+      "sources": ["bit_patterns.c", "bit_patterns_helpers.c"],
+      "defines": ["FP_DOUBLE"],
+      "functions": ["fp_pattern_leaf"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "float_bits_nanboxed_caller_rv32",
+      "architectures": ["rv32"], "isa": "rv32imafd", "abi": "ilp32d",
+      "sources": ["bit_patterns.c", "bit_patterns_helpers.c"],
+      "defines": [],
+      "functions": ["fp_pattern_caller"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "float_bits_nanboxed_callee_rv32",
+      "architectures": ["rv32"], "isa": "rv32imafd", "abi": "ilp32d",
+      "sources": ["bit_patterns.c", "bit_patterns_helpers.c"],
+      "defines": [],
+      "functions": ["fp_pattern_leaf"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "float_bits_nanboxed_caller_rv64",
+      "architectures": ["rv64"], "isa": "rv64imafd", "abi": "lp64d",
+      "sources": ["bit_patterns.c", "bit_patterns_helpers.c"],
+      "defines": [],
+      "functions": ["fp_pattern_caller"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "float_bits_nanboxed_callee_rv64",
+      "architectures": ["rv64"], "isa": "rv64imafd", "abi": "lp64d",
+      "sources": ["bit_patterns.c", "bit_patterns_helpers.c"],
+      "defines": [],
+      "functions": ["fp_pattern_leaf"],
+      "schedules": ["cgs", "fgs"]
+    },
+    {
+      "name": "float_bits_tail_rv32",
+      "architectures": ["rv32"], "isa": "rv32imaf", "abi": "ilp32f",
+      "sources": ["bit_patterns.c", "bit_patterns_helpers.c"],
+      "defines": ["FP_PATTERN_TAIL"],
+      "functions": ["fp_pattern_caller", "fp_pattern_leaf"],
+      "schedules": ["cgs", "fgs"],
+      "sibling_calls": true,
+      "cfp_modes": ["none"],
+      "optimization": 2,
+      "call_transfers": [{"caller": "fp_pattern_caller", "callee": "fp_pattern_leaf", "reference": "tail", "hardened": "tail"}]
+    },
+    {
+      "name": "float_bits_tail_rv64",
+      "architectures": ["rv64"], "isa": "rv64imaf", "abi": "lp64f",
+      "sources": ["bit_patterns.c", "bit_patterns_helpers.c"],
+      "defines": ["FP_PATTERN_TAIL"],
+      "functions": ["fp_pattern_caller", "fp_pattern_leaf"],
+      "schedules": ["cgs", "fgs"],
+      "sibling_calls": true,
+      "cfp_modes": ["none"],
+      "optimization": 2,
+      "call_transfers": [{"caller": "fp_pattern_caller", "callee": "fp_pattern_leaf", "reference": "tail", "hardened": "tail"}]
+    },
+    {
+      "name": "double_bits_tail_rv32",
+      "architectures": ["rv32"], "isa": "rv32imafd", "abi": "ilp32d",
+      "sources": ["bit_patterns.c", "bit_patterns_helpers.c"],
+      "defines": ["FP_DOUBLE", "FP_PATTERN_TAIL"],
+      "functions": ["fp_pattern_caller", "fp_pattern_leaf"],
+      "schedules": ["cgs", "fgs"],
+      "sibling_calls": true,
+      "cfp_modes": ["none"],
+      "optimization": 2,
+      "call_transfers": [{"caller": "fp_pattern_caller", "callee": "fp_pattern_leaf", "reference": "tail", "hardened": "tail"}]
+    },
+    {
+      "name": "double_bits_tail_rv64",
+      "architectures": ["rv64"], "isa": "rv64imafd", "abi": "lp64d",
+      "sources": ["bit_patterns.c", "bit_patterns_helpers.c"],
+      "defines": ["FP_DOUBLE", "FP_PATTERN_TAIL"],
+      "functions": ["fp_pattern_caller", "fp_pattern_leaf"],
+      "schedules": ["cgs", "fgs"],
+      "sibling_calls": true,
+      "cfp_modes": ["none"],
+      "optimization": 2,
+      "call_transfers": [{"caller": "fp_pattern_caller", "callee": "fp_pattern_leaf", "reference": "tail", "hardened": "tail"}]
+    },
+    {
+      "name": "float_nanboxed_bits_tail_rv32",
+      "architectures": ["rv32"], "isa": "rv32imafd", "abi": "ilp32d",
+      "sources": ["bit_patterns.c", "bit_patterns_helpers.c"],
+      "defines": ["FP_PATTERN_TAIL"],
+      "functions": ["fp_pattern_caller", "fp_pattern_leaf"],
+      "schedules": ["cgs", "fgs"],
+      "sibling_calls": true,
+      "cfp_modes": ["none"],
+      "optimization": 2,
+      "call_transfers": [{"caller": "fp_pattern_caller", "callee": "fp_pattern_leaf", "reference": "tail", "hardened": "tail"}]
+    },
+    {
+      "name": "float_nanboxed_bits_tail_rv64",
+      "architectures": ["rv64"], "isa": "rv64imafd", "abi": "lp64d",
+      "sources": ["bit_patterns.c", "bit_patterns_helpers.c"],
+      "defines": ["FP_PATTERN_TAIL"],
+      "functions": ["fp_pattern_caller", "fp_pattern_leaf"],
+      "schedules": ["cgs", "fgs"],
+      "sibling_calls": true,
+      "cfp_modes": ["none"],
+      "optimization": 2,
+      "call_transfers": [{"caller": "fp_pattern_caller", "callee": "fp_pattern_leaf", "reference": "tail", "hardened": "tail"}]
     }
   ]
 }

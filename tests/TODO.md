@@ -28,6 +28,15 @@ python3 tests/regression/run.py --case 'stack_args/*' \
 
 Direct calls across either selective DMR boundary now use returning wrappers prepared before frame layout in every DMR mode. The wrappers preserve context in fixed caller-frame slots; late machine IR that bypasses this decision is diagnosed. Scalar calls between compatible protected functions can still be tails. REPAIR rejects those tails and indirect tails because its fixed caller snapshot requires a live frame; use `-fno-optimize-sibling-calls` for returning calls. Defining the corresponding early REPAIR decision and explicit `musttail` behavior remains separate work.
 
+- [ ] Check EDDI's stack relation before tearing down compatible tail-call frames.
+
+The `hard_float/*bits_tail*` cases expose a stale EDDI stack check after the paired epilogue releases both frames. It compares `SP + 16` with shadow SP even though they are already equal. With any CFP selection, these cases reach target `-512` on RV32/RV64 with LLVM13/16 and both schedules, including `orig`, `orig+dmr` and `balance` selections under RACFED. Forcing a frame pointer also exposes the failure without CFP. Baseline and patched traces take this branch before any FP comparison; finite-only probes fail too. This is independent of the corrected NaN/signed-zero checks. The new tail cases default to CFP disabled; caller/callee FP cases retain the complete CFP matrix.
+
+```sh
+python3 tests/regression/run.py --case 'hard_float/double_bits_tail_rv32' \
+  --mode EDDI --cfp CFCSS --verify-machineinstrs
+```
+
 ## Global signature selection with save/restore helpers
 
 - [ ] Preserve RASM/RACFED signatures when all helper wrappers are selected.
@@ -41,15 +50,15 @@ python3 tests/regression/run.py --case 'save_restore/repeated_calls' \
 
 ## Floating-point checks
 
-- [ ] Correct FP equality checks for NaNs and signed zero.
 - [ ] Define protection of architectural FP control/status state.
 - [ ] Resolve LLVM16 REPAIR FP shadow-register lookup failures.
 
-The current `FEQ_S`/`FEQ_D` checks reject matching NaNs and accept oppositely signed zeroes. The rounding-mode input (`FRM`) is shared by primary and shadow computations; FP control/status state has no shadow. The [hard-float suite](regression/hard_float/README.adoc) checks finite values against exact-bit oracles, including nonzero lower binary64 bits on RV32.
+The rounding-mode input (`FRM`) is shared by primary and shadow computations; FP control/status state has no shadow. Balance checks now compare raw register bits, including NaN boxing, without changing exception flags. The [hard-float suite](regression/hard_float/README.adoc) covers matching quiet/signaling NaNs, signed zeros, subnormals, protected tail calls and nonzero lower binary64 bits on RV32. Its controlled comparison probes require different encodings to reach the error handler and identical encodings to pass with unchanged exception flags.
 
-With `-REPAIR` enabled, the `eight_float_rv64` and `eight_double_rv32` fixtures abort in `getPrimaryFromShadow()` on LLVM16 for all three NZDC modes. The assertion also occurs in the compiler before the call-preservation changes. LLVM13 passes both finite-value call probes with both schedules. The [REPAIR call suite](regression/repair_call_abi/README.adoc) currently covers integer-register ABIs.
+With `-REPAIR` enabled, the `eight_float_rv64` and `eight_double_rv32` fixtures abort in `getPrimaryFromShadow()` on LLVM16 for all three NZDC modes. The same assertion affects `float_live_rv32` and `double_live_rv64` with both schedules, before and after the bitwise-comparison fix. LLVM13 passes these finite-value call probes with both schedules. The [REPAIR call suite](regression/repair_call_abi/README.adoc) currently covers integer-register ABIs.
 
 ```sh
 python3 tests/regression/run.py --case 'hard_float/*' \
-  --no-verify-machineinstrs --build-dir build/tests-todo-hard-float
+  --verify-machineinstrs --build-dir build/tests-todo-hard-float
+python3 tests/regression/hard_float/run_bit_checks.py
 ```

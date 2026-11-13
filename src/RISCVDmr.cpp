@@ -548,6 +548,7 @@ bool RISCVDmr::runOnMachineFunction(llvm::MachineFunction &MF) {
   else if (!ignore && !llvm::cl::enable_repair &&
            riscv_common::usesDmrBasePointer(*MF_))
     preserveBasePointerAcrossCalls();
+  lowerFPChecks();
   record_new(RsmCategory::Balance);
 
   return !ignore;
@@ -833,6 +834,7 @@ void RISCVDmr::init() {
   indirect_calls_.clear();
   loads_.clear();
   shadow_loads_.clear();
+  fp_checks_.clear();
   frame_address_stores_.clear();
   shadow_pcrel_symbols_.clear();
   stack_address_call_args_.clear();
@@ -1976,16 +1978,179 @@ void RISCVDmr::syncFPRegs(llvm::MachineBasicBlock *MBB,
     assert(0 && "unexpected reg operands passed");
   }
 
-  llvm::BuildMI(*MBB, insert, DLL, TII_->get(feq_opcode), shadow_zero)
-      .addReg(r1)
-      .addReg(r2);
-  llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::ADDI), shadow_zero)
-      .addReg(shadow_zero)
-      .addImm(-1);
-  llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::BNE))
-      .addReg(shadow_zero)
-      .addReg(riscv_common::k0)
-      .addMBB(err_bb_);
+  // Keep the logical comparison recognizable to REPAIR's FP loadback and
+  // shadow-register rewriting. lowerFPChecks replaces this owned marker
+  // before leaving DMR; numerical FEQ must never implement a bit check.
+  auto compare =
+      llvm::BuildMI(*MBB, insert, DLL, TII_->get(feq_opcode), shadow_zero)
+          .addReg(r1)
+          .addReg(r2);
+  auto adjust = llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::ADDI),
+                              shadow_zero)
+                    .addReg(shadow_zero)
+                    .addImm(-1);
+  auto branch = llvm::BuildMI(*MBB, insert, DLL, TII_->get(llvm::RISCV::BNE))
+                    .addReg(shadow_zero)
+                    .addReg(riscv_common::k0)
+                    .addMBB(err_bb_);
+  fp_checks_.insert(compare.getInstr());
+  for (auto *MI : {compare.getInstr(), adjust.getInstr(), branch.getInstr()})
+    riscv_common::setRsmInstructionCategory(*MI,
+                                            riscv_common::RsmCategory::Balance);
+}
+
+void RISCVDmr::lowerFPChecks() {
+  if (fp_checks_.empty())
+    return;
+  using CFI = llvm::MCCFIInstruction;
+  const auto scratch = P2S_.at(riscv_common::k0);
+  const auto temporary = P2S_.at(riscv_common::kRA);
+  const auto &subtarget = MF_->getSubtarget<llvm::RISCVSubtarget>();
+  const unsigned dwarf_sp = TRI_->getDwarfRegNum(riscv_common::kSP, true);
+  unsigned cfa_register = dwarf_sp;
+  std::vector<unsigned> cfa_states;
+
+  for (auto &MBB : *MF_) {
+    for (auto iterator = MBB.begin(); iterator != MBB.end();) {
+      auto &MI = *iterator++;
+      if (MI.isCFIInstruction()) {
+        const auto &cfi =
+            MF_->getFrameInstructions().at(MI.getOperand(0).getCFIIndex());
+        switch (cfi.getOperation()) {
+        case CFI::OpDefCfa:
+        case CFI::OpDefCfaRegister:
+          cfa_register = cfi.getRegister();
+          break;
+        case CFI::OpRememberState:
+          cfa_states.push_back(cfa_register);
+          break;
+        case CFI::OpRestoreState:
+          assert(!cfa_states.empty() && "unbalanced CFI state");
+          cfa_register = cfa_states.back();
+          cfa_states.pop_back();
+          break;
+        case CFI::OpEscape:
+          // EDDI uses the standard remember/restore byte encodings because
+          // LLVM13's AsmPrinter lacks the dedicated instruction cases.
+          if (cfi.getValues() == llvm::StringRef("\x0a", 1))
+            cfa_states.push_back(cfa_register);
+          else if (cfi.getValues() == llvm::StringRef("\x0b", 1)) {
+            assert(!cfa_states.empty() && "unbalanced CFI state");
+            cfa_register = cfa_states.back();
+            cfa_states.pop_back();
+          }
+          break;
+        default:
+          break;
+        }
+      }
+      if (!fp_checks_.count(&MI))
+        continue;
+
+      const auto where = MI.getIterator();
+      const auto DL = MI.getDebugLoc();
+      auto primary = MI.getOperand(1).getReg();
+      auto shadow = MI.getOperand(2).getReg();
+      const bool wide = subtarget.hasStdExtD();
+      if (wide && MI.getOpcode() == llvm::RISCV::FEQ_S) {
+        // A binary32 value in FLEN=64 also depends on its NaN-boxing bits.
+        // Ignoring those bits would accept an invalid box which later FP
+        // arithmetic interprets as a NaN instead of the primary value.
+        primary = llvm::RISCV::F0_D + (primary - llvm::RISCV::F0_F);
+        shadow = llvm::RISCV::F0_D + (shadow - llvm::RISCV::F0_F);
+      }
+      const bool split_double = wide && isa_config_.word_length == 4;
+      const unsigned size = split_double ? 32 : 16;
+      auto emit = [&](unsigned opcode) {
+        auto instruction = llvm::BuildMI(MBB, where, DL, TII_->get(opcode));
+        riscv_common::setRsmInstructionCategory(
+            *instruction.getInstr(), riscv_common::RsmCategory::Balance);
+        return instruction;
+      };
+      auto adjust_cfa = [&](int amount) {
+        if (cfa_register == dwarf_sp)
+          emit(llvm::TargetOpcode::CFI_INSTRUCTION)
+              .addCFIIndex(MF_->addFrameInst(
+                  CFI::createAdjustCfaOffset(nullptr, amount)));
+      };
+      auto memory = [&](unsigned opcode, llvm::Register reg, unsigned offset,
+                        bool load, unsigned width) {
+        // This private area is below the current primary SP, not an existing
+        // primary/shadow frame object. Do not copy their alias provenance.
+        auto *mmo =
+            MF_->getMachineMemOperand(llvm::MachinePointerInfo(),
+                                      load ? llvm::MachineMemOperand::MOLoad
+                                           : llvm::MachineMemOperand::MOStore,
+                                      width, llvm::Align(width));
+        emit(opcode)
+            .addReg(reg, load ? llvm::RegState::Define : 0)
+            .addReg(riscv_common::kSP)
+            .addImm(offset)
+            .addMemOperand(mmo);
+      };
+
+      // Borrow shadow RA, which is defined at protected entry or by a
+      // protected call's result convention. Preserve it even under REPAIR's
+      // changing register assignment. Restore both it and SP before the
+      // existing error branch, so tail checks need no live function frame.
+      emit(llvm::RISCV::ADDI)
+          .addReg(riscv_common::kSP, llvm::RegState::Define)
+          .addReg(riscv_common::kSP)
+          .addImm(-static_cast<int>(size));
+      adjust_cfa(size);
+      memory(isa_config_.store_opcode, temporary, 0, false,
+             isa_config_.word_length);
+      if (split_double) {
+        // RV32 has no FMV.X.D. FSD preserves NaN payloads, boxing and both
+        // binary64 halves without FP arithmetic or FCSR effects.
+        memory(llvm::RISCV::FSD, primary, 8, false, 8);
+        memory(llvm::RISCV::FSD, shadow, 16, false, 8);
+        memory(llvm::RISCV::LW, scratch, 8, true, 4);
+        memory(llvm::RISCV::LW, temporary, 16, true, 4);
+        emit(llvm::RISCV::XOR)
+            .addReg(scratch, llvm::RegState::Define)
+            .addReg(scratch)
+            .addReg(temporary);
+        memory(llvm::RISCV::SW, scratch, 24, false, 4);
+        memory(llvm::RISCV::LW, scratch, 12, true, 4);
+        memory(llvm::RISCV::LW, temporary, 20, true, 4);
+        emit(llvm::RISCV::XOR)
+            .addReg(scratch, llvm::RegState::Define)
+            .addReg(scratch)
+            .addReg(temporary);
+        memory(llvm::RISCV::LW, temporary, 24, true, 4);
+        emit(llvm::RISCV::OR)
+            .addReg(scratch, llvm::RegState::Define)
+            .addReg(scratch)
+            .addReg(temporary);
+      } else {
+        const unsigned move =
+            wide ? llvm::RISCV::FMV_X_D : llvm::RISCV::FMV_X_W;
+        emit(move).addReg(scratch, llvm::RegState::Define).addReg(primary);
+        emit(move).addReg(temporary, llvm::RegState::Define).addReg(shadow);
+        emit(llvm::RISCV::XOR)
+            .addReg(scratch, llvm::RegState::Define)
+            .addReg(scratch)
+            .addReg(temporary);
+      }
+      // Match the logical marker's integer result; retain its ADDI/BNE and
+      // the original control-flow shape for all RSM selection masks.
+      emit(llvm::RISCV::SLTIU)
+          .addReg(scratch, llvm::RegState::Define)
+          .addReg(scratch)
+          .addImm(1);
+      memory(isa_config_.load_opcode, temporary, 0, true,
+             isa_config_.word_length);
+      emit(llvm::RISCV::ADDI)
+          .addReg(riscv_common::kSP, llvm::RegState::Define)
+          .addReg(riscv_common::kSP)
+          .addImm(size);
+      adjust_cfa(-static_cast<int>(size));
+      riscv_common::rsmFunctionInfo(*MF_).instructions.erase(&MI);
+      MI.eraseFromParent();
+    }
+  }
+  fp_checks_.clear();
 }
 
 void RISCVDmr::saveIncomingPointerDeltas(llvm::MachineInstr *before,

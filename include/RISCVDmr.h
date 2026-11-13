@@ -287,6 +287,8 @@ protected:
   std::set<llvm::MachineInstr *> branches_{};
   std::set<llvm::MachineInstr *> loads_{};
   std::set<llvm::MachineInstr *> shadow_loads_{};
+  // Logical FP checks stay recognizable until REPAIR has assigned shadows.
+  std::set<llvm::MachineInstr *> fp_checks_{};
   struct PointerOrigin {
     enum class Kind {
       Frame,
@@ -371,6 +373,7 @@ protected:
                       llvm::Register);
   void syncFPRegs(llvm::MachineBasicBlock *, llvm::MachineBasicBlock::iterator,
                   llvm::Register, llvm::Register);
+  void lowerFPChecks();
 };
 
 // NOTE: ft0_{h,f,d} with its shadow are available for FP DMR purposes as they
