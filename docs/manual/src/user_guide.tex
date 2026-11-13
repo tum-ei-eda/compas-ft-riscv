@@ -125,11 +125,25 @@ of that stored representation.
 Temporary stack storage and the borrowed register are restored before the
 error branch, including when checking FP arguments before a protected tail
 transfer. These instructions belong to the \texttt{balance} RSM category.
-This does not provide a shadow copy of the architectural rounding mode or
-exception flags; protecting that shared state remains separate work.
+
+\paragraph{Accepted shared CSR state.}
+The \href{https://docs.riscv.org/reference/isa/v20260120/unpriv/f-st-ext.html}{RISC-V F extension}
+exposes rounding mode \texttt{frm} as bits 7--5 of \texttt{fcsr} and accrued
+exception flags \texttt{fflags} as bits 4--0. The separate CSR addresses for
+these fields access the same architectural state.
+COMPAS accepts these fields as a shared, unprotected single point of failure.
+Primary and shadow instructions using dynamic rounding consume the same
+\texttt{frm}; corruption can therefore produce matching incorrect results
+and escape the data checks. Corruption of \texttt{fflags} is also outside
+the current protection guarantees. Neither field is replicated or checked.
+
 Ordinary duplication and REPAIR retain LLVM's implicit \texttt{FRM} operand
 as a shared input. REPAIR renames the FP data operands without attempting to
 assign the rounding-mode register a GPR or FPR shadow.
+The dynamic-rounding regressions check functional use of this shared state;
+they do not establish resilience to CSR faults. The raw-bit balance checks
+themselves leave the exception flags unchanged, while application FP arithmetic
+normally accrues flags into the shared \texttt{fflags} state.
 
 \subsubsection{Compiler save/restore helpers}
 Signature-only CFCSS, RASM and RACFED functions support

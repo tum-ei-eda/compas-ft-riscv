@@ -47,19 +47,3 @@ python3 tests/regression/run.py --case 'hard_float/double_bits_tail_rv32' \
 python3 tests/regression/run.py --case 'save_restore/repeated_calls' \
   --cfp RASM --cfp RACFED --cfp-functions=-1 --verify-machineinstrs
 ```
-
-## Floating-point checks
-
-- [ ] Define protection of architectural FP control/status state.
-
-The rounding-mode input (`FRM`) is shared by primary and shadow computations; FP control/status state has no shadow. Balance checks now compare raw register bits, including NaN boxing, without changing exception flags. The [hard-float suite](regression/hard_float/README.adoc) covers matching quiet/signaling NaNs, signed zeros, subnormals, protected tail calls and nonzero lower binary64 bits on RV32. Its controlled comparison probes require different encodings to reach the error handler and identical encodings to pass with unchanged exception flags.
-
-LLVM's implicit `FRM` input remains shared in both ordinary duplication and REPAIR. The [REPAIR hard-float suite](regression/repair_hard_float/README.adoc) covers FP arithmetic, calling conventions and runtime rounding-mode changes; retaining that input does not protect it against corruption. The [REPAIR call suite](regression/repair_call_abi/README.adoc) separately covers integer-register ABIs.
-
-```sh
-python3 tests/regression/run.py --case 'hard_float/*' \
-  --verify-machineinstrs --build-dir build/tests-todo-hard-float
-python3 tests/regression/hard_float/run_bit_checks.py
-python3 tests/regression/run.py --case 'repair_hard_float/*' \
-  --verify-machineinstrs --build-dir build/tests-todo-repair-hard-float
-```

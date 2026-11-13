@@ -41,10 +41,13 @@ environment helpers contain CSR inline assembly. The protected functions use
 ordinary C. The RV32 binary64 and RV64 NaN-boxed rounding cases also run with
 CFCSS, RASM and RACFED.
 
-`FRM` is shared architectural control state, rather than an independently
-duplicated data register. These tests check that REPAIR retains its implicit
-input while changing shadow data-register assignments. They do not establish
-fault recovery coverage or duplication of rounding mode and exception flags.
+The rounding-mode field `frm` and accrued exception flags `fflags` are shared
+CSR state, also accessible together through `fcsr`. COMPAS accepts this state
+as a single point of failure outside its current protection guarantees.
+A rounding-mode fault may affect both computations identically and escape
+data checking. These tests check that REPAIR retains LLVM's implicit `FRM`
+input while changing shadow data-register assignments; they do not establish
+resilience to CSR faults or fault-recovery coverage.
 
 Run the suite with:
 

@@ -66,8 +66,10 @@ must fail a comparison.
 This follows the duplicated-state contract: the zero sign can change later
 results such as division and `copysign`, even though numerical equality treats
 the two zeros alike. Fault-free tests alone cannot prove rejection of different
-encodings. These cases also do not establish coverage of the shared
-floating-point rounding mode or exception flags.
+encodings. The shared rounding-mode and exception-status fields (`frm` and
+`fflags`, also accessible through `fcsr`) are accepted single points of failure.
+Corruption of this CSR state is outside the current protection guarantees;
+a rounding-mode fault may affect both copies identically and escape checking.
 
 == Controlled comparison probes
 
