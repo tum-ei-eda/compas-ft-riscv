@@ -127,6 +127,9 @@ error branch, including when checking FP arguments before a protected tail
 transfer. These instructions belong to the \texttt{balance} RSM category.
 This does not provide a shadow copy of the architectural rounding mode or
 exception flags; protecting that shared state remains separate work.
+Ordinary duplication and REPAIR retain LLVM's implicit \texttt{FRM} operand
+as a shared input. REPAIR renames the FP data operands without attempting to
+assign the rounding-mode register a GPR or FPR shadow.
 
 \subsubsection{Compiler save/restore helpers}
 Signature-only CFCSS, RASM and RACFED functions support

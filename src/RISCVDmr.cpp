@@ -3780,6 +3780,10 @@ void RISCVDmr::repair() {
           llvm::Register prev_def{0}, new_def{0}, pri_def{0};
           for (auto &op : MI.operands()) {
             if (op.isReg() && op.isUse()) {
+              // Like ordinary duplication, REPAIR keeps the architectural
+              // rounding-mode input shared rather than assigning a shadow.
+              if (op.isImplicit() && op.getReg() == llvm::RISCV::FRM)
+                continue;
               assert(riscv_common::setmapContains(
                   LiveP2S, getPrimaryFromShadow(op.getReg())));
 

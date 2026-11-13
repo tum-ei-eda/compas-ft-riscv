@@ -19,6 +19,8 @@ The link:regression/call_abi/README.adoc[call ABI suite] checks selective harden
 
 The link:regression/repair_call_abi/README.adoc[REPAIR call ABI suite] checks REPAIR with NZDC, NZDC+NEMESIS and NZDC+NEMESEC. It covers outgoing stack arguments, live values, indirect calls, dynamic and realigned dynamic frames, and duplicable or nonduplicable libcalls on RV32/RV64 with both schedules and the machine verifier. Three representative cases also run all CFP selections.
 
+The link:regression/repair_hard_float/README.adoc[REPAIR hard-float suite] checks FP arithmetic, call preservation and exact-bit values with the three NZDC modes on RV32/RV64. Dynamic-rounding cases verify that protected arithmetic continues to use the shared architectural rounding mode. The suite enables both schedules and machine verification.
+
 The link:regression/save_restore/README.adoc[save/restore suites] check signature monitoring around real GNU prologue/epilogue helpers and the explicit-spill policy for DMR functions. Cases cover leaves, repeated calls, return paths, stack arguments and dynamic frames on RV32/RV64. Assembly checks require GNU helpers in ordinary functions and explicit callee saves in selected DMR functions; executables use the toolchain's `libgcc` implementations.
 
 The link:regression/pc_relative/README.adoc[PC-relative suite] checks globals, array offsets and addresses retained across calls and branches with both `medlow` and `medany` code models. It disables relaxation to retain address-materialization instructions in the executable and enables the hardening matrix and separate machine verifier.

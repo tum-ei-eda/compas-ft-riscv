@@ -1,0 +1,243 @@
+{
+  "name": "repair_hard_float",
+  "adapter": "freestanding",
+  "architectures": [
+    "rv32",
+    "rv64"
+  ],
+  "modes": [
+    "NZDC",
+    "NZDC+NEMESIS",
+    "NZDC+NEMESEC"
+  ],
+  "cfp_modes": [
+    "none"
+  ],
+  "schedules": [
+    "cgs",
+    "fgs"
+  ],
+  "repair": true,
+  "verify_machineinstrs": true,
+  "sources": [
+    "../hard_float/hard_float.c",
+    "../hard_float/hard_float_helpers.c"
+  ],
+  "expected": {
+    "exit": 42,
+    "stdout": ""
+  },
+  "cases": [
+    {
+      "name": "float_live_rv32",
+      "architectures": ["rv32"],
+      "isa": "rv32imaf",
+      "abi": "ilp32f",
+      "defines": ["TEST_CASE=1"],
+      "functions": ["fp_float_caller"]
+    },
+    {
+      "name": "float_live_rv64",
+      "architectures": ["rv64"],
+      "isa": "rv64imaf",
+      "abi": "lp64f",
+      "defines": ["TEST_CASE=1"],
+      "functions": ["fp_float_caller"],
+      "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"]
+    },
+    {
+      "name": "double_live_rv32",
+      "architectures": ["rv32"],
+      "isa": "rv32imafd",
+      "abi": "ilp32d",
+      "defines": ["TEST_CASE=2"],
+      "functions": ["fp_double_caller"],
+      "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"]
+    },
+    {
+      "name": "double_live_rv64",
+      "architectures": ["rv64"],
+      "isa": "rv64imafd",
+      "abi": "lp64d",
+      "defines": ["TEST_CASE=2"],
+      "functions": ["fp_double_caller"]
+    },
+    {
+      "name": "float_callee_rv64",
+      "architectures": ["rv64"],
+      "isa": "rv64imaf",
+      "abi": "lp64f",
+      "defines": ["TEST_CASE=1"],
+      "functions": ["fp_float_leaf"]
+    },
+    {
+      "name": "double_callee_rv32",
+      "architectures": ["rv32"],
+      "isa": "rv32imafd",
+      "abi": "ilp32d",
+      "defines": ["TEST_CASE=2"],
+      "functions": ["fp_double_leaf"]
+    },
+    {
+      "name": "mixed_float_rv64",
+      "architectures": ["rv64"],
+      "isa": "rv64imaf",
+      "abi": "lp64f",
+      "defines": ["TEST_CASE=3"],
+      "functions": ["fp_mixed_float_caller", "fp_mixed_float_leaf"]
+    },
+    {
+      "name": "mixed_double_rv32",
+      "architectures": ["rv32"],
+      "isa": "rv32imafd",
+      "abi": "ilp32d",
+      "defines": ["TEST_CASE=4"],
+      "functions": ["fp_mixed_double_caller", "fp_mixed_double_leaf"],
+      "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"]
+    },
+    {
+      "name": "eight_float_rv64",
+      "architectures": ["rv64"],
+      "isa": "rv64imaf",
+      "abi": "lp64f",
+      "defines": ["TEST_CASE=5"],
+      "functions": ["fp_eight_float_caller"]
+    },
+    {
+      "name": "eight_double_rv32",
+      "architectures": ["rv32"],
+      "isa": "rv32imafd",
+      "abi": "ilp32d",
+      "defines": ["TEST_CASE=6"],
+      "functions": ["fp_eight_double_caller"]
+    },
+    {
+      "name": "double_bits_caller_rv32",
+      "architectures": ["rv32"],
+      "isa": "rv32imafd",
+      "abi": "ilp32d",
+      "sources": ["../hard_float/bit_patterns.c", "../hard_float/bit_patterns_helpers.c"],
+      "defines": ["FP_DOUBLE"],
+      "functions": ["fp_pattern_caller"]
+    },
+    {
+      "name": "double_bits_callee_rv32",
+      "architectures": ["rv32"],
+      "isa": "rv32imafd",
+      "abi": "ilp32d",
+      "sources": ["../hard_float/bit_patterns.c", "../hard_float/bit_patterns_helpers.c"],
+      "defines": ["FP_DOUBLE"],
+      "functions": ["fp_pattern_leaf"]
+    },
+    {
+      "name": "double_bits_caller_rv64",
+      "architectures": ["rv64"],
+      "isa": "rv64imafd",
+      "abi": "lp64d",
+      "sources": ["../hard_float/bit_patterns.c", "../hard_float/bit_patterns_helpers.c"],
+      "defines": ["FP_DOUBLE"],
+      "functions": ["fp_pattern_caller"]
+    },
+    {
+      "name": "double_bits_callee_rv64",
+      "architectures": ["rv64"],
+      "isa": "rv64imafd",
+      "abi": "lp64d",
+      "sources": ["../hard_float/bit_patterns.c", "../hard_float/bit_patterns_helpers.c"],
+      "defines": ["FP_DOUBLE"],
+      "functions": ["fp_pattern_leaf"]
+    },
+    {
+      "name": "float_bits_nanboxed_caller_rv32",
+      "architectures": ["rv32"],
+      "isa": "rv32imafd",
+      "abi": "ilp32d",
+      "sources": ["../hard_float/bit_patterns.c", "../hard_float/bit_patterns_helpers.c"],
+      "defines": [],
+      "functions": ["fp_pattern_caller"]
+    },
+    {
+      "name": "float_bits_nanboxed_callee_rv32",
+      "architectures": ["rv32"],
+      "isa": "rv32imafd",
+      "abi": "ilp32d",
+      "sources": ["../hard_float/bit_patterns.c", "../hard_float/bit_patterns_helpers.c"],
+      "defines": [],
+      "functions": ["fp_pattern_leaf"]
+    },
+    {
+      "name": "float_bits_nanboxed_caller_rv64",
+      "architectures": ["rv64"],
+      "isa": "rv64imafd",
+      "abi": "lp64d",
+      "sources": ["../hard_float/bit_patterns.c", "../hard_float/bit_patterns_helpers.c"],
+      "defines": [],
+      "functions": ["fp_pattern_caller"]
+    },
+    {
+      "name": "float_bits_nanboxed_callee_rv64",
+      "architectures": ["rv64"],
+      "isa": "rv64imafd",
+      "abi": "lp64d",
+      "sources": ["../hard_float/bit_patterns.c", "../hard_float/bit_patterns_helpers.c"],
+      "defines": [],
+      "functions": ["fp_pattern_leaf"]
+    },
+    {
+      "name": "rounding_float_rv32",
+      "architectures": ["rv32"],
+      "isa": "rv32imaf",
+      "abi": "ilp32f",
+      "sources": ["rounding.c", "rounding_arithmetic.c", "rounding_environment.c"],
+      "defines": [],
+      "functions": ["repair_round_add", "repair_round_bridge"]
+    },
+    {
+      "name": "rounding_float_rv64",
+      "architectures": ["rv64"],
+      "isa": "rv64imaf",
+      "abi": "lp64f",
+      "sources": ["rounding.c", "rounding_arithmetic.c", "rounding_environment.c"],
+      "defines": [],
+      "functions": ["repair_round_add", "repair_round_bridge"]
+    },
+    {
+      "name": "rounding_double_rv32",
+      "architectures": ["rv32"],
+      "isa": "rv32imafd",
+      "abi": "ilp32d",
+      "sources": ["rounding.c", "rounding_arithmetic.c", "rounding_environment.c"],
+      "defines": ["ROUND_DOUBLE"],
+      "functions": ["repair_round_add", "repair_round_bridge"],
+      "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"]
+    },
+    {
+      "name": "rounding_double_rv64",
+      "architectures": ["rv64"],
+      "isa": "rv64imafd",
+      "abi": "lp64d",
+      "sources": ["rounding.c", "rounding_arithmetic.c", "rounding_environment.c"],
+      "defines": ["ROUND_DOUBLE"],
+      "functions": ["repair_round_add", "repair_round_bridge"]
+    },
+    {
+      "name": "rounding_float_nanboxed_rv32",
+      "architectures": ["rv32"],
+      "isa": "rv32imafd",
+      "abi": "ilp32d",
+      "sources": ["rounding.c", "rounding_arithmetic.c", "rounding_environment.c"],
+      "defines": [],
+      "functions": ["repair_round_add", "repair_round_bridge"]
+    },
+    {
+      "name": "rounding_float_nanboxed_rv64",
+      "architectures": ["rv64"],
+      "isa": "rv64imafd",
+      "abi": "lp64d",
+      "sources": ["rounding.c", "rounding_arithmetic.c", "rounding_environment.c"],
+      "defines": [],
+      "functions": ["repair_round_add", "repair_round_bridge"],
+      "cfp_modes": ["none", "CFCSS", "RASM", "RACFED"]
+    }
+  ]
+}

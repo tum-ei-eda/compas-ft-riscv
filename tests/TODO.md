@@ -51,14 +51,15 @@ python3 tests/regression/run.py --case 'save_restore/repeated_calls' \
 ## Floating-point checks
 
 - [ ] Define protection of architectural FP control/status state.
-- [ ] Resolve LLVM16 REPAIR FP shadow-register lookup failures.
 
 The rounding-mode input (`FRM`) is shared by primary and shadow computations; FP control/status state has no shadow. Balance checks now compare raw register bits, including NaN boxing, without changing exception flags. The [hard-float suite](regression/hard_float/README.adoc) covers matching quiet/signaling NaNs, signed zeros, subnormals, protected tail calls and nonzero lower binary64 bits on RV32. Its controlled comparison probes require different encodings to reach the error handler and identical encodings to pass with unchanged exception flags.
 
-With `-REPAIR` enabled, the `eight_float_rv64` and `eight_double_rv32` fixtures abort in `getPrimaryFromShadow()` on LLVM16 for all three NZDC modes. The same assertion affects `float_live_rv32` and `double_live_rv64` with both schedules, before and after the bitwise-comparison fix. LLVM13 passes these finite-value call probes with both schedules. The [REPAIR call suite](regression/repair_call_abi/README.adoc) currently covers integer-register ABIs.
+LLVM's implicit `FRM` input remains shared in both ordinary duplication and REPAIR. The [REPAIR hard-float suite](regression/repair_hard_float/README.adoc) covers FP arithmetic, calling conventions and runtime rounding-mode changes; retaining that input does not protect it against corruption. The [REPAIR call suite](regression/repair_call_abi/README.adoc) separately covers integer-register ABIs.
 
 ```sh
 python3 tests/regression/run.py --case 'hard_float/*' \
   --verify-machineinstrs --build-dir build/tests-todo-hard-float
 python3 tests/regression/hard_float/run_bit_checks.py
+python3 tests/regression/run.py --case 'repair_hard_float/*' \
+  --verify-machineinstrs --build-dir build/tests-todo-repair-hard-float
 ```
