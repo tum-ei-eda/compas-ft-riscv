@@ -1,0 +1,60 @@
+= REPAIR floating-point regressions
+
+These cases exercise `-REPAIR` with NZDC, NZDC+NEMESIS and NZDC+NEMESEC on
+RV32/RV64 using both instruction schedules. Each hardened program must match
+an unprotected reference and its literal bit-pattern oracle. The manifest also
+enables a separate LLVM machine-verifier compilation.
+
+The suite reuses the link:../hard_float/README.adoc[hard-float fixtures] directly:
+
+* All ten finite arithmetic/calling-convention cases retain FP arguments,
+  results and live values across ordinary or protected calls. They include
+  eight FP arguments and RV32 binary64 values with nonzero lower 32 bits.
+* Eight caller/callee bit-pattern cases cover binary64 and NaN-boxed binary32
+  on both architectures, preserving NaN payloads, signed zeros, infinities,
+  subnormals and finite low bits without source arithmetic.
+
+The `float_live_rv64`, `double_live_rv32` and `mixed_double_rv32` cases run the
+complete CFP matrix. Other reused cases select CFP `none` by default. The
+sources and expected results remain shared with the ordinary hard-float suite.
+
+== Dynamic rounding input
+
+The six `rounding_*` cases add binary32, binary64 and NaN-boxed binary32 on each
+architecture. An unprotected helper sets architectural `FRM` to each supported
+mode: round to nearest, ties to even (`0`); round toward zero (`1`); round down
+(`2`); round up (`3`); and round to nearest, ties to maximum magnitude (`4`).
+A protected bridge calls a protected addition function in a separate translation
+unit. Volatile FP operands retain a real dynamic-rounding addition, so primary
+and shadow arithmetic must consume the same current rounding input.
+
+Four halfway sums distinguish these modes. The positive operands are
+`1 + 2^-24` and `(1 + 2^-23) + 2^-24` for binary32, or `1 + 2^-53` and
+`(1 + 2^-52) + 2^-53` for binary64. Two further sums negate both operands.
+The even/odd lower endpoints check nearest-even ties; the negative sums
+distinguish round-down from round-up. The result encodings for every mode are
+literal constants in `rounding.c`, including the lower binary64 word on RV32.
+
+After each call the application checks that `FRM` still equals the selected
+mode, then restores its original mode before exiting. Only the unprotected
+environment helpers contain CSR inline assembly. The protected functions use
+ordinary C. The RV32 binary64 and RV64 NaN-boxed rounding cases also run with
+CFCSS, RASM and RACFED.
+
+The rounding-mode field `frm` and accrued exception flags `fflags` are shared
+CSR state, also accessible together through `fcsr`. COMPAS accepts this state
+as a single point of failure outside its current protection guarantees.
+A rounding-mode fault may affect both computations identically and escape
+data checking. These tests check that REPAIR retains LLVM's implicit `FRM`
+input while changing shadow data-register assignments; they do not establish
+resilience to CSR faults or fault-recovery coverage.
+
+Run the suite with:
+
+[source,shell]
+----
+python3 tests/regression/run.py --case 'repair_hard_float/*'
+----
+
+Every case exits with `42` on success or `17` on an application oracle mismatch,
+and produces no output. No target libc floating-point routines are required.

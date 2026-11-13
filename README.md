@@ -111,6 +111,8 @@ RISCV_GCC=/path/to/riscv-toolchain/bin/riscv-none-elf-gcc
 
 Link this object into an application with matching ISA/ABI and the required startup code and runtime. See the [user manual](https://tum-ei-eda.github.io/compas-ft-riscv/manual/) for compiler options and the [CRC example](docs/CONTRIBUTING.md#functional-validation) for a complete CMake application flow. The [test guide](tests/README.adoc) explains functional equivalence checks and execution with QEMU or Spike; known limitations are tracked in [tests/TODO.md](tests/TODO.md).
 
+**Floating-point protection assumption:** COMPAS accepts the shared rounding-mode and exception-status state (`frm` and `fflags`, also accessible together through `fcsr`) as a single point of failure. Corruption of this state is outside the current protection guarantees: a rounding-mode fault can affect both computations identically and escape their data checks.
+
 ## Publications
 
 Please cite the relevant work when using COMPAS, CompaSeC or REPAIR:

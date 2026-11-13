@@ -18,6 +18,10 @@ inferring the callee's register usage. Volatile inputs, a volatile multiplier an
 |`mixed_double_rv32` |RV32IMAFD / ILP32D |Both sides are protected, retaining integer and full-width binary64 values across calls.
 |`eight_float_rv64` |RV64IMAF / LP64F |All eight FP arguments cross a protected caller; four remain live across an unprotected helper that clobbers `ft7` and `ft8`–`ft11`.
 |`eight_double_rv32` |RV32IMAFD / ILP32D |The eight-argument check with full binary64 values and nonzero lower 32 bits.
+|`float_bits_{caller,callee}_rv{32,64}` |RV32IMAF / ILP32F and RV64IMAF / LP64F |Bit-preserving calls, returns and stores with either the caller or callee protected.
+|`double_bits_{caller,callee}_rv{32,64}` |RV32IMAFD / ILP32D and RV64IMAFD / LP64D |The same exact-bit checks for binary64, including RV32 values with nonzero lower 32 bits.
+|`float_bits_nanboxed_{caller,callee}_rv{32,64}` |RV32IMAFD / ILP32D and RV64IMAFD / LP64D |Binary32 values in the wider FP register file, exercising NaN-boxed argument and result aliases.
+|`{float,double,float_nanboxed}_bits_tail_rv{32,64}` |The same F/D profiles |Both functions are protected and sibling-call optimization is enabled at `-O2`. Assembly checks require a genuine tail transfer, including FP argument checks after the epilogue.
 |===
 
 The checks compare exact IEEE binary32 or binary64 encodings, rather than using
@@ -38,14 +42,83 @@ registers. The compiler may spill the values live across that call; these cases
 exercise argument mapping and preservation without requiring particular register
 allocation or claiming that the physical shadow registers remain live.
 
-These finite-input functional checks do not establish coverage of the shared
-floating-point rounding mode or exception flags. COMPAS currently uses `feq.s`
-and `feq.d` for FP balance checks: equal NaNs compare unequal, while positive
-and negative zero compare equal. The exact-bit application oracles remain
-separate from those monitoring semantics.
+The `*_bits_*` cases preserve eighteen literal IEEE encodings without arithmetic:
+positive and negative quiet and signaling NaNs, distinct payloads, both zeros,
+both infinities, positive and negative subnormal boundaries, the least positive
+normal, and finite values differing in low bits. Separate translation units and
+`noinline` calls retain typed FP arguments and results; nonvolatile FP stores
+exercise store balance checks and loadbacks. The application checks the exact
+returned encoding and both stored encodings against its input. No NaN is
+quieted or canonicalized by source arithmetic. The cases run both coarse- and
+fine-grained schedules.
+
+The tail cases select CFP `none` by default to isolate FP argument checking.
+Returning-call and callee-only cases retain the complete CFP matrix. EDDI
+combined with CFP can fail an existing post-epilogue stack-pointer check before
+reaching the FP comparison; forcing a frame pointer can expose the same issue
+without CFP. These independent tail-frame limitations are recorded in
+`tests/TODO.md`. An explicit runner `--cfp` selection can reproduce them.
+
+FP balance checks must compare the protected register's bit representation.
+With D enabled, this includes the upper NaN-boxing bits of binary32 values.
+Identical NaNs must pass, and differing zero signs, NaN payloads or boxing bits
+must fail a comparison.
+This follows the duplicated-state contract: the zero sign can change later
+results such as division and `copysign`, even though numerical equality treats
+the two zeros alike. Fault-free tests alone cannot prove rejection of different
+encodings. The shared rounding-mode and exception-status fields (`frm` and
+`fflags`, also accessible through `fcsr`) are accepted single points of failure.
+Corruption of this CSR state is outside the current protection guarantees;
+a rounding-mode fault may affect both copies identically and escape checking.
+
+== Controlled comparison probes
+
+`run_bit_checks.py` complements the fault-free application tests with controlled
+primary/shadow input differences. It compiles an ordinary caller and an
+EDDI- or SWIFT-protected FP-store function through the normal COMPAS pipeline.
+Immediately before the call, after the caller initializes the shadow bank,
+the script loads a selected second encoding into the shadow FP argument.
+It preserves the primary argument and restores the reserved scratch register.
+The comparison and its error branch remain the compiler's generated code.
+This isolates the shared FP comparison; NZDC's store loadback would overwrite
+an incoming shadow difference, so the probes use the EDDI/SWIFT pre-store check.
+
+Equal encodings must reach target exit `42`. Opposite zero signs, different NaN
+payloads or signs, differing subnormals, opposite infinities and different finite
+bits must reach the COMPAS handler with target exit `-512`. Binary64 probes
+change the lower and upper 32-bit halves independently, including on RV32.
+The script also covers binary32 under both F-only and D-enabled ABIs. With D
+enabled, the primary's `flw` produces a valid NaN box; the script loads all 64
+shadow bits with `fld`. Ordinary patterns retain the canonical upper ones.
+Ten further patterns change only the upper boxing bits of finite values,
+zeros, infinity, NaNs and subnormals. They must be detected even when the low
+32-bit value encodings match: a malformed box changes how later binary32
+operations interpret the register. Machine verification runs separately before
+the controlled mutation.
+
+Unprotected helpers seed `fflags` with `9` and verify that successful comparisons
+preserve it exactly. In particular, identical signaling NaNs must not raise the
+invalid flag. These helpers contain the only CSR inline assembly in the probe;
+the protected function contains ordinary C only. This is a focused comparison
+test, rather than a fault-injection coverage campaign or a claim that shared
+rounding state and exception flags are duplicated.
+
+[source,shell]
+----
+python3 tests/regression/hard_float/run_bit_checks.py \
+  --clang /path/to/clang --llc /path/to/llc \
+  --cc /path/to/riscv-none-elf-gcc \
+  --qemu '/path/to/qemu-riscv{bits}' --jobs 4
+----
+
+Use `--list` to inspect the fixed probe profiles, or select a subset with
+`--arch`, `--mode`, `--schedule` and repeatable `--case` globs.
 
 Every case exits with `42` on success or `17` on an oracle mismatch, and produces
 no output. No libc floating-point routines are required. The manifest enables
-separate machine-instruction verification and the complete data/control-flow
-hardening matrix with coarse-grained scheduling. Newly exposed hardening errors
-belong in the project test TODO; the expected numerical results stay unchanged.
+separate machine-instruction verification. The finite arithmetic cases use
+coarse-grained scheduling; the bit-pattern cases use both schedules. All cases
+retain every DMR mode. Finite arithmetic and returning/callee bit-pattern cases
+run the full CFP matrix; the tail cases select CFP `none` as described above.
+Newly exposed hardening errors belong in the project test TODO; the expected
+numerical results stay unchanged.

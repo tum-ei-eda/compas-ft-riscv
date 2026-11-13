@@ -328,6 +328,15 @@ jobs:
           --qemu "qemu-riscv${{ matrix.arch.bits }}" \
           --arch "${{ matrix.arch.name }}" \
           --build-dir "${GITHUB_WORKSPACE}/build/regression/clang_codegen/${{ matrix.arch.name }}"
+    - name: Check floating-point bit comparisons
+      working-directory: ${{ github.workspace }}/compas-ft-riscv_src
+      run: |
+        python3 tests/regression/hard_float/run_bit_checks.py \
+          --clang "$LLVM_INSTALL_DIR/bin/clang" --llc "$LLVM_INSTALL_DIR/bin/llc" \
+          --cc "$RVGNU_INSTALL_DIR/bin/${{ matrix.rvgnu.base }}-gcc" \
+          --qemu "qemu-riscv${{ matrix.arch.bits }}" \
+          --arch "${{ matrix.arch.name }}" \
+          --build-dir "${GITHUB_WORKSPACE}/build/regression/fp_bit_checks/${{ matrix.arch.name }}"
     - name: Check late preservation with large fixed areas
       working-directory: ${{ github.workspace }}/compas-ft-riscv_src
       run: |
